@@ -1,0 +1,246 @@
+Book Source System in Legado - Code Analysis
+=============================================
+
+1. BookSource Entity/Model
+--------------------------
+File: app/src/main/java/io/legado/app/data/entities/BookSource.kt
+
+Table: book_sources
+PrimaryKey: bookSourceUrl
+
+Fields:
+  - bookSourceUrl (String) - Source website URL (PrimaryKey)
+  - bookSourceName (String) - Display name
+  - bookSourceGroup (String?) - Comma-separated groups
+  - bookSourceType (Int) - 0=text, 1=audio, 2=image, 3=file
+  - bookUrlPattern (String?) - Regex for detail page URL matching
+  - customOrder (Int) - Manual sort order
+  - enabled (Boolean) - Whether search is enabled
+  - enabledExplore (Boolean) - Whether discovery/explore is enabled
+  - jsLib (String?) - JavaScript library
+  - enabledCookieJar (Boolean?) - Auto-save cookies per request
+  - concurrentRate (String?) - Rate limiting config
+  - header (String?) - HTTP request headers (JSON)
+  - loginUrl (String?) - Login URL or JS
+  - loginUi (String?) - Custom login UI definition
+  - loginCheckJs (String?) - Login verification JS
+  - coverDecodeJs (String?) - Cover image decryption JS
+  - bookSourceComment (String?) - Comments/notes
+  - variableComment (String?) - Custom variable description
+  - lastUpdateTime (Long) - Last update timestamp
+  - respondTime (Long) - Response time (default: 180000)
+  - weight (Int) - Smart sort weight
+  - exploreUrl (String?) - Discovery/explore URL(s)
+  - exploreScreen (String?) - Explore filtering rules
+  - ruleExplore (ExploreRule?) - Explore parsing rules
+  - searchUrl (String?) - Search URL template
+  - ruleSearch (SearchRule?) - Search parsing rules
+  - ruleBookInfo (BookInfoRule?) - Book info/detail page rules
+  - ruleToc (TocRule?) - Table of contents rules
+  - ruleContent (ContentRule?) - Content/body rules
+  - ruleReview (ReviewRule?) - Review/comment rules (currently disabled)
+
+Room Type Converters serialize/deserialize rule objects to/from JSON strings via GSON.
+
+
+2. Sub-Rule Data Models
+-----------------------
+Location: app/src/main/java/io/legado/app/data/entities/rule/
+
+- BookListRule.kt (interface) - Common fields: bookList, name, author, intro, kind, lastChapter, updateTime, bookUrl, coverUrl, wordCount
+- SearchRule.kt - Extends BookListRule, adds checkKeyWord
+- ExploreRule.kt - Extends BookListRule
+- BookInfoRule.kt - Fields: init, name, author, intro, kind, lastChapter, updateTime, coverUrl, tocUrl, wordCount, canReName, downloadUrls
+- TocRule.kt - Fields: preUpdateJs, chapterList, chapterName, chapterUrl, formatJs, isVolume, isVip, isPay, updateTime, nextTocUrl
+- ContentRule.kt - Fields: content, title, nextContentUrl, webJs, sourceRegex, replaceRegex, imageStyle, imageDecode, payAction
+
+
+3. BookSourceType Constants
+---------------------------
+File: app/src/main/java/io/legado/app/constant/BookSourceType.kt
+
+  default = 0   // Text
+  audio   = 1   // Audio
+  image   = 2   // Image
+  file    = 3   // File download site
+
+
+4. BookSourceDao (Database Access)
+-----------------------------------
+File: app/src/main/java/io/legado/app/data/dao/BookSourceDao.kt
+
+CRUD Operations:
+  - insert(vararg bookSource: BookSource) - OnConflictStrategy.REPLACE
+  - update(vararg bookSource: BookSource)
+  - delete(vararg bookSource: BookSource)
+  - delete(key: String)
+  - getBookSource(key: String): BookSource?
+  - has(key: String): Boolean
+  - allCount(): Int
+
+Flow-based Queries (reactive):
+  - flowAll() - All sources ordered by customOrder
+  - flowSearch(searchKey) - Search by name, group, url, or comment
+  - flowSearchEnabled(searchKey) - Same but only enabled
+  - flowGroupSearch(searchKey) - Filter by group
+  - flowEnabled() / flowDisabled()
+  - flowExplore() / flowLogin() / flowNoGroup()
+
+Bulk Properties:
+  - all - All sources
+  - allEnabled / allDisabled
+  - allGroups / allEnabledGroups - Deduplicated, sorted group names
+
+
+5. SourceHelp (Insert/Delete Orchestration)
+--------------------------------------------
+File: app/src/main/java/io/legado/app/help/source/SourceHelp.kt
+
+insertBookSource() (lines 131-144):
+  1. Filters out 18+ sources by checking against 18PlusList.txt blocklist
+  2. Shows a toast for blocked sources
+  3. Calls appDb.bookSourceDao.insert() for allowed sources
+  4. Runs adjustSortNumber() asynchronously
+
+deleteBookSources() (lines 72-79):
+  Runs in a transaction, calling deleteBookSourceInternal() per source which:
+  1. Deletes from book_sources table
+  2. Deletes cached source variables
+  3. Removes source config (e.g., login credentials)
+
+adjustSortNumber() (lines 164-176):
+  Re-numbers all sources if orders exceed +/-99999 or have duplicates.
+
+
+6. Web API Endpoints
+---------------------
+File: app/src/main/java/io/legado/app/web/HttpServer.kt
+File: app/src/main/java/io/legado/app/api/controller/BookSourceController.kt
+
+HTTP Endpoints:
+  GET  /getBookSources           - Returns all book sources as JSON
+  GET  /getBookSource?url=<url>  - Get single source by URL
+  POST /saveBookSource           - Save/replace a single source (JSON body)
+  POST /saveBookSources          - Save/replace multiple sources (JSON array body)
+  POST /deleteBookSources        - Delete sources (JSON array body)
+
+WebSocket:
+  /bookSourceDebug - Live debugging of a book source
+
+BookSourceController Validation:
+  - bookSourceName and bookSourceUrl must be non-empty for saveSource/saveSources
+
+
+7. Import Flow (User-Facing)
+-----------------------------
+Entry Point: BookSourceActivity
+File: app/src/main/java/io/legado/app/ui/book/source/manage/BookSourceActivity.kt
+
+Import Methods:
+  1. Online URL (menu_import_onLine) - Enter a URL to fetch sources from
+  2. Local File (menu_import_local) - Import .txt or .json files
+  3. QR Code (menu_import_qr) - Scan QR code containing source data
+  4. New Source (menu_add_book_source) - Manual creation via BookSourceEditActivity
+
+Core Import Logic: ImportBookSourceViewModel
+File: app/src/main/java/io/legado/app/ui/association/ImportBookSourceViewModel.kt
+
+importSource(text) handles four input types:
+  1. JSON Object - Tries {"sourceUrls": [...]} format, then single BookSource
+  2. JSON Array - Parses as List<BookSource>
+  3. Absolute URL - Fetches from network (supports #requestWithoutUA suffix)
+  4. URI (local file) - Opens URI input stream, parses as JSON array
+
+After parsing:
+  - Compares against existing DB to mark as "new" or "update"
+  - User can choose: keepName, keepGroup, keepEnable preferences
+  - User can set custom group for imported sources
+  - Calls SourceHelp.insertBookSource() for final DB insert
+
+
+8. Export Flow
+--------------
+File: app/src/main/java/io/legado/app/ui/book/source/manage/BookSourceViewModel.kt
+
+saveToFile() (lines 142-165):
+  - If >30% items selected: exports filtered/searched list
+  - If <30% items selected: exports only selected items
+  - Otherwise: exports intersection
+  - Writes to shareBookSource.json as JSON array
+
+Triggered from BookSourceActivity via "Export Selection" menu.
+
+
+9. Edit/Save Flow (Manual)
+---------------------------
+File: app/src/main/java/io/legado/app/ui/book/source/edit/BookSourceEditViewModel.kt
+
+save(source) (lines 51-83):
+  1. Validates bookSourceUrl and bookSourceName are non-blank
+  2. Compares with old source using source.equal(oldSource)
+  3. If changed: updates lastUpdateTime, clears explore kinds cache if exploreUrl changed
+  4. If source URL changed: deletes old source
+  5. If same URL: deletes old entry and re-inserts
+  6. Calls appDb.bookSourceDao.insert(source)
+
+
+10. Old Format Migration
+-------------------------
+File: app/src/main/java/io/legado/app/help/storage/ImportOldData.kt
+
+fromOldBookSource(jsonItem) (lines 174-243):
+  Converts old-format book source JSON (with fields like ruleSearchList, ruleFindUrl,
+  serialNumber, httpUserAgent) to current BookSource format.
+
+  Rule syntax migration via toNewRule() (lines 250-302):
+  - # to ##
+  - | to ||
+  - & to &&
+  - searchKey to {{key}}
+  - searchPage to {{page}}
+
+
+11. Validation Summary
+-----------------------
+| Location                              | Validation                                      |
+|---------------------------------------|-------------------------------------------------|
+| BookSourceController.saveSource()     | bookSourceName and bookSourceUrl must be non-empty |
+| BookSourceController.saveSources()    | Same, per source in array                        |
+| BookSourceEditViewModel.save()        | bookSourceUrl and bookSourceName must be non-blank |
+| ImportBookSourceViewModel.importSource() | bookSourceUrl must be non-empty after parsing  |
+| SourceHelp.insertBookSource()         | Filters out 18+ URLs against blocklist           |
+| SourceHelp.adjustSortNumber()         | Normalizes sort orders if out of range/duplicated |
+
+
+12. Key File Index
+-------------------
+Entity:                  app/src/main/java/io/legado/app/data/entities/BookSource.kt
+Entity (view):           app/src/main/java/io/legado/app/data/entities/BookSourcePart.kt
+Base interface:          app/src/main/java/io/legado/app/data/entities/BaseSource.kt
+Type constants:          app/src/main/java/io/legado/app/constant/BookSourceType.kt
+DAO:                     app/src/main/java/io/legado/app/data/dao/BookSourceDao.kt
+Insert/Delete helper:    app/src/main/java/io/legado/app/help/source/SourceHelp.kt
+Extensions:              app/src/main/java/io/legado/app/help/source/BookSourceExtensions.kt
+Web HTTP server:         app/src/main/java/io/legado/app/web/HttpServer.kt
+Web WS server:           app/src/main/java/io/legado/app/web/WebSocketServer.kt
+API controller:          app/src/main/java/io/legado/app/api/controller/BookSourceController.kt
+API response:            app/src/main/java/io/legado/app/api/ReturnData.kt
+Import ViewModel:        app/src/main/java/io/legado/app/ui/association/ImportBookSourceViewModel.kt
+Import Dialog:           app/src/main/java/io/legado/app/ui/association/ImportBookSourceDialog.kt
+Edit ViewModel:          app/src/main/java/io/legado/app/ui/book/source/edit/BookSourceEditViewModel.kt
+Edit Activity:           app/src/main/java/io/legado/app/ui/book/source/edit/BookSourceEditActivity.kt
+Manage Activity:         app/src/main/java/io/legado/app/ui/book/source/manage/BookSourceActivity.kt
+Manage ViewModel:        app/src/main/java/io/legado/app/ui/book/source/manage/BookSourceViewModel.kt
+Manage Adapter:          app/src/main/java/io/legado/app/ui/book/source/manage/BookSourceAdapter.kt
+Sort enum:               app/src/main/java/io/legado/app/ui/book/source/manage/BookSourceSort.kt
+Debug WebSocket:         app/src/main/java/io/legado/app/web/socket/BookSourceDebugWebSocket.kt
+Old format import:       app/src/main/java/io/legado/app/help/storage/ImportOldData.kt
+Rule: Search:            app/src/main/java/io/legado/app/data/entities/rule/SearchRule.kt
+Rule: Explore:           app/src/main/java/io/legado/app/data/entities/rule/ExploreRule.kt
+Rule: BookInfo:          app/src/main/java/io/legado/app/data/entities/rule/BookInfoRule.kt
+Rule: Toc:               app/src/main/java/io/legado/app/data/entities/rule/TocRule.kt
+Rule: Content:           app/src/main/java/io/legado/app/data/entities/rule/ContentRule.kt
+Rule: Review:            app/src/main/java/io/legado/app/data/entities/rule/ReviewRule.kt
+Rule: BookList:          app/src/main/java/io/legado/app/data/entities/rule/BookListRule.kt
+Default data:            app/src/main/assets/defaultData/bookSources.json
+Web config:              modules/web/src/config/bookSourceEditConfig.ts
