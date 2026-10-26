@@ -1,0 +1,53 @@
+[
+  {
+    "bookSourceType": 2,
+    "bookSourceUrl": "http://yumanhua.com",
+    "bookSourceName": "漫画客",
+    "bookSourceGroup": "漫画",
+    "bookSourceComment": "yumanhua.com 漫画源（图片型）。搜索 POST /s 表单 k=关键字；发现 POST /data/sort；目录页仅 20 章，需 POST /morechapter 取全量后合并倒序；正文图片由页面内打包脚本的 __c0rst96 经 base64+XOR 解密得到，key 按 readerContainer 的 data-id 取，失败时自动遍历全部 key 并回退到页面 <img>。【重要】bookUrlPattern 必须排除 /s、/sort、/data、/static、/morechapter、/search 这些固定路径，书籍 ID 为 7 位字母数字；若把 /s 也匹配进去，搜索响应会被当成详情页解析导致搜索全空。【搜索编码】已写死 Content-Type 并手动 java.encodeURI，若删掉该头需把 body 改回 k={{key}}，否则双重编码。",
+    "enabled": true,
+    "enabledExplore": true,
+    "bookUrlPattern": "^https?://(www\\.)?yumanhua\\.com/(?!s/?$|sort/?$|data/?$|static/?$|morechapter/?$|search/?$)[A-Za-z0-9]{5,}/?$",
+    "header": "{\"User-Agent\":\"Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1\"}",
+    "searchUrl": "/s,{\"method\":\"POST\",\"headers\":{\"Content-Type\":\"application/x-www-form-urlencoded; charset=UTF-8\",\"Referer\":\"http://yumanhua.com/\",\"Origin\":\"http://yumanhua.com\"},\"body\":\"k={{java.encodeURI(key)}}\"}",
+    "exploreUrl": "冒险::/data/sort,{\"method\":\"POST\",\"body\":\"s=1&p={{page}}\"}\n热血::/data/sort,{\"method\":\"POST\",\"body\":\"s=2&p={{page}}\"}\n都市::/data/sort,{\"method\":\"POST\",\"body\":\"s=3&p={{page}}\"}\n玄幻::/data/sort,{\"method\":\"POST\",\"body\":\"s=4&p={{page}}\"}\n悬疑::/data/sort,{\"method\":\"POST\",\"body\":\"s=5&p={{page}}\"}\n耽美::/data/sort,{\"method\":\"POST\",\"body\":\"s=6&p={{page}}\"}\n恋爱::/data/sort,{\"method\":\"POST\",\"body\":\"s=7&p={{page}}\"}\n生活::/data/sort,{\"method\":\"POST\",\"body\":\"s=8&p={{page}}\"}\n搞笑::/data/sort,{\"method\":\"POST\",\"body\":\"s=9&p={{page}}\"}\n穿越::/data/sort,{\"method\":\"POST\",\"body\":\"s=10&p={{page}}\"}\n修真::/data/sort,{\"method\":\"POST\",\"body\":\"s=11&p={{page}}\"}\n后宫::/data/sort,{\"method\":\"POST\",\"body\":\"s=12&p={{page}}\"}\n女主::/data/sort,{\"method\":\"POST\",\"body\":\"s=13&p={{page}}\"}\n古风::/data/sort,{\"method\":\"POST\",\"body\":\"s=14&p={{page}}\"}\n连载::/data/sort,{\"method\":\"POST\",\"body\":\"s=15&p={{page}}\"}\n完结::/data/sort,{\"method\":\"POST\",\"body\":\"s=16&p={{page}}\"}",
+    "ruleSearch": {
+      "bookList": "$.data",
+      "name": "$.name",
+      "author": "$.author",
+      "lastChapter": "$.remarks",
+      "coverUrl": "$.imgurl",
+      "bookUrl": "/{{$.id}}/"
+    },
+    "ruleExplore": {
+      "bookList": "$.data",
+      "name": "$.name",
+      "author": "$.author",
+      "intro": "$.intro",
+      "lastChapter": "$.remarks",
+      "coverUrl": "$.imgurl",
+      "bookUrl": "/{{$.id}}/"
+    },
+    "ruleBookInfo": {
+      "name": "h1.name@text",
+      "author": ".comic-info-detail p:contains(作者)@text##作者：",
+      "kind": ".comic-tags span@text",
+      "intro": ".comic-intro .cartoon-introduction@text",
+      "lastChapter": ".comic-info-detail p:contains(最新)@text##最新：",
+      "coverUrl": ".book-cover img@data-src"
+    },
+    "ruleToc": {
+      "chapterList": "@js:var s = String(result);\nvar host = \"http://yumanhua.com\";\nvar hm = String(baseUrl).match(/^(https?:\\/\\/[^\\/]+)/);\nif (hm) host = hm[1];\nvar id = \"\";\nvar mm = String(baseUrl).match(/\\/([A-Za-z0-9]+)\\/?$/);\nif (mm) id = mm[1];\nif (!id) {\n    var mu = s.match(/href=\"\\/([A-Za-z0-9]+)\\/[A-Za-z0-9]+\\.html\"/);\n    if (mu) id = mu[1];\n}\nvar list = [], seen = {};\nvar add = function (name, url) {\n    if (!name || !url || seen[url]) return;\n    seen[url] = 1;\n    list.push({ name: name, url: url });\n};\nvar box = s.match(/<div class=\"chaplist-box\">([\\s\\S]*?)<\\/ul>/);\nif (box) {\n    var re = /<a href=\"([^\"]+)\"[^>]*>([^<]+)<\\/a>/g, r;\n    while ((r = re.exec(box[1])) !== null) { add(r[2], r[1]); }\n}\nif (id) {\n    var res = java.ajax(host + \"/morechapter,{\\\"method\\\":\\\"POST\\\",\\\"body\\\":\\\"id=\" + id + \"\\\"}\");\n    if (res) {\n        try {\n            var d = JSON.parse(String(res)).data;\n            for (var i = 0; i < d.length; i++) {\n                add(d[i].chaptername, \"/\" + id + \"/\" + d[i].chapterid + \".html\");\n            }\n        } catch (e) { }\n    }\n}\nlist.reverse();\nlist;",
+      "chapterName": "name",
+      "chapterUrl": "url"
+    },
+    "ruleContent": {
+      "content": "@js:var s = String(result);\nvar CH = \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\";\nvar b64 = function (str) {\n    var out = \"\", i = 0, L = str.length;\n    while (i < L) {\n        var c1 = CH.indexOf(str.charAt(i++)); if (c1 < 0) c1 = 64;\n        var c2 = CH.indexOf(str.charAt(i++)); if (c2 < 0) c2 = 64;\n        var c3 = CH.indexOf(str.charAt(i++)); if (c3 < 0) c3 = 64;\n        var c4 = CH.indexOf(str.charAt(i++)); if (c4 < 0) c4 = 64;\n        var n = (c1 << 18) | (c2 << 12) | (c3 << 6) | c4;\n        out += String.fromCharCode((n >> 16) & 255);\n        if (c3 != 64) out += String.fromCharCode((n >> 8) & 255);\n        if (c4 != 64) out += String.fromCharCode(n & 255);\n    }\n    return out;\n};\nvar rst = \"\";\nvar bi = s.indexOf(\"eval(function(p,a,c,k,e,d)\");\nif (bi > -1) {\n    var seg = s.substring(bi);\n    var m = seg.match(/eval\\(function\\(p,a,c,k,e,d\\)[\\s\\S]*?\\}\\('([^']*)',(\\d+),(\\d+),'([\\s\\S]*?)'\\.split\\('\\|'\\)/);\n    if (m) {\n        var P = m[1], A = parseInt(m[2]), C = parseInt(m[3]), K = m[4].split(\"|\");\n        var D = {}, I = C;\n        var fnE = function (x) {\n            return (x < A ? \"\" : fnE(Math.floor(x / A))) + (x % A > 35 ? String.fromCharCode(x % A + 29) : (x % A).toString(36));\n        };\n        while (I--) { D[fnE(I)] = K[I] || fnE(I); }\n        P = P.replace(/\\b\\w+\\b/g, function (w) { return D[w] !== undefined ? D[w] : w; });\n        var rm = P.match(/__c0rst96\\s*=\\s*\"([^\"]+)\"/);\n        if (rm) rst = rm[1];\n    }\n}\nif (!rst) {\n    var rm2 = s.match(/__c0rst96\\s*=\\s*\"([^\"]+)\"/);\n    if (rm2) rst = rm2[1];\n}\nvar KEYS = [\"c21raHkyNTg=\", \"c21rZDk1ZnY=\", \"bWQ0OTY5NTI=\", \"Y2Rjc2R3cQ==\", \"dmJmc2EyNTY=\", \"Y2F3ZjE1MWM=\", \"Y2Q1NmN2ZGE=\", \"OGtpaG50OQ==\", \"ZHNvMTV0bG8=\", \"NWtvNnBsaHk=\"];\nvar arr = null;\nif (rst) {\n    var im = s.match(/readerContainer[^>]*data-id=\"(\\d+)\"/);\n    var idx = im ? parseInt(im[1]) : -1;\n    var order = [], i;\n    if (idx >= 0 && idx < KEYS.length) order.push(idx);\n    for (i = 0; i < KEYS.length; i++) {\n        if (i != idx) order.push(i);\n    }\n    var data = b64(rst);\n    for (var o = 0; o < order.length && arr == null; o++) {\n        var key = b64(KEYS[order[o]]);\n        var x = \"\";\n        for (var j = 0; j < data.length; j++) {\n            x += String.fromCharCode(data.charCodeAt(j) ^ key.charCodeAt(j % key.length));\n        }\n        try {\n            var t = JSON.parse(b64(x));\n            if (t && t.length) arr = t;\n        } catch (e) { }\n    }\n}\nvar html = \"\";\nif (arr != null) {\n    for (var n = 0; n < arr.length; n++) {\n        html += '<img src=\"' + arr[n] + '\">';\n    }\n}\nif (!html) {\n    var rc = s.indexOf(\"readerContainer\");\n    var zone = rc > -1 ? s.substring(rc) : s;\n    var re = /<img\\b[^>]*>/gi, tg;\n    while ((tg = re.exec(zone)) !== null) {\n        var tag = tg[0];\n        var um = tag.match(/data-src\\s*=\\s*[\"']([^\"']+)[\"']/i) || tag.match(/data-original\\s*=\\s*[\"']([^\"']+)[\"']/i) || tag.match(/\\ssrc\\s*=\\s*[\"']([^\"']+)[\"']/i);\n        if (!um) continue;\n        var u = um[1];\n        if (!u || u.indexOf(\"load.gif\") > -1 || u.indexOf(\"/static/\") > -1 || u.indexOf(\"data:image\") == 0) continue;\n        html += '<img src=\"' + u + '\">';\n    }\n}\nhtml;",
+      "imageStyle": "FULL"
+    },
+    "customOrder": 0,
+    "weight": 0,
+    "respondTime": 180000,
+    "lastUpdateTime": 1792462716400
+  }
+]

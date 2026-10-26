@@ -9,6 +9,8 @@ build/
 /release
 /tmp
 node_modules/
+/legado-go/dist/
+/legado-go/*.exe
 /app/app
 /app/google
 /app/gradle.properties

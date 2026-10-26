@@ -1,0 +1,18 @@
+{
+  "sourceDir": "./testdata/sources",
+  "sourceFile": "",
+  "source": "yumanhua",
+  "cookieFile": "cookies.json",
+  "cacheFile": "cache.json",
+  "userAgent": "",
+  "httpTimeout": 30,
+  "jsTimeout": 30,
+  "debug": false,
+  "download": {
+    "outDir": "./out",
+    "format": "",
+    "workers": 4,
+    "max": 0,
+    "start": 0
+  }
+}

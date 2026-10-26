@@ -1,0 +1,82 @@
+# legado-go 构建任务
+# 用法：在 legado-go 目录下执行 task <任务名>，如 task build:windows
+# 需要 Task: https://taskfile.dev  （winget install Task.Task / brew install go-task）
+version: '3'
+
+silent: false
+
+vars:
+  APP: legado
+  PKG: ./cmd/legado
+  DIST: dist
+  # 版本信息：优先用 git tag，其次提交号，-dirty 表示有未提交改动
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+
+tasks:
+  default:
+    desc: 列出全部任务
+    cmds:
+      - task --list-all
+    silent: true
+
+  # 内部任务：由下面各平台任务调用，不直接执行
+  _build:
+    internal: true
+    desc: 通用编译（由各平台任务传入 GOOS / GOARCH）
+    vars:
+      EXE: '{{if eq .GOOS "windows"}}.exe{{end}}'
+      OUT: '{{.DIST}}/{{.APP}}-{{.GOOS}}-{{.GOARCH}}{{.EXE}}'
+    env:
+      CGO_ENABLED: '0' # 纯 Go 依赖（goja/goquery 等），关掉 CGO 才能静态交叉编译
+      GOOS: '{{.GOOS}}'
+      GOARCH: '{{.GOARCH}}'
+    cmds:
+      - mkdir -p {{.DIST}}
+      - go build -trimpath -ldflags "-s -w" -o {{.OUT}} {{.PKG}}
+      - echo "已生成 {{.OUT}}（{{.GOOS}}/{{.GOARCH}}，版本 {{.VERSION}}）"
+
+  build:
+    desc: 按当前平台编译到 dist/
+    cmds:
+      - task: _build
+        vars:
+          GOOS: '{{OS}}'
+          GOARCH: '{{ARCH}}'
+
+  build:windows:
+    desc: Windows amd64（dist/legado-windows-amd64.exe）
+    cmds:
+      - task: _build
+        vars:
+          GOOS: windows
+          GOARCH: amd64
+
+  build:linux:
+    desc: Linux amd64（dist/legado-linux-amd64）
+    cmds:
+      - task: _build
+        vars:
+          GOOS: linux
+          GOARCH: amd64
+
+  build:armv8:
+    desc: Linux arm64（aarch64，给 Termux / 树莓派用，dist/legado-linux-arm64）
+    cmds:
+      - task: _build
+        vars:
+          GOOS: linux
+          GOARCH: arm64
+
+  build:all:
+    desc: 一次编译全部平台（windows / linux / armv8）
+    cmds:
+      - task: build:windows
+      - task: build:linux
+      - task: build:armv8
+
+  clean:
+    desc: 清理 dist/
+    cmds:
+      - rm -rf {{.DIST}}
+      - echo "已清理 {{.DIST}}"
