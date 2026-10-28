@@ -2,7 +2,6 @@ package rule
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/ohler55/ojg/jp"
@@ -30,9 +29,9 @@ func JsonGetString(data any, pathRule string) string {
 		return strings.Join(results, "\n")
 	}
 	// 内嵌 {$.xxx}
-	if replaced := InnerBraceReplace(pathRule, "{$.", 1, 1, func(inner string) string {
+	if replaced, ok := InnerBraceReplace(pathRule, "{$.", 1, 1, func(inner string) string {
 		return JsonGetString(data, inner)
-	}); replaced != "" {
+	}); ok {
 		return replaced
 	}
 	vals := jsonRead(data, pathRule)
@@ -40,13 +39,13 @@ func JsonGetString(data any, pathRule string) string {
 		return ""
 	}
 	if len(vals) == 1 {
-		return jsonToString(vals[0])
+		return JsToString(vals[0])
 	}
-	parts2 := make([]string, 0, len(vals))
+	strs := make([]string, 0, len(vals))
 	for _, v := range vals {
-		parts2 = append(parts2, jsonToString(v))
+		strs = append(strs, JsToString(v))
 	}
-	return strings.Join(parts2, "\n")
+	return strings.Join(strs, "\n")
 }
 
 // JsonGetStringList 取字符串列表
@@ -69,14 +68,14 @@ func JsonGetStringList(data any, pathRule string) []string {
 		}
 		return mergeStringLists(typ, results)
 	}
-	if replaced := InnerBraceReplace(pathRule, "{$.", 1, 1, func(inner string) string {
+	if replaced, ok := InnerBraceReplace(pathRule, "{$.", 1, 1, func(inner string) string {
 		return JsonGetString(data, inner)
-	}); replaced != "" {
+	}); ok && replaced != "" {
 		return []string{replaced}
 	}
 	vals := jsonRead(data, pathRule)
 	for _, v := range vals {
-		out = append(out, jsonToString(v))
+		out = append(out, JsToString(v))
 	}
 	return out
 }
@@ -136,35 +135,6 @@ func jsonRead(data any, path string) []any {
 		root = parsed
 	}
 	return expr.Get(root)
-}
-
-func jsonToString(v any) string {
-	switch t := v.(type) {
-	case nil:
-		return ""
-	case string:
-		return t
-	case float64:
-		if t == float64(int64(t)) {
-			return fmt.Sprintf("%d", int64(t))
-		}
-		return fmt.Sprintf("%v", t)
-	case bool:
-		if t {
-			return "true"
-		}
-		return "false"
-	case []any:
-		parts := make([]string, 0, len(t))
-		for _, x := range t {
-			parts = append(parts, jsonToString(x))
-		}
-		return strings.Join(parts, "\n")
-	case map[string]any:
-		b, _ := json.Marshal(t)
-		return string(b)
-	}
-	return fmt.Sprint(v)
 }
 
 func mergeAnyLists(typ string, lists [][]any) []any {

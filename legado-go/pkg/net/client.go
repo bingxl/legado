@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -98,9 +99,7 @@ func (c *Client) Do(opt Options) (*Response, error) {
 		domain = util.GetSubDomain(opt.URL)
 	}
 	headers := map[string]string{}
-	for k, v := range opt.Headers {
-		headers[k] = v
-	}
+	maps.Copy(headers, opt.Headers)
 	if _, ok := headers["User-Agent"]; !ok {
 		headers["User-Agent"] = c.UserAgent
 	}
@@ -125,10 +124,7 @@ func (c *Client) Do(opt Options) (*Response, error) {
 		}
 	}
 
-	retries := opt.Retry
-	if retries < 0 {
-		retries = 0
-	}
+	retries := max(opt.Retry, 0)
 	var lastErr error
 	for i := 0; i <= retries; i++ {
 		req, err := http.NewRequest(method, opt.URL, bodyReader)

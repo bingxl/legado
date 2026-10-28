@@ -3,8 +3,12 @@ package webbook
 import (
 	"fmt"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 
+	"github.com/legado/legado-go/pkg/debug"
 	"github.com/legado/legado-go/pkg/js"
 	"github.com/legado/legado-go/pkg/model"
 	"github.com/legado/legado-go/pkg/rule"
@@ -16,6 +20,28 @@ var (
 	nameRegex   = regexp.MustCompile(`\s+作\s*者.*|\s+\S+\s+著`)
 	authorRegex = regexp.MustCompile(`^\s*作\s*者[:：\s]+|\s+著`)
 )
+
+// —— 调试打点 ——
+// 输出位置与文案对齐 Kotlin 的 model/webBook/*.kt：≡ 提示、┌└ 规则组、◇ 统计。
+// 未启用调试时这些函数只付一次原子读的代价。
+
+// logFetched 记录一次成功的网页请求：对应 Kotlin 的
+// Debug.log("≡获取成功:$url") + Debug.log(body, state = 10/20/30/40)
+func logFetched(state int, ruleUrl, body string) {
+	if !debug.Enabled() {
+		return
+	}
+	debug.Log("≡获取成功:" + ruleUrl)
+	debug.Body(state, body)
+}
+
+// logCount 输出 ◇ 统计行
+func logCount(label string, n int) {
+	if !debug.Enabled() {
+		return
+	}
+	debug.Log("◇" + label + ":" + strconv.Itoa(n))
+}
 
 // FormatBookName 书名清洗（对齐 BookHelp.formatBookName）
 func FormatBookName(s string) string {
@@ -208,6 +234,7 @@ func analyzeBookList(src *model.BookSource, rd *model.RuleData, au *urlx.Analyze
 	if body == "" {
 		return nil, fmt.Errorf("获取网页内容失败: %s", au.RuleUrl)
 	}
+	logFetched(debug.StateSearchBody, au.RuleUrl, body)
 	ar := newRule(src, nil, rd)
 	ar.SetContent(body, baseUrl)
 	ar.SetRedirectUrl(baseUrl)
@@ -215,10 +242,12 @@ func analyzeBookList(src *model.BookSource, rd *model.RuleData, au *urlx.Analyze
 	// 详情页直连判定
 	if isSearch && src.BookUrlPattern != "" {
 		if matched, err := regexp.MatchString(src.BookUrlPattern, baseUrl); err == nil && matched {
+			debug.Log("≡链接为详情页")
 			if sb := getInfoItem(src, ar, au, body, baseUrl, rd.ToJSON(), isRedirect); sb != nil {
 				sb.InfoHtml = body
 				bookList = append(bookList, sb)
 			}
+			logCount("书籍总数", len(bookList))
 			return bookList, nil
 		}
 	}
@@ -239,14 +268,18 @@ func analyzeBookList(src *model.BookSource, rd *model.RuleData, au *urlx.Analyze
 		ruleList = ruleList[1:]
 	}
 
+	debug.Log("┌获取书籍列表")
 	collections := ar.GetElements(ruleList)
 	if len(collections) == 0 && src.BookUrlPattern == "" {
+		debug.Log("└列表为空,按详情页解析")
 		if sb := getInfoItem(src, ar, au, body, baseUrl, rd.ToJSON(), isRedirect); sb != nil {
 			sb.InfoHtml = body
 			bookList = append(bookList, sb)
 		}
+		logCount("书籍总数", len(bookList))
 		return bookList, nil
 	}
+	debug.Log("└列表大小:" + strconv.Itoa(len(collections)))
 
 	ruleName := ar.SplitSourceRule(lr.GetName())
 	ruleBookUrl := ar.SplitSourceRule(lr.GetBookUrl())
@@ -257,9 +290,10 @@ func analyzeBookList(src *model.BookSource, rd *model.RuleData, au *urlx.Analyze
 	ruleLast := ar.SplitSourceRule(lr.GetLastChapter())
 	ruleWords := ar.SplitSourceRule(lr.GetWordCount())
 
-	for _, item := range collections {
+	for i, item := range collections {
+		// 只对首条打字段级日志，避免列表几十条时刷屏（对齐 Kotlin 的 log 参数）
 		sb := getSearchItem(src, ar, item, baseUrl, rd.ToJSON(),
-			ruleName, ruleBookUrl, ruleAuthor, ruleCover, ruleIntro, ruleKind, ruleLast, ruleWords)
+			ruleName, ruleBookUrl, ruleAuthor, ruleCover, ruleIntro, ruleKind, ruleLast, ruleWords, i == 0)
 		if sb == nil {
 			continue
 		}
@@ -284,6 +318,7 @@ func analyzeBookList(src *model.BookSource, rd *model.RuleData, au *urlx.Analyze
 			unique[i], unique[j] = unique[j], unique[i]
 		}
 	}
+	logCount("书籍总数", len(unique))
 	return unique, nil
 }
 
@@ -323,7 +358,8 @@ func getInfoItem(src *model.BookSource, ar *rule.AnalyzeRule, au *urlx.AnalyzeUr
 }
 
 func getSearchItem(src *model.BookSource, ar *rule.AnalyzeRule, item any, baseUrl, variable string,
-	ruleName, ruleBookUrl, ruleAuthor, ruleCover, ruleIntro, ruleKind, ruleLast, ruleWords []*rule.SourceRule) *model.SearchBook {
+	ruleName, ruleBookUrl, ruleAuthor, ruleCover, ruleIntro, ruleKind, ruleLast, ruleWords []*rule.SourceRule,
+	trace bool) *model.SearchBook {
 	sb := model.NewSearchBook()
 	if variable != "" {
 		sb.LoadJSON(variable)
@@ -333,24 +369,38 @@ func getSearchItem(src *model.BookSource, ar *rule.AnalyzeRule, item any, baseUr
 	sb.OriginName = src.BookSourceName
 	sb.OriginOrder = src.CustomOrder
 	ar.SetContent(item)
+	// tb 按 Kotlin 的 Debug.log(..., log) 语义，只对首条打字段级日志
+	tb := func(label, val string) {
+		if trace {
+			debug.Pair(label, val)
+		}
+	}
 	sb.Name = FormatBookName(ar.GetString(ruleName))
+	tb("获取书名", sb.Name)
 	if sb.Name == "" {
 		return nil
 	}
 	sb.Author = FormatBookAuthor(ar.GetString(ruleAuthor))
+	tb("获取作者", sb.Author)
 	if kl := ar.GetStringList(ruleKind); len(kl) > 0 {
 		sb.Kind = strings.Join(kl, ",")
 	}
+	tb("获取分类", sb.Kind)
 	sb.WordCount = WordCountFormat(ar.GetString(ruleWords))
+	tb("获取字数", sb.WordCount)
 	sb.LatestChapterTitle = ar.GetString(ruleLast)
+	tb("获取最新章节", sb.LatestChapterTitle)
 	sb.Intro = util.HtmlFormat(ar.GetString(ruleIntro))
+	tb("获取简介", sb.Intro)
 	if cu := ar.GetString(ruleCover); cu != "" {
 		sb.CoverUrl = util.GetAbsoluteURL(baseUrl, cu)
 	}
+	tb("获取封面链接", sb.CoverUrl)
 	sb.BookUrl = ar.GetString(ruleBookUrl, true)
 	if sb.BookUrl == "" {
 		sb.BookUrl = baseUrl
 	}
+	tb("获取详情页链接", sb.BookUrl)
 	return sb
 }
 
@@ -367,34 +417,52 @@ func analyzeBookInfoWithRule(src *model.BookSource, book *model.Book, body strin
 	if body == "" {
 		return fmt.Errorf("获取书籍详情内容失败: %s", baseUrl)
 	}
+	logFetched(debug.StateInfoBody, baseUrl, body)
 	infoRule := src.GetBookInfoRule()
 	if infoRule.Init != "" {
+		debug.Log("≡执行详情页初始化规则")
 		if el := ar.GetElement(infoRule.Init); el != nil {
 			ar.SetContent(el)
 		}
 	}
 	mCanReName := canReName && infoRule.CanReName != ""
-	if n := FormatBookName(ar.GetString(infoRule.Name)); n != "" && (mCanReName || book.Name == "") {
+	// 注意：└ 打印的是「规则求值结果」，不是合并后的 book 字段（对齐 Kotlin）。
+	// 规则取空而保留旧值时，这里显示空——这正是书源作者需要看到的信号。
+	n := FormatBookName(ar.GetString(infoRule.Name))
+	if n != "" && (mCanReName || book.Name == "") {
 		book.Name = n
 	}
-	if a := FormatBookAuthor(ar.GetString(infoRule.Author)); a != "" && (mCanReName || book.Author == "") {
+	debug.Pair("获取书名", n)
+	a := FormatBookAuthor(ar.GetString(infoRule.Author))
+	if a != "" && (mCanReName || book.Author == "") {
 		book.Author = a
 	}
-	if kl := ar.GetStringList(infoRule.Kind); len(kl) > 0 {
-		book.Kind = strings.Join(kl, ",")
+	debug.Pair("获取作者", a)
+	k := strings.Join(ar.GetStringList(infoRule.Kind), ",")
+	if k != "" {
+		book.Kind = k
 	}
-	if w := WordCountFormat(ar.GetString(infoRule.WordCount)); w != "" {
+	debug.Pair("获取分类", k)
+	w := WordCountFormat(ar.GetString(infoRule.WordCount))
+	if w != "" {
 		book.WordCount = w
 	}
-	if l := ar.GetString(infoRule.LastChapter); l != "" {
+	debug.Pair("获取字数", w)
+	l := ar.GetString(infoRule.LastChapter)
+	if l != "" {
 		book.LatestChapterTitle = l
 	}
-	if i := util.HtmlFormat(ar.GetString(infoRule.Intro)); i != "" {
+	debug.Pair("获取最新章节", l)
+	i := util.HtmlFormat(ar.GetString(infoRule.Intro))
+	if i != "" {
 		book.Intro = i
 	}
-	if c := ar.GetString(infoRule.CoverUrl); c != "" {
+	debug.Pair("获取简介", i)
+	c := ar.GetString(infoRule.CoverUrl)
+	if c != "" {
 		book.CoverUrl = util.GetAbsoluteURL(redirectUrl, c)
 	}
+	debug.Pair("获取封面链接", c)
 	if !book.IsWebFile() {
 		book.TocUrl = ar.GetString(infoRule.TocUrl, true)
 		if book.TocUrl == "" {
@@ -403,12 +471,15 @@ func analyzeBookInfoWithRule(src *model.BookSource, book *model.Book, body strin
 		if book.TocUrl == baseUrl {
 			book.TocHtml = body
 		}
+		debug.Pair("获取目录链接", book.TocUrl)
 	} else {
 		urls := ar.GetStringList(infoRule.DownloadUrls, true)
 		if len(urls) == 0 {
+			debug.Log("└")
 			return fmt.Errorf("下载链接为空")
 		}
 		book.DownloadUrls = urls
+		debug.Pair("获取文件下载链接", strings.Join(urls, "，\n"))
 	}
 	return nil
 }
@@ -419,6 +490,7 @@ func analyzeChapterList(src *model.BookSource, book *model.Book, baseUrl, redire
 	if body == "" {
 		return nil, fmt.Errorf("获取目录内容失败: %s", baseUrl)
 	}
+	logFetched(debug.StateTocBody, baseUrl, body)
 	tocRule := src.GetTocRule()
 	listRule := tocRule.ChapterList
 	reverse := false
@@ -430,24 +502,51 @@ func analyzeChapterList(src *model.BookSource, book *model.Book, baseUrl, redire
 		listRule = listRule[1:]
 	}
 	chapters, nextUrls := parseChapterPage(src, book, baseUrl, redirectUrl, body, tocRule, listRule, true)
-	// 翻页
+	// 翻页：对齐 Kotlin 的三分支——0 个下一页不打日志、1 个顺序翻、多个并发解析
 	visited := map[string]bool{redirectUrl: true}
-	for len(nextUrls) == 1 && nextUrls[0] != "" && !visited[nextUrls[0]] {
+	switch len(nextUrls) {
+	case 0:
+		// Kotlin 在 0 个下一页时不输出任何统计行
+	case 1:
 		next := nextUrls[0]
-		visited[next] = true
-		au := urlx.New(urlx.Options{Url: next, Source: src, Book: book})
-		resp, err := au.GetStrResponse()
-		if err != nil || resp.Body == "" {
-			break
+		for next != "" && !visited[next] {
+			visited[next] = true
+			au := urlx.New(urlx.Options{Url: next, Source: src, Book: book})
+			resp, err := au.GetStrResponse()
+			if err != nil || resp.Body == "" {
+				break
+			}
+			more, nu := parseChapterPage(src, book, next, next, resp.Body, tocRule, listRule, false)
+			chapters = append(chapters, more...)
+			if len(nu) != 1 {
+				break
+			}
+			next = nu[0]
 		}
-		more, nu := parseChapterPage(src, book, next, next, resp.Body, tocRule, listRule, false)
-		chapters = append(chapters, more...)
-		nextUrls = nu
-		if len(nu) == 0 {
-			break
+		logCount("目录总页数", len(visited))
+	default:
+		logCount("并发解析目录,总页数", len(nextUrls))
+		pages := make([][]*model.BookChapter, len(nextUrls))
+		var wg sync.WaitGroup
+		for i, u := range nextUrls {
+			wg.Go(func() {
+				au := urlx.New(urlx.Options{Url: u, Source: src, Book: book})
+				resp, err := au.GetStrResponse()
+				if err != nil || resp.Body == "" {
+					return
+				}
+				more, _ := parseChapterPage(src, book, u, resp.URL, resp.Body, tocRule, listRule, false)
+				pages[i] = more
+			})
+		}
+		wg.Wait()
+		// 按地址顺序拼接，顺序稳定（Kotlin 用 mapAsync 按完成顺序 append，顺序不确定）
+		for _, p := range pages {
+			chapters = append(chapters, p...)
 		}
 	}
 	if len(chapters) == 0 {
+		debug.Log("◇章节列表为空")
 		return nil, fmt.Errorf("章节列表为空")
 	}
 	if !reverse {
@@ -487,9 +586,18 @@ func analyzeChapterList(src *model.BookSource, book *model.Book, baseUrl, redire
 		}
 	}
 	book.TotalChapterNum = len(unique)
+	logCount("目录总数", len(unique))
 	if len(unique) > 0 {
 		book.LatestChapterTitle = unique[len(unique)-1].Title
-		book.DurChapterTitle = unique[minInt(book.DurChapterIndex, len(unique)-1)].Title
+		book.DurChapterTitle = unique[min(book.DurChapterIndex, len(unique)-1)].Title
+		debug.Lines(
+			"≡首章信息",
+			"◇章节名称:"+unique[0].Title,
+			"◇章节链接:"+unique[0].Url,
+			"◇章节信息:"+unique[0].Tag,
+			"◇是否VIP:"+strconv.FormatBool(unique[0].IsVip),
+			"◇是否购买:"+strconv.FormatBool(unique[0].IsPay),
+		)
 	}
 	return unique, nil
 }
@@ -498,9 +606,17 @@ func parseChapterPage(src *model.BookSource, book *model.Book, baseUrl, redirect
 	ar := newRule(src, book, nil)
 	ar.SetContent(body, baseUrl)
 	ar.SetRedirectUrl(redirectUrl)
+	// 只有首页（getNext=true）打目录解析日志，翻页时静默（对齐 Kotlin 的 log 参数）
+	if getNext {
+		debug.Log("┌获取目录列表")
+	}
 	elements := ar.GetElements(listRule)
+	if getNext {
+		debug.Log("└列表大小:" + strconv.Itoa(len(elements)))
+	}
 	nextUrls := []string{}
 	if getNext && tocRule.NextTocUrl != "" {
+		debug.Log("┌获取目录下一页列表")
 		if l := ar.GetStringList(tocRule.NextTocUrl, true); l != nil {
 			for _, u := range l {
 				if u != redirectUrl {
@@ -508,10 +624,14 @@ func parseChapterPage(src *model.BookSource, book *model.Book, baseUrl, redirect
 				}
 			}
 		}
+		debug.Log("└" + strings.Join(nextUrls, "，"))
 	}
 	chapters := make([]*model.BookChapter, 0, len(elements))
 	if len(elements) == 0 {
 		return chapters, nextUrls
+	}
+	if getNext {
+		debug.Log("┌解析目录列表")
 	}
 	nameRule := ar.SplitSourceRule(tocRule.ChapterName)
 	urlRule := ar.SplitSourceRule(tocRule.ChapterUrl)
@@ -548,6 +668,9 @@ func parseChapterPage(src *model.BookSource, book *model.Book, baseUrl, redirect
 		}
 		chapters = append(chapters, ch)
 	}
+	if getNext {
+		debug.Log("└目录列表解析完成")
+	}
 	return chapters, nextUrls
 }
 
@@ -557,6 +680,7 @@ func analyzeContent(src *model.BookSource, book *model.Book, chapter *model.Book
 	if body == "" {
 		return "", fmt.Errorf("获取正文内容失败: %s", baseUrl)
 	}
+	logFetched(debug.StateContentBody, baseUrl, body)
 	contentRule := src.GetContentRule()
 	parts := []string{}
 	nextUrlList := []string{redirectUrl}
@@ -604,6 +728,9 @@ func analyzeContent(src *model.BookSource, book *model.Book, chapter *model.Book
 	if !chapter.IsVolume && strings.TrimSpace(contentStr) == "" {
 		return "", fmt.Errorf("内容为空")
 	}
+	logCount("本章总页数", len(nextUrlList))
+	debug.Pair("获取章节名称", chapter.Title)
+	debug.Pair("获取正文内容", "\n"+contentStr)
 	return contentStr, nil
 }
 
@@ -621,9 +748,11 @@ func parseContent(src *model.BookSource, book *model.Book, chapter *model.BookCh
 	nextUrls := []string{}
 	if getNext {
 		if nr := src.GetContentRule().NextContentUrl; nr != "" {
+			debug.Log("┌获取正文下一页链接")
 			if l := ar.GetStringList(nr, true); l != nil {
 				nextUrls = append(nextUrls, l...)
 			}
+			debug.Log("└" + strings.Join(nextUrls, "，"))
 		}
 	}
 	return content, nextUrls
@@ -638,22 +767,10 @@ func reverseSlice(a []*model.BookChapter) {
 }
 
 func contains(a []string, s string) bool {
-	for _, x := range a {
-		if x == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(a, s)
 }
 
 func isTrue(s string) bool {
 	t := strings.ToLower(strings.TrimSpace(s))
 	return t == "true" || t == "1" || t == "yes"
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

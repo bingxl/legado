@@ -3,6 +3,7 @@ package rule
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -534,7 +535,7 @@ func (ar *AnalyzeRule) getStringEx(list []*SourceRule, mContent any, isUrl, unes
 				result = nil
 			}
 			if result != nil && sr.ReplaceRegex != "" {
-				result = sr.ApplyReplace(jsToString(result))
+				result = sr.ApplyReplace(JsToString(result))
 			}
 		} else {
 			for _, sr := range list {
@@ -562,14 +563,14 @@ func (ar *AnalyzeRule) getStringEx(list []*SourceRule, mContent any, isUrl, unes
 	switch t := result.(type) {
 	case []any:
 		if len(t) > 0 {
-			str = jsToString(t[0])
+			str = JsToString(t[0])
 		}
 	case []string:
 		if len(t) > 0 {
 			str = t[0]
 		}
 	default:
-		str = jsToString(result)
+		str = JsToString(result)
 	}
 	if unescape && strings.Contains(str, "&") {
 		str = util.UnescapeHtml4(str)
@@ -613,11 +614,11 @@ func (ar *AnalyzeRule) GetStringList(rule any, isUrl ...bool) []string {
 				case []any:
 					out := make([]any, 0, len(t))
 					for _, x := range t {
-						out = append(out, sr.ApplyReplace(jsToString(x)))
+						out = append(out, sr.ApplyReplace(JsToString(x)))
 					}
 					result = out
 				default:
-					result = sr.ApplyReplace(jsToString(result))
+					result = sr.ApplyReplace(JsToString(result))
 				}
 			}
 		} else {
@@ -669,7 +670,7 @@ func (ar *AnalyzeRule) GetStringList(rule any, isUrl ...bool) []string {
 			if x == nil {
 				arr = append(arr, "")
 			} else {
-				arr = append(arr, jsToString(x))
+				arr = append(arr, JsToString(x))
 			}
 		}
 	default:
@@ -679,17 +680,8 @@ func (ar *AnalyzeRule) GetStringList(rule any, isUrl ...bool) []string {
 		out := []string{}
 		for _, u := range arr {
 			abs := util.GetAbsoluteURL(ar.redirectUrl, u)
-			if abs != "" {
-				dup := false
-				for _, x := range out {
-					if x == abs {
-						dup = true
-						break
-					}
-				}
-				if !dup {
-					out = append(out, abs)
-				}
+			if abs != "" && !slices.Contains(out, abs) {
+				out = append(out, abs)
 			}
 		}
 		return out

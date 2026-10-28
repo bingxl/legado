@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -136,7 +136,7 @@ func LoadDir(dir string) ([]*model.BookSource, []error) {
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	for _, name := range names {
 		full := filepath.Join(dir, name)
 		info, err := os.Stat(full)

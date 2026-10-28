@@ -254,11 +254,8 @@ func toJSValue(vm *goja.Runtime, v any) goja.Value {
 	case *ElementWrap:
 		return t.Object(vm)
 	case []*ElementWrap:
-		arr := make([]any, 0, len(t))
-		for _, e := range t {
-			arr = append(arr, e.Object(vm))
-		}
-		return vm.ToValue(arr)
+		// 对齐 jsoup Elements：数组 + text()/attr()/size() 等方法
+		return elementsObject(vm, t)
 	case []any:
 		arr := make([]any, 0, len(t))
 		for _, e := range t {

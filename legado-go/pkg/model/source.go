@@ -2,9 +2,11 @@ package model
 
 import (
 	"encoding/json"
-	"regexp"
+	"maps"
 	"strings"
 	"sync"
+
+	"github.com/legado/legado-go/pkg/util"
 )
 
 // 书源类型（对齐 BookSourceType）
@@ -328,17 +330,12 @@ func (s *BookSource) GetHeaderMap(hasLoginHeader ...bool) map[string]string {
 		}
 		out := map[string]string{}
 		if err := json.Unmarshal([]byte(jsonStr), &out); err == nil {
-			for k, v := range out {
-				m[k] = v
-			}
+			maps.Copy(m, out)
 		} else {
-			// 宽松解析
-			relaxed := regexp.MustCompile(`([{,]\s*)([A-Za-z_][\w]*)\s*:`).ReplaceAllString(jsonStr, `$1"$2":`)
-			out2 := map[string]string{}
-			if err2 := json.Unmarshal([]byte(relaxed), &out2); err2 == nil {
-				for k, v := range out2 {
-					m[k] = v
-				}
+			// 宽松解析：给裸键补引号后再试一次
+			fixed := map[string]string{}
+			if err := json.Unmarshal([]byte(util.RelaxJSONKeys(jsonStr)), &fixed); err == nil {
+				maps.Copy(m, fixed)
 			}
 		}
 	}
@@ -354,9 +351,7 @@ func (s *BookSource) GetHeaderMap(hasLoginHeader ...bool) map[string]string {
 	}
 	if len(hasLoginHeader) > 0 && hasLoginHeader[0] {
 		if lh := s.GetLoginHeaderMap(); lh != nil {
-			for k, v := range lh {
-				m[k] = v
-			}
+			maps.Copy(m, lh)
 		}
 	}
 	return m
@@ -432,7 +427,7 @@ func (s *BookSource) GetExploreKinds() []ExploreKind {
 		}
 	}
 	out := []ExploreKind{}
-	for _, line := range strings.Split(raw, "\n") {
+	for line := range strings.SplitSeq(raw, "\n") {
 		line = strings.TrimSpace(strings.TrimRight(line, "\r"))
 		if line == "" {
 			continue

@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"maps"
 	"strings"
 	"sync"
 
@@ -83,9 +84,7 @@ func (v *VariableHolder) LoadJSON(s string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.ensure()
-	for k, val := range m {
-		v.vars[k] = val
-	}
+	maps.Copy(v.vars, m)
 }
 
 // Book 书籍（对齐 data/entities/Book.kt 的常用字段）

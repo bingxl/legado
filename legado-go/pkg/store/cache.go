@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -88,9 +89,7 @@ func (c *CacheManager) Save() error {
 		return nil
 	}
 	cp := make(map[string]cacheItem, len(c.data))
-	for k, v := range c.data {
-		cp[k] = v
-	}
+	maps.Copy(cp, c.data)
 	path := c.file
 	c.mu.RUnlock()
 	return writeJSONFile(path, cp)

@@ -1,9 +1,10 @@
 package store
 
 import (
+	"maps"
 	"net/http"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -60,9 +61,7 @@ func (c *CookieStore) ReplaceCookie(url, cookie string) {
 		c.domain[d] = cookie
 	} else {
 		m := CookieToMap(old)
-		for k, v := range CookieToMap(cookie) {
-			m[k] = v
-		}
+		maps.Copy(m, CookieToMap(cookie))
 		if s := MapToCookie(m); s != "" {
 			c.domain[d] = s
 		}
@@ -188,7 +187,7 @@ func CookieToMap(cookie string) map[string]string {
 	if strings.TrimSpace(cookie) == "" {
 		return m
 	}
-	for _, pair := range strings.Split(cookie, ";") {
+	for pair := range strings.SplitSeq(cookie, ";") {
 		pair = strings.TrimSpace(pair)
 		if pair == "" {
 			continue
@@ -215,7 +214,7 @@ func MapToCookie(m map[string]string) string {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	var sb strings.Builder
 	for i, k := range keys {
 		if i > 0 {
@@ -232,9 +231,7 @@ func MapToCookie(m map[string]string) string {
 func MergeMaps(ms ...map[string]string) map[string]string {
 	out := map[string]string{}
 	for _, m := range ms {
-		for k, v := range m {
-			out[k] = v
-		}
+		maps.Copy(out, m)
 	}
 	return out
 }
@@ -260,9 +257,7 @@ func (c *CookieStore) Save() error {
 	}
 	c.mu.RLock()
 	cp := make(map[string]string, len(c.domain))
-	for k, v := range c.domain {
-		cp[k] = v
-	}
+	maps.Copy(cp, c.domain)
 	c.mu.RUnlock()
 	// 没有任何 cookie 且文件还不存在时不落盘，避免每条命令都生成空文件
 	if len(cp) == 0 {
@@ -286,8 +281,6 @@ func (c *CookieStore) Load() error {
 	if c.domain == nil {
 		c.domain = map[string]string{}
 	}
-	for k, v := range cf.Domain {
-		c.domain[k] = v
-	}
+	maps.Copy(c.domain, cf.Domain)
 	return nil
 }

@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -151,9 +151,7 @@ func (c *FileConfig) Normalize() {
 	if c.Download.Workers <= 0 {
 		c.Download.Workers = 4
 	}
-	if c.Download.Workers > 64 {
-		c.Download.Workers = 64
-	}
+	c.Download.Workers = min(c.Download.Workers, 64)
 	c.SourceDir = strings.TrimSpace(c.SourceDir)
 	c.SourceFile = strings.TrimSpace(c.SourceFile)
 	c.Source = strings.TrimSpace(c.Source)
@@ -435,7 +433,7 @@ func detectUnknown(b []byte) []string {
 			}
 		}
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

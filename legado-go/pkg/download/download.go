@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,10 +65,7 @@ func DownloadBook(src *model.BookSource, book *model.Book, opt Options) (*Result
 	if len(chapters) == 0 {
 		return nil, fmt.Errorf("目录为空")
 	}
-	from := opt.Start
-	if from < 0 {
-		from = 0
-	}
+	from := max(opt.Start, 0)
 	if from >= len(chapters) {
 		return nil, fmt.Errorf("起始下标 %d 超出目录范围(%d)", from, len(chapters))
 	}
@@ -87,9 +84,8 @@ func DownloadBook(src *model.BookSource, book *model.Book, opt Options) (*Result
 	sem := make(chan struct{}, opt.Workers)
 	done := 0
 	for i, ch := range selected {
-		wg.Add(1)
-		go func(i int, ch *model.BookChapter) {
-			defer wg.Done()
+		// Go 1.22 起循环变量每轮独立，闭包直接捕获，不必再写 i, ch := i, ch
+		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			next := ""
@@ -109,7 +105,7 @@ func DownloadBook(src *model.BookSource, book *model.Book, opt Options) (*Result
 			if opt.Progress != nil {
 				opt.Progress(d, len(selected), ch.Title)
 			}
-		}(i, ch)
+		})
 	}
 	wg.Wait()
 
@@ -179,7 +175,7 @@ func saveImages(src *model.BookSource, book *model.Book, chapters []*model.BookC
 	}
 	res.Path = base
 	res.Images = count
-	sort.Ints(res.Failed)
+	slices.Sort(res.Failed)
 	return res, nil
 }
 
@@ -202,7 +198,7 @@ func ExtractImages(content string) []string {
 		seen[u] = true
 		out = append(out, u)
 	}
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

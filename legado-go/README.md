@@ -12,6 +12,9 @@ Legado（阅读）书源 / 漫画源规则引擎的 **Go 重构版**。用于在
 - **JS 注入**：`java` / `cookie` / `cache` / `source` / `book` / `chapter` / `result` / `baseUrl` / `src` / `title` / `nextChapterUrl` 全套，`jsLib` 按书源共享作用域预编译
 - **离线 + 在线校验**：静态检查规则语法，可选联网实测搜索 → 详情 → 目录 → 正文
 - **下载**：文本导出 txt/md；漫画按章建目录下载图片
+- **书源调试**：`debug` 命令对齐客户端调试界面，按 `搜索/发现 → 详情 → 目录 → 正文` 打点，
+  每个字段的规则求值、请求 URL、charset、耗时都在同一个流里；支持 `-stage` 截断、
+  `-body`/`-save-dir` 处理响应体、`-json` 机器可读
 - **配置**：`config.json` 存常用参数（书源目录、默认源、超时、下载目录等），
   优先级 命令行 > 配置 > 内置默认；`config gen` 生成、`config check` 校验
 
@@ -19,10 +22,12 @@ Legado（阅读）书源 / 漫画源规则引擎的 **Go 重构版**。用于在
 
 ## 环境要求
 
-- Go **1.26+**
+- Go **1.27+**（`go.mod` 的 `go` 指令为 `1.27.0`，用到了泛型方法、`strings.CutLast`、`sync.WaitGroup.Go` 等）
 - 无需任何第三方运行时（JS 由内嵌 goja 执行）
 
 主要依赖：`goja`（JS 引擎）、`goquery`（CSS 选择器）、`htmlquery`（XPath）、`ojg`（JSONPath）、`x/net/publicsuffix`（二级域名）、`x/text`（编码转换）。
+
+> 用 AI agent 改这个项目时，先读 [`AGENTS.md`](AGENTS.md)：里面是 Go 1.27 写法基线、包依赖方向、与 Legado Kotlin 的语义对齐规则和提交前质量门。
 
 ## 快速开始
 
@@ -573,7 +578,109 @@ out/
         └── 002.jpeg
 ```
 
-## 五、常见任务 → 参数组合
+## 五、书源调试：`debug`
+
+对应客户端「书源调试」界面。给一个入口，它按 `搜索/发现 → 详情 → 目录 → 正文` 的顺序往下跑，
+把每一步的**请求、最终 URL、规则求值结果、统计**都打在同一个流里。
+
+### 入口怎么写（`-key`）
+
+`debug` 按 `-key` 的**形态**决定从哪一步进入，和客户端完全一致：
+
+| `-key` 写法 | 从哪开始 | 说明 |
+|---|---|---|
+| `海贼王` | 搜索页 | 普通关键字 |
+| `https://site.com/book/1` | 详情页 | 绝对 URL（http/https 开头） |
+| `冒险::` | 发现页 | 按分类名从 `exploreUrl` 查地址；`::` 前面是分类名 |
+| `::https://site.com/sort/1` | 发现页 | 直接给地址 |
+| `++https://site.com/toc` | 目录页 | `++` 前缀 |
+| `--https://site.com/c/1` | 正文页 | `--` 前缀 |
+
+```bash
+# 完整跑一遍：搜索 → 详情 → 目录 → 正文
+legado debug -dir ./sources -source 狼人小说 -key 监禁王
+
+# 只看发现页（第一个分类），并把响应体存下来
+legado debug -dir ./sources -source 漫画客 -key :: -stage explore -save-dir ./dbg
+
+# 已知详情页地址，从详情开始
+legado debug -dir ./sources -source 2 -key https://site.com/book/1
+
+# 只想看目录规则，正文太长不看
+legado debug -dir ./sources -source 2 -key ++https://site.com/toc -stage toc
+```
+
+### 输出怎么读
+
+```
+[00:00.000] ⇒开始搜索关键字:监禁王
+[00:00.000] ︾开始解析搜索页
+[00:00.000] ≡请求 POST https://.../s.php?action=search（body 34 B，charset=gbk）
+[00:01.523] ≡响应 200（9.5 KB，1.523s）
+[00:01.523] ≡获取成功:/s.php?action=search,{"method":"POST",...,"charset":"gbk"}
+[00:01.523] ┌获取书籍列表
+[00:01.523] └列表大小:1
+[00:01.523] ┌获取书名
+[00:01.523] └监禁王
+[00:01.523] ◇书籍总数:1
+[00:01.523] ︽搜索页解析完成
+```
+
+| 符号 | 含义 |
+|---|---|
+| `[mm:ss.SSS]` | 相对调试开始的耗时 |
+| `⇒` | 入口/错误提示 |
+| `︾` `︽` | 阶段开始 / 结束 |
+| `≡` | 提示：请求、响应、获取成功、跳过某步 |
+| `┌` `└` | 一条规则的**开始**与**取值结果** |
+| `◇` | 统计：列表大小、目录总数、本章页数 |
+
+`┌` 后面紧跟 `└` 就是一个字段的完整求值过程。**列表页只对首条打字段级日志**（对齐客户端），
+否则几十条结果会把流刷爆；想知道第 5 条为什么不对，用 `-key` 直接定位到它。
+
+### 选项
+
+| 选项 | 默认 | 说明 |
+|---|---|---|
+| `-stage <阶段>` | `all` | 最深跑到哪一步：`all` / `search` / `explore` / `info` / `toc` / `content` |
+| `-body <方式>` | `none` | 响应体怎么出：`none` 只给摘要 / `head` 前 N 字节 / `full` 全文 |
+| `-body-limit <n>` | `2048` | `-body head` 的截断字节数 |
+| `-save-dir <目录>` | 空 | 把四个阶段的响应体存成 `list.html` / `info.html` / `toc.html` / `content.html`（JSON 响应存 `.json`，翻页多份时加序号） |
+| `-max-chars <n>` | `0` | 单条日志最多多少字，压正文用（`0` = 不限） |
+| `-json` | 关 | 每条日志一行 JSON，便于 `jq` 过滤 |
+| `-o <文件>` | stdout | 日志写入文件 |
+| `-color <模式>` | `auto` | `auto` 在 Windows 下不着色，想强制用 `always` |
+
+响应体的三种去处是分开的：`-body` 决定**日志里**出不出，`-save-dir` 决定**落盘**，
+`-json` 里则永远带 `bodyLen`（原始字节数），正文是否内联同样由 `-body` 控制。
+
+### 与客户端的差异
+
+- 客户端把响应体交给「查看源码」按钮，日志列表里不显示；这里没有按钮，用 `-body` / `-save-dir` 代替。
+- 客户端只有调试界面，没有 `-stage`（跑到哪一步停）；这是 CLI 为了省时间加的。
+- `└` 打印的是**规则求值结果**，不是字段最终值——与客户端一致。所以当规则取空、但字段沿用旧值
+  （例如从搜索进详情页，`ruleBookInfo.name` 失效）时，`└` 会是空，而书名其实还在。这是有意的：
+  空才是"规则没取到"的信号。
+- 目录翻页：客户端在 `nextTocUrl` 给出多个地址时并发抓取、按完成顺序拼接（顺序不确定），
+  这里并发抓取但**按地址顺序**拼接，结果可复现。
+- 请求行（`≡请求 …`）与耗时（`≡响应 …`）是 CLI 增强：客户端看不到最终 URL 与 charset，
+  而 **charset 没生效正是书源搜索失效最常见的原因**，所以这里单独列出来。
+
+### 典型排查
+
+| 现象 | 在调试流里看什么 |
+|---|---|
+| 列表一条都没有 | `└列表大小:0` → 列表规则选错了；`≡响应 200` 但 `≡获取成功` 的 URL 不对 → URL 规则拼错 |
+| 搜索 400/404 | `≡请求 GET …` 里的最终地址，对照 `searchUrl` 的 `{{key}}`/`{{page}}` 是否替换；`charset=gbk` 是否出现 |
+| 书名对、作者/简介全空 | 对应 `┌获取作者` 后面的 `└` 是空 → 该字段规则的选择器不对 |
+| 详情页入口下 `└获取书名` 是空，但关键字入口正常 | `ruleBookInfo.name` 已失效（站点改版最常见，如 `<h2>` 改成 `<h1>`）。关键字入口的书名来自搜索规则，会把这个缺陷盖住 |
+| `└获取作者` 里混进了分类/状态/最后更新 | 选择器命中了多个节点，`@text` 会把它们用换行拼起来。用 `:first-of-type` 或收窄选择器 |
+| 目录对、正文为空 | `┌获取正文内容` 的 `└` 为空 → 正文规则取不到；或 `≡请求` 的地址落到了书籍页 |
+| 正文有文字没图片 | 正文规则用了 `HtmlFormat`（剥图）而不是 `FormatKeepImg`；或图片地址是相对路径 |
+| 分页只抓了第一页 | 整段没有 `◇目录总页数` 行 → `nextTocUrl` 没命中（命中时这行至少是 2）；有这行但只有 2 且章节数明显不够 → 第 2 页里再找不到下一页，检查该页 HTML |
+| 想确认是否被站点拦了 | `-body head -save-dir ./dbg` 把响应存下来，看是不是验证页/登录页 |
+
+## 六、常见任务 → 参数组合
 
 | 我想… | 命令 |
 |---|---|
@@ -586,7 +693,11 @@ out/
 | 试读第 10 章 | `content -dir ./sources -source 2 -book <url> -index 9 -len 2000` |
 | 下载前 5 章试水 | `download -dir ./sources -source 2 -book <url> -max 5` |
 | 下载整本漫画（慢一点更稳） | `download -dir ./sources -source 2 -book <url> -workers 2` |
-| 排查解析为空 | 任意命令加 `-debug`，并配 `-js-timeout 60` |
+| 想知道某条规则到底取到了什么 | `debug -dir ./sources -source 2 -key 书名`（看 `┌`/`└` 成对的两行） |
+| 列表页规则不生效 | `debug … -stage search -body head`，看 `└列表大小` 与存下来的响应 |
+| 目录分页没抓到 | `debug … -key ++<tocUrl> -stage toc`，看 `◇目录总页数` |
+| 正文抽不出来 | `debug … -key --<正文地址> -stage content -save-dir ./dbg` |
+| 排查解析为空 | 用 `debug` 命令（比 `-debug` 标志详细得多）；JS 超时调大配 `-js-timeout 60` |
 | 临时不落盘 Cookie | 任意命令加 `-cookie=` |
 
 ---
@@ -751,22 +862,71 @@ JS 里也可以用：`java.getCookie(url, key)` / `java.setCookie(url, cookie)` 
 # 开发与测试
 
 ```bash
+task check           # 质量门：gofmt + build + vet + test + go fix 现代化自检
+task check:race      # 并发改动时：go test -race ./...
+
+# 等价于手工执行
 go build ./...
 go vet ./...
-go test ./...
+go test ./...        # 全离线，约 10s
 go test -race ./...
 gofmt -l .
 ```
 
-测试覆盖：
+开发约定（Go 1.27 写法基线、包依赖方向、与 Kotlin 的语义对齐规则）见 [`AGENTS.md`](AGENTS.md)。
 
-- `pkg/rule/rule_test.go`：规则引擎单测（五种模式、新老索引、组合符、`@put/@get`、`{{}}`、`##` 替换、切分器、JSON 元素、文档示例）
-- `pkg/webbook/webbook_test.go`：httptest 搭的假站点，跑通搜索 → Cookie 自动保存 → 详情 → 目录 → 需要 Cookie 的正文，以及 JS 扩展与变量
+## 真实书源回归（录制 / 回放）
+
+`testdata/sources/` 放的是**线上真实书源**（2 个文件 / 3 个源），测试拿它们跑完整的
+`搜索 → 发现 → 详情 → 目录 → 正文` 链路。为了既贴近真实、又不依赖网络，HTTP 层做了
+录制/回放（拦截点是 `net.Client` 里的 `http.Client`，引擎代码零改动）：
+
+| 场景 | 命令 | 说明 |
+| --- | --- | --- |
+| 日常回归 | `go test ./pkg/webbook` | 回放 `testdata/fixtures/` 快照，断网可跑，约 0.1s |
+| 直连站点 | `LEGADO_ONLINE=1 go test ./pkg/webbook -run TestSourceOnlineLive -v` | 真实请求，只断言结构性不变量 |
+| 重新录制 | `LEGADO_RECORD=1 go test ./pkg/webbook -run 'TestSourceManhuaReplay\|TestSourceLangrenReplay'` | 访问站点并把响应写回快照 |
+
+| 书源 | 考点 |
+| --- | --- |
+| 漫画客 `yumanhua_comic_source.json` | JSON 接口搜索、`$.data` 列表、`/{{$.id}}/` 地址模板、`分类::地址,{method:POST}` 发现、JS 生成目录（含 `morechapter` 补页 → 1201 章）、base64 + XOR 还原图片地址（首章 57 张） |
+| 狼人小说 `t66y_book_source.json` | GBK 站点 POST 搜索（`/s.php` + `objectType=2&wd=`，`charset: gbk` 要真的按 GBK 编码）、发现地址里的 `{{page === 1 ? '' : ...}}`、旧式索引 `dt.0` / `tag.a.0`、单段属性名 `chapterUrl: "href"`、jsoup 索引伪类 `li:gt(0)`、`@html@js:` 链式清洗 |
+| 草榴社区-文学 同文件 | 站点当前不可达 → 用合成 HTML 做离线规则语义校验（`result.select().text()`、表格列表、`textNodes` 正文） |
+
+另外 `TestSourceLangrenDownload` 用真实源 + 真实章节跑 txt 导出（3 章并发抓取，校验产物内容与清洗结果）。
+
+快照目录：
+
+```
+testdata/fixtures/
+├── manhua/           index.json + 5 个响应（搜索/发现/详情/补页/正文）
+├── langren/          index.json + 4 个响应（搜索/发现/详情/正文）
+└── langren_download/ index.json + 4 个响应（目录页 + 3 章正文）
+```
+
+`index.json` 记录 `method + url + body sha1 → 文件名 + 状态码 + Content-Type`，
+回放时按键精确匹配；缺条目会报「缺少快照」并提示重新录制。
+
+## 单元测试分布
+
+- `pkg/webbook/testdata_source_test.go`：真实书源端到端（回放 / 在线 / 离线规则三层）
+- `pkg/webbook/debug_trace_test.go`：调试打点（四阶段标记、四种 state、列表只打首条）
+- `pkg/webbook/debug_info_test.go`：`└` 打的是规则求值结果而非合并后的字段（规则失效时可观测）
+- `pkg/webbook/debug_toc_test.go`：`nextTocUrl` 一次给多个地址时并发抓全 + 顺序稳定
+- `pkg/webbook/vcr_test.go`：录制回放传输层（`LEGADO_RECORD` / `LEGADO_ONLINE`）
+- `pkg/webbook/webbook_test.go`：httptest 假站点，搜索 → Cookie 自动保存 → 详情 → 目录 → 需 Cookie 的正文，以及 JS 扩展与变量
+- `pkg/debug/debug_test.go`：时间戳格式、state 命名、响应体三种模式、`┌/└` 并发原子性、落盘文件名
+- `cmd/legado/debugcmd_test.go`：`-key` 入口分派、`-stage` 取值、分类名查发现地址
+- `pkg/source/testdata_test.go`：真实书源加载、语法校验、关键字段结构断言
 - `pkg/source/find_test.go`：`-source` 十级匹配（序号/URL/名称/文件名/域名/详情页 URL/子串/歧义/找不到）
+- `pkg/rule/rule_test.go`：五种模式、新老索引、组合符、`@put/@get`、`{{}}`、`##` 替换、文档示例
+- `pkg/rule/regress_test.go`：`{{}}` 求值为空、单段属性名（`href`）等易回归点
+- `pkg/js/js_test.go`：JS 里 `select()` 返回的 jsoup `Elements`（`text/attr/size/get`）与导出类型
+- `pkg/urlx/analyze_url_test.go`：`{{key}}` / `{{page...}}` / `<1,2,3>` 分页替换
 - `pkg/util/html_test.go`：`HtmlFormat` / `FormatKeepImg` 与规则型 `<img src>`
 - `pkg/download/download_test.go`：图片地址抽取
 - `pkg/model/source_test.go`：`exploreUrl` 解析、UA 覆盖优先级
-- `testdata/sources/`：两个真实书源（文本 + 漫画）作为回归输入
+- `pkg/config/config_test.go`：配置读写、校验、拼写建议
 
 # 目录结构
 
@@ -777,14 +937,20 @@ legado-go/
 ├── examples/basic/        可运行的 API 使用示例
 ├── legado.go              顶层 API（Engine / Config / FromFileConfig）
 ├── cmd/legado/
-│   ├── main.go            CLI 命令与参数
-│   └── configcmd.go       config gen / config check
+│   ├── main.go            命令表、分派与总帮助
+│   ├── flags.go           全局选项、config.json 加载、引擎构造
+│   ├── bookcmd.go         list / search / explore / info / toc / content / download
+│   ├── validatecmd.go     validate 离线与在线校验
+│   ├── configcmd.go       config gen / config check
+│   ├── debugcmd.go        debug 命令（书源调试编排）
+│   └── ui.go              报错退出、校验项输出、终端对齐等输出工具
 ├── pkg/
 │   ├── util/              URL / HTML 实体与格式化 / 编码探测 / goquery 封装
 │   ├── model/             书源与规则实体、Book / BookChapter、变量域
 │   ├── store/             Cookie（二级域名+会话双桶）、Cache
 │   ├── net/               HTTP Client（自动 Cookie / 编码 / 重试 / 代理）
 │   ├── js/                goja 引擎 + JsExtensions
+│   ├── debug/             调试日志（state 语义、文本/JSONL/响应体落盘三种 Sink）
 │   ├── rule/              切分器 / SourceRule / 五种模式 / AnalyzeRule
 │   ├── urlx/              AnalyzeUrl
 │   ├── webbook/           搜索·发现·详情·目录·正文
@@ -792,7 +958,9 @@ legado-go/
 │   ├── config/            config.json 读写与校验（字段元数据、拼写建议）
 │   └── download/          txt/md 导出 + 漫画下图
 ├── config.example.json    配置示例（拷成 config.json 即可用）
-└── testdata/sources/      回归用真实书源
+└── testdata/
+    ├── sources/           回归用真实书源（3 个源）
+    └── fixtures/          录制的 HTTP 快照（manhua / langren / langren_download）
 ```
 
 # 常见问题

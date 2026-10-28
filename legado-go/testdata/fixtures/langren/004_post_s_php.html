@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+<meta charset=gb2312/>
+<meta http-equiv="X-UA-Compatible" content="IE=edge, chrome=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes" />
+<meta name="applicable-device" content="pc,mobile" />
+<title>小说监禁搜索结果</title>
+<meta name="keywords" content="免费小说,免费H小说,免费H小说搜索,韩国H小说" />
+<meta name="description" content="相关监禁H小说作品展示。" />
+</head>
+<body>
+<link rel="stylesheet" href="https://www.langrenxiaoshuo.com/css/sweet-alert.css" />
+<link rel="stylesheet" href="https://www.langrenxiaoshuo.com/css/style.css"/>
+<script src="https://www.langrenxiaoshuo.com/css/js/jquery.min.js"></script>
+<script src="https://www.langrenxiaoshuo.com/css/js/novel.js"></script>
+<script src="https://www.langrenxiaoshuo.com/css/js/apps.js"></script>
+<div class="topbar">
+  <div class="topbar-con">
+    <div class="topbar-sethome"> <a href="javascript:winSetHP();">将本站设为首页</a> </div>
+    <div class="topbar-addfavorite"> <a href="javascript:winAddFav()">收藏鐙间汉灏忚</a> </div>
+    <div class="topbar-right">
+      <script>PCLogin()</script>
+    </div>
+  </div>
+</div>
+<div class="header">
+  <h1 class="logo"><a href="https://www.langrenxiaoshuo.com/">笔趣阁</a></h1>
+  <form name="From" method="post" action="/s.php?action=search" class="search-form" id="form">
+  <input type="hidden" name="objectType" value="2" />
+    <input class="input-text input-key" name="wd" type="text" maxlength="30" placeholder="可搜书名和作者，请您少字也别输错字。" />
+    <input type="submit" class="btn-tosearch" value="搜索" title="搜索" />
+  </form>
+  <div class="m-user" style="color:#fff">             <div class="col-12 d-flex justify-content-end user" id="_login">
+                <a href="https://www.langrenxiaoshuo.com/member/login.php" class="btn"> 登录 </a>
+                <a href="https://www.langrenxiaoshuo.com/member/index_do.php?fmdo=user&dopost=regnew" class="btn"> 注册 </a>
+            </div> </div>
+</div>
+<ul class="nav">
+  <li><a href="https://www.langrenxiaoshuo.com/">首页</a></li>
+  
+  <li><a href="https://www.langrenxiaoshuo.com/allbook.html">全部小说</a></a></li>
+ 
+  <li><a rel="nofollow" href="https://www.langrenxiaoshuo.com/member/history.php">阅读历史</a></li>
+</ul>
+<ul class="m-nav">
+  
+ <li><a href="https://www.langrenxiaoshuo.com/allbook.html">全部小说</a></a></li>
+ 
+  <li><a rel="nofollow" href="https://www.langrenxiaoshuo.com/member/history.php">阅读历史</a></li>
+</ul><div class="container">
+  <div class="row">
+    <div class="layout layout2 layout-co18">
+      <h2 class="layout-tit">搜索"监禁"相关H小说</h2>
+      <ul class="txt-list txt-list-row5">
+        <li><span class="s1"><b>H小说分类</b></span> <span class="s2"><b>H小说名称</b></span>  <span class="s4"><b>作者</b></span> </li>
+               <li> <span class="s1">[H小说]</span> 
+		<span class="s2"> <a href="https://www.langrenxiaoshuo.com/html/jianjinhuanxiang/">监禁幻想</a> </span> 
+		
+		<span class="s4">女王刹那雪的小弟</span> 
+		 </li>
+                <li> <span class="s1">[H小说]</span> 
+		<span class="s2"> <a href="https://www.langrenxiaoshuo.com/html/youguai_jianjin_chuweichengfa/">诱拐·监禁·臭味惩罚</a> </span> 
+		
+		<span class="s4">INDDUCK</span> 
+		 </li>
+                <li> <span class="s1">[H小说]</span> 
+		<span class="s2"> <a href="https://www.langrenxiaoshuo.com/html/jianjinwang/">监禁王</a> </span> 
+		
+		<span class="s4">マサイ</span> 
+		 </li>
+              </ul>
+      <ul class="txt-list txt-list-row5" align="center">
+        <span>共 1 页/3条记录</span>
+      </ul>
+    </div>
+  </div>
+</div>
+<!--script>createApp()</script-->
+<div class="footer" id="footer">
+  <div class="pc-footer">
+    <p>鐙间汉灏忚提供的免费小说主要面向港澳台及其他海外地区用户，中国大陆地区用户请自觉离开。</p>
+    <p>本站所有H小说为转载作品，所有章节均由网友上传，转载至本站只是为了宣传本书让更多读者欣赏。</p>
+  </div>
+  <div class="m-footer"> <a href="https://www.langrenxiaoshuo.com">首页</a> <a href="https://www.langrenxiaoshuo.com/member/index.php" rel="nofollow">会员中心</a> <a href="https://www.langrenxiaoshuo.com/member/history.php" rel="nofollow">我的书架</a>
+    <!--a href="https://mgzs.cdn.bos.com/appdown.html?w=tg12">客户端</a-->
+    <a href="#">顶部↑</a> </div>
+</div>
+<!--script src="https://www.langrenxiaoshuo.com/js/xuanfu.js?v=1" language="JavaScript"></script-->
+
+<script src="https://www.langrenxiaoshuo.com/css/js/sweet-alert.min.js"></script>
+<script>
+    function check() {
+        var keyWord = $("#keyWord").val().trim();
+        if (keyWord == "" || keyWord == null || keyWord == undefined) {
+            swal({
+                title: "请输入正确的信息！",
+                type: "warning",
+            });
+        } else {
+            $("#form").submit();
+        }
+    }
+    function winSetHP() {
+        var name = document.title;
+        if (document.all) {
+            document.body.style.behavior = 'url(#default#homepage)';
+            document.body.setHomePage(name);
+        } else {
+            swal({
+                title: "提示",
+                text: '浏览器不支持此操作, 请手动设为首页'
+            });
+        }
+    }
+    function winAddFav() {
+        var domain = window.location.href;
+        var name = document.title;
+        try {
+            window.external.addFavorite(domain, name);
+        } catch (e) {
+            try {
+                window.sidebar.addPanel(name, domain, '');
+            } catch (e) {
+                swal({
+                    title: "提示",
+                    text: '加入收藏失败，请使用Ctrl+D进行添加,或手动在浏览器里进行设置'
+                });
+            }
+        }
+    }
+    function loginbtn() {
+	var domain = window.location.href;
+        $.post("/member/index_do.php", { action: 'login', username: $("#small-username").val(), password: $("#small-password").val(), usecookie: "720" },
+            function (result) {
+                if (result != []) {
+                    if (result.status == 1) {
+                        swal({
+                            title: "提示",
+                            text: result.info
+                        });
+                        setTimeout(function () {
+						if(domain.indexOf("/member/login.php") >= 0 ) {
+                            location.href = "/";
+						}else{
+							location.href = domain;
+						}	
+                        }, 1500);
+                    } else {
+                        swal({
+                            title: "提示",
+                            text: result.info
+                        });
+                    }
+                }
+            })
+    }
+</script>
+<div style="display:none;">
+<!-- Histats.com  START  (aync)-->
+<script type="text/javascript">var _Hasync= _Hasync|| [];
+_Hasync.push(['Histats.start', '1,4753837,4,0,0,0,00010000']);
+_Hasync.push(['Histats.fasi', '1']);
+_Hasync.push(['Histats.track_hits', '']);
+(function() {
+var hs = document.createElement('script'); hs.type = 'text/javascript'; hs.async = true;
+hs.src = ('//s10.histats.com/js15_as.js');
+(document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(hs);
+})();</script>
+<noscript><a href="https://www.langrenxiaoshuo.com/" target="_blank"><img  src="https://www.langrenxiaoshuo.com//sstatic1.histats.com/0.gif?4753837&101" alt="" border="0"></a></noscript>
+<!-- Histats.com  END  -->
+<!---msft-->
+<script type="text/javascript">
+    (function(c,l,a,r,i,t,y){
+        c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+        t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+        y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+    })(window, document, "clarity", "script", "gjwtoypz5i");
+</script>
+<!---msft end --->
+</div>
+<script src="https://www.langrenxiaoshuo.com/static/js/popper.min.js"></script>
+<script src="https://www.langrenxiaoshuo.com/static/js/bootstrap.bundle.js"></script>
+<script src="https://www.langrenxiaoshuo.com/static/js/dede.js"></script>
+<script>
+    // 校验是否登录
+    function CheckLogin() {
+        $.get("/member/ajax_loginsta.php?format=json",function(data) {
+            let result = JSON.parse(data);
+            if (result.code === 200) {
+                $("#_login").html(`
+                    Hi, ${result.data.username} 
+                    <a href="https://www.langrenxiaoshuo.com/member/">[<font color="yellow"> 会员中心 </font>]</a>
+                    <a href="https://www.langrenxiaoshuo.com/member/index_do.php?fmdo=login&dopost=exit">[<font color="white"> 退出 </font>]</a>
+                `);
+                $("#iptUsername").val(result.data.username);
+                $("#iptUsername").attr("disabled", "disabled");
+                $(".areaValidate").hide();
+            } else {
+                $(".areaValidate").show();
+            }
+        });
+    }
+    // 页面加载触发
+    $(document).ready(function () {
+        CheckLogin();
+    });
+</script></body>
+</html>

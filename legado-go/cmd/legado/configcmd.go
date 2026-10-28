@@ -35,8 +35,7 @@ func cmdConfig(args []string) {
 		cmdConfigCheck(args, true)
 	case "":
 		// 没有子命令：配置文件存在就校验，否则给出引导
-		path, _ := scanConfigPath(args)
-		if path != "" {
+		if path, _ := scanConfigPath(args); path != "" {
 			if _, err := os.Stat(path); err == nil {
 				cmdConfigCheck([]string{"-config", path}, true)
 				return
@@ -52,13 +51,13 @@ func cmdConfig(args []string) {
 		p, _ := scanConfigPath(args)
 		fmt.Println(p)
 	default:
-		fmt.Fprintf(os.Stderr, "未知 config 子命令: %s\n可用: gen | check\n", sub)
-		os.Exit(1)
+		failf("未知 config 子命令: %s\n可用: gen | check", sub)
 	}
 }
 
 func cmdConfigGen(args []string) {
 	fs := flag.NewFlagSet("config gen", flag.ExitOnError)
+	fs.Usage = func() { printFlagUsage(fs, "config gen") }
 	out := fs.String("out", config.FileName, "生成到哪个文件（-out - 输出到终端）")
 	force := fs.Bool("force", false, "文件已存在时覆盖")
 	dir := fs.String("dir", "", "写入 sourceDir（默认 ./sources）")
@@ -69,62 +68,60 @@ func cmdConfigGen(args []string) {
 	ua := fs.String("ua", "", "写入 userAgent")
 	timeout := fs.Int("timeout", 0, "写入 httpTimeout（秒）")
 	jsTime := fs.Int("js-timeout", 0, "写入 jsTimeout（秒）")
-	debug := fs.Bool("debug-output", false, "写入 debug=true")
+	debugOut := fs.Bool("debug-output", false, "写入 debug=true")
 	outDir := fs.String("out-dir", "", "写入 download.outDir")
 	workers := fs.Int("workers", 0, "写入 download.workers")
 	docs := fs.Bool("docs", false, "同时打印每项配置的含义")
 	_ = fs.Parse(args)
 
+	// 只写命令行上显式给出的项，其余保留内置默认；数字项写 0 视为不修改
 	c := config.Default()
-	set := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	if set["dir"] {
-		c.SourceDir = *dir
-	}
-	if set["file"] {
-		c.SourceFile = *file
-	}
-	if set["source"] {
-		c.Source = *src
-	}
-	if set["cookie"] {
-		c.CookieFile = *cookie
-	}
-	if set["cache"] {
-		c.CacheFile = *cache
-	}
-	if set["ua"] {
-		c.UserAgent = *ua
-	}
-	if *timeout > 0 {
-		c.HTTPTimeout = *timeout
-	}
-	if *jsTime > 0 {
-		c.JSTimeout = *jsTime
-	}
-	if *debug {
-		c.Debug = true
-	}
-	if *outDir != "" {
-		c.Download.OutDir = *outDir
-	}
-	if *workers > 0 {
-		c.Download.Workers = *workers
-	}
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "dir":
+			c.SourceDir = *dir
+		case "file":
+			c.SourceFile = *file
+		case "source":
+			c.Source = *src
+		case "cookie":
+			c.CookieFile = *cookie
+		case "cache":
+			c.CacheFile = *cache
+		case "ua":
+			c.UserAgent = *ua
+		case "timeout":
+			if *timeout > 0 {
+				c.HTTPTimeout = *timeout
+			}
+		case "js-timeout":
+			if *jsTime > 0 {
+				c.JSTimeout = *jsTime
+			}
+		case "debug-output":
+			c.Debug = *debugOut
+		case "out-dir":
+			if *outDir != "" {
+				c.Download.OutDir = *outDir
+			}
+		case "workers":
+			if *workers > 0 {
+				c.Download.Workers = *workers
+			}
+		}
+	})
 	c.Normalize()
 
 	if *out == "-" {
 		b, err := c.Encode()
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "序列化失败:", err)
-			os.Exit(1)
+			failErr("序列化", err)
 		}
-		os.Stdout.Write(b)
+		_, _ = os.Stdout.Write(b)
 		return
 	}
 	if err := c.Save(*out, *force); err != nil {
-		fmt.Fprintln(os.Stderr, "生成失败:", err)
-		os.Exit(1)
+		failErr("生成", err)
 	}
 	fmt.Printf("已生成 %s\n", *out)
 	fmt.Printf("  sourceDir: %s  cookieFile: %s  cacheFile: %s\n", c.SourceDir, c.CookieFile, c.CacheFile)
@@ -135,24 +132,29 @@ func cmdConfigGen(args []string) {
 	}
 }
 
+// cmdConfigCheckCmd 是命令表里 config-check 的入口（等价于 legado config check）
+func cmdConfigCheckCmd(args []string) {
+	cmdConfigCheck(args, true)
+}
+
 func cmdConfigCheck(args []string, report bool) {
 	fs := flag.NewFlagSet("config check", flag.ExitOnError)
+	fs.Usage = func() { printFlagUsage(fs, "config check") }
 	path := fs.String("config", config.FileName, "要校验的配置文件")
 	asJSON := fs.Bool("json", false, "以 JSON 输出结果")
 	_ = fs.Parse(args)
 
 	if *path == "" {
-		fmt.Fprintln(os.Stderr, "已用 -config= 关闭配置，无需校验")
-		os.Exit(1)
+		failf("已用 -config= 关闭配置，无需校验")
 	}
 	c, err := config.Load(*path)
 	if err != nil {
 		msg := configErrText(*path, err)
 		if report {
-			fmt.Fprintln(os.Stderr, "✗ "+msg)
+			fmt.Fprintln(os.Stderr, markError+" "+msg)
 		}
 		if *asJSON {
-			printIssuesJSON([]config.Issue{{Level: config.LevelError, Field: "", Msg: msg}})
+			printIssuesJSON([]config.Issue{{Level: config.LevelError, Msg: msg}})
 		}
 		os.Exit(2)
 	}
@@ -168,19 +170,7 @@ func cmdConfigCheck(args []string, report bool) {
 		return
 	}
 	fmt.Printf("检查 %s\n", *path)
-	for _, i := range r.Issues {
-		mark := "·"
-		switch i.Level {
-		case config.LevelError:
-			mark = "✗"
-		case config.LevelWarn:
-			mark = "!"
-		}
-		fmt.Printf("   %s %s\n", mark, i.String())
-	}
-	if len(r.Issues) == 0 {
-		fmt.Println("   ✓ 无问题")
-	}
+	printIssueLines(configIssueLines(r.Issues))
 	errs, warns, _ := r.Count()
 	fmt.Printf("\n共 %d 个错误，%d 个警告\n", errs, warns)
 	if !r.OK() {

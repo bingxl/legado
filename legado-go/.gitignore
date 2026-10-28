@@ -1,0 +1,12 @@
+# 临时诊断工具 / 抓包缓存（如 temp/diag、temp/cache），不入库
+temp/
+
+# 运行 CLI 留下的本地状态（Cookie 罐、缓存索引），不入库
+cookies.json
+cache.json
+
+# testdata 下默认只放"可复现测试"需要的东西，其余一律忽略
+testdata/*
+# 书源与录制快照必须入库，否则 clone 之后离线测试全部因缺快照而失败
+!testdata/sources/
+!testdata/fixtures/

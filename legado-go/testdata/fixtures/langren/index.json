@@ -1,0 +1,40 @@
+{
+  "recorded_at": "2026-10-27T06:29:32+08:00",
+  "entries": [
+    {
+      "method": "GET",
+      "url": "https://www.langrenxiaoshuo.com/allbook.html",
+      "status": 200,
+      "content_type": "text/html; charset=gb2312",
+      "file": "001_get_allbook_html.html"
+    },
+    {
+      "method": "GET",
+      "url": "https://www.langrenxiaoshuo.com/html/jianjinwang/",
+      "status": 200,
+      "content_type": "text/html; charset=gb2312",
+      "file": "002_get_html_jianjinwang.html"
+    },
+    {
+      "method": "GET",
+      "url": "https://www.langrenxiaoshuo.com/html/jianjinwang/804647.html",
+      "status": 200,
+      "content_type": "text/html; charset=gb2312",
+      "set_cookie": [
+        "DedeUserID=deleted; expires=Thu, 01-Jan-1970 00:00:01 GMT; Max-Age=0; path=/",
+        "DedeUserID__ckMd5=deleted; expires=Thu, 01-Jan-1970 00:00:01 GMT; Max-Age=0; path=/",
+        "DedeLoginTime=deleted; expires=Thu, 01-Jan-1970 00:00:01 GMT; Max-Age=0; path=/",
+        "DedeLoginTime__ckMd5=deleted; expires=Thu, 01-Jan-1970 00:00:01 GMT; Max-Age=0; path=/"
+      ],
+      "file": "003_get_html_jianjinwang_804647_html.html"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.langrenxiaoshuo.com/s.php?action=search",
+      "body_sha1": "4648fa6bcf3f64cd1d819bf97d8c326d4b3b286f",
+      "status": 200,
+      "content_type": "text/html; charset=gb2312",
+      "file": "004_post_s_php.html"
+    }
+  ]
+}

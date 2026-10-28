@@ -92,6 +92,19 @@ id.content@all                             // 正文连同容器标签
 
 默认（不带后缀）取 `text`。取到的值会做 HTML 实体反转义。
 
+**单段规则的特殊约定**：整条规则只有一段、且不像选择器时，这一段会被当作**属性名**
+（对齐 legado 的 `getResultLast` 默认分支）。所以下面三种写法都成立：
+
+```jsonc
+"chapterName": "text",     // 取值关键字 → Element.text()
+"chapterUrl":  "href",     // 裸属性名   → Element.attr("href")
+"chapterUrl":  "a@href"    // 常规写法
+```
+
+判断「像不像选择器」的依据：含空白/`[]`/`!`/`>`、以 `.`/`#` 开头，或以
+`class.` / `tag.` / `id.` / `text.` / `ownText.` / `children` 开头 → 当选择器；
+其余裸词（`href`、`title`、`src`、`data-src`）→ 当属性名。
+
 ### 3.3 索引语法
 
 索引直接写在**层**的末尾，紧跟选择器；`@` 之后的取值后缀不算在索引里。
@@ -237,6 +250,24 @@ JSON.parse(doc).data.map(x => x.title).join(",")
 - 返回 **JS 对象**（`NativeObject`）→ 后续规则的"键值直接访问"分支生效，
   即 `chapterName: "name"` 会直接从对象里取 `name` 字段（这是漫画/JSON 源写目录的常用手法）
 - 返回 jsoup 元素 / 元素数组 → 后续规则可以继续用 CSS 解析
+
+### JS 里的 `result.select(...)`
+
+`select()` 返回的是模拟 jsoup `Elements` 的对象：**既是数组**（可下标、有 `length`），
+又带 `Elements` 的方法，所以下列写法都能直接跑（书源里很常见）：
+
+```js
+result.select('td.tal').text()      // 各元素文本，空格拼接
+result.select('td.tal').size()      // 元素个数
+result.select('h3 a').attr('href')  // 第一个元素的属性
+result.select('a').get(0).text()    // 等价于 result.select('a')[0].text()
+result.select('a').first().text()
+result.select('a').last().text()
+result.select('a').text()           // 元素对象本身也有 select/text/attr
+```
+
+单元素对象（`ElementWrap`）同样提供 `select` / `text` / `ownText` / `html` / `outerHtml` /
+`attr` / `tagName` / `className` / `id` / `parent` / `children` / `next` / `textNodes` / `data`。
 
 ## 8. 变量：`@put` / `@get` / `java.put`
 

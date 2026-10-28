@@ -152,6 +152,95 @@ func (e *ElementWrap) Object(vm *goja.Runtime) *goja.Object {
 	return o
 }
 
+// Elements 模拟 jsoup 的 Elements：本身是 JS 数组，另带 text/attr/size/get 等方法。
+// 书源里大量使用 `result.select('x').text()` 这种写法，只返回裸数组会直接报
+// "Object has no member 'text'"。
+func elementsObject(vm *goja.Runtime, list []*ElementWrap) *goja.Object {
+	vals := make([]any, 0, len(list))
+	for _, e := range list {
+		vals = append(vals, e.Object(vm))
+	}
+	obj := vm.NewArray(vals...)
+	texts := func() string {
+		parts := make([]string, 0, len(list))
+		for _, e := range list {
+			if t := util.NodeText(e.node); t != "" {
+				parts = append(parts, t)
+			}
+		}
+		return strings.Join(parts, " ")
+	}
+	obj.Set("text", func(goja.FunctionCall) goja.Value { return vm.ToValue(texts()) })
+	obj.Set("attr", func(call goja.FunctionCall) goja.Value {
+		name := fmt.Sprint(exportValue(call.Argument(0)))
+		switch strings.ToLower(name) {
+		case "abs:href", "abs:src":
+			base := "href"
+			if strings.HasSuffix(name, "src") {
+				base = "src"
+			}
+			v := ""
+			if len(list) > 0 {
+				v = util.NodeAttr(list[0].node, base)
+			}
+			if len(call.Arguments) > 1 {
+				v = util.GetAbsoluteURL(fmt.Sprint(exportValue(call.Argument(1))), v)
+			}
+			return vm.ToValue(v)
+		case "html", "outerHtml":
+			if len(list) == 0 {
+				return vm.ToValue("")
+			}
+			return vm.ToValue(util.Render(list[0].node))
+		}
+		if len(list) == 0 {
+			return vm.ToValue("")
+		}
+		return vm.ToValue(util.NodeAttr(list[0].node, name))
+	})
+	obj.Set("size", func(goja.FunctionCall) goja.Value { return vm.ToValue(len(list)) })
+	obj.Set("get", func(call goja.FunctionCall) goja.Value {
+		i := toInt(exportValue(call.Argument(0)))
+		if i < 0 || i >= len(list) {
+			return goja.Null()
+		}
+		return list[i].Object(vm)
+	})
+	obj.Set("first", func(goja.FunctionCall) goja.Value {
+		if len(list) == 0 {
+			return goja.Null()
+		}
+		return list[0].Object(vm)
+	})
+	obj.Set("last", func(goja.FunctionCall) goja.Value {
+		if len(list) == 0 {
+			return goja.Null()
+		}
+		return list[len(list)-1].Object(vm)
+	})
+	obj.Set("html", func(goja.FunctionCall) goja.Value {
+		if len(list) == 0 {
+			return vm.ToValue("")
+		}
+		return vm.ToValue(util.Render(list[0].node))
+	})
+	obj.Set("outerHtml", func(goja.FunctionCall) goja.Value {
+		var sb strings.Builder
+		for _, e := range list {
+			sb.WriteString(util.Render(e.node))
+		}
+		return vm.ToValue(sb.String())
+	})
+	obj.Set("toString", func(goja.FunctionCall) goja.Value {
+		var sb strings.Builder
+		for _, e := range list {
+			sb.WriteString(util.Render(e.node))
+		}
+		return vm.ToValue(sb.String())
+	})
+	return obj
+}
+
 // —— java 扩展对象 ——
 
 func newJavaObject(vm *goja.Runtime, b *Bindings) *goja.Object {

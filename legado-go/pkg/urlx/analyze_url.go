@@ -3,10 +3,13 @@ package urlx
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/legado/legado-go/pkg/debug"
 	"github.com/legado/legado-go/pkg/js"
 	"github.com/legado/legado-go/pkg/model"
 	"github.com/legado/legado-go/pkg/net"
@@ -16,8 +19,9 @@ import (
 )
 
 var (
-	jsPattern   = regexp.MustCompile(`(?is)<js>([\s\S]*?)</js>|@js:([\s\S]*)`)
-	pagePattern = regexp.MustCompile(`<(.*?)>`)
+	jsPattern      = regexp.MustCompile(`(?is)<js>([\s\S]*?)</js>|@js:([\s\S]*)`)
+	pagePattern    = regexp.MustCompile(`<(.*?)>`)
+	dataURIPattern = regexp.MustCompile(`^data:.*?;base64,(.*)`)
 )
 
 // Options AnalyzeUrl 构造参数
@@ -78,13 +82,9 @@ func New(opt Options) *AnalyzeUrl {
 		au.baseUrl = b
 	}
 	if opt.Headers != nil {
-		for k, v := range opt.Headers {
-			au.HeaderMap[k] = v
-		}
+		maps.Copy(au.HeaderMap, opt.Headers)
 	} else if opt.Source != nil {
-		for k, v := range opt.Source.GetHeaderMap() {
-			au.HeaderMap[k] = v
-		}
+		maps.Copy(au.HeaderMap, opt.Source.GetHeaderMap())
 	}
 	au.initUrl()
 	return au
@@ -133,14 +133,15 @@ func (au *AnalyzeUrl) analyzeJs() {
 // replaceKeyPageJs 替换 {{}} 与 <1,2,3>
 func (au *AnalyzeUrl) replaceKeyPageJs() {
 	if strings.Contains(au.RuleUrl, "{{") && strings.Contains(au.RuleUrl, "}}") {
-		replaced := rule.InnerBraceReplace(au.RuleUrl, "{{", 2, 2, func(inner string) string {
+		replaced, ok := rule.InnerBraceReplace(au.RuleUrl, "{{", 2, 2, func(inner string) string {
 			v := au.evalJS(inner, nil)
 			if v == nil {
 				return ""
 			}
-			return jsToString(v)
+			return rule.JsToString(v)
 		})
-		if replaced != "" {
+		// 与 legado 一致：整串替换结果非空才覆盖（表达式求值为空也是有效结果）
+		if ok && replaced != "" {
 			au.RuleUrl = replaced
 		}
 	}
@@ -225,9 +226,7 @@ func (au *AnalyzeUrl) GetStrResponse() (*net.Response, error) {
 		body = ""
 	}
 	headers := map[string]string{}
-	for k, v := range au.HeaderMap {
-		headers[k] = v
-	}
+	maps.Copy(headers, au.HeaderMap)
 	// 从 header 中提取 proxy（legado 的约定）
 	proxy := headers["proxy"]
 	delete(headers, "proxy")
@@ -236,6 +235,11 @@ func (au *AnalyzeUrl) GetStrResponse() (*net.Response, error) {
 	if au.source != nil {
 		saveCookie = au.source.EnabledCookieJarOn()
 	}
+	if debug.Enabled() {
+		// 先判 Enabled 再拼串，未启用时不产生字符串开销
+		debug.Log(requestLine(au.Method, reqURL, body, contentType, au.Charset))
+	}
+	started := time.Now()
 	resp, err := net.Default().Do(net.Options{
 		URL:         reqURL,
 		Method:      au.Method,
@@ -248,10 +252,50 @@ func (au *AnalyzeUrl) GetStrResponse() (*net.Response, error) {
 		SaveCookie:  saveCookie,
 	})
 	if err != nil {
+		debug.Errorf("≡请求失败 %s %s: %v", au.Method, reqURL, err)
 		return nil, err
+	}
+	debug.Logf("≡响应 %d（%s，%s）", resp.StatusCode,
+		bytesText(len(resp.Body)), time.Since(started).Round(time.Millisecond))
+	if resp.URL != "" && resp.URL != reqURL {
+		debug.Lines("┌重定向后地址", "└"+resp.URL)
 	}
 	resp.RuleURL = au.RuleUrl
 	return resp, nil
+}
+
+// requestLine 生成请求摘要行。charset 单列出来是因为"GBK 没生效"是书源
+// 搜索失效最常见的原因，调试时必须一眼看到。
+func requestLine(method, url, body, contentType, charset string) string {
+	if method == "" {
+		method = "GET"
+	}
+	line := "≡请求 " + method + " " + url
+	parts := make([]string, 0, 3)
+	if body != "" {
+		parts = append(parts, "body "+bytesText(len(body)))
+	}
+	if charset != "" {
+		parts = append(parts, "charset="+charset)
+	}
+	if contentType != "" {
+		parts = append(parts, contentType)
+	}
+	if len(parts) == 0 {
+		return line
+	}
+	return line + "（" + strings.Join(parts, "，") + "）"
+}
+
+// bytesText 把字节数渲染成 512 B / 24.1 KB 这样的短串
+func bytesText(n int) string {
+	switch {
+	case n < 1024:
+		return strconv.Itoa(n) + " B"
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	}
+	return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
 }
 
 // EvalCheckJs 执行登录检测 JS（result 为 StrResponse 结构，可返回新的 body）
@@ -283,7 +327,7 @@ func (au *AnalyzeUrl) EvalCheckJs(jsStr string, resp *net.Response) string {
 // GetBytes 取二进制（支持 data: URI）
 func (au *AnalyzeUrl) GetBytes() ([]byte, error) {
 	if strings.HasPrefix(au.URLNoQuery, "data:") {
-		if m := regexp.MustCompile(`^data:.*?;base64,(.*)`).FindStringSubmatch(au.URLNoQuery); len(m) > 1 {
+		if m := dataURIPattern.FindStringSubmatch(au.URLNoQuery); len(m) > 1 {
 			return util.Base64DecodeBytes(m[1]), nil
 		}
 	}
@@ -340,8 +384,7 @@ func parseUrlOption(s string) *urlOption {
 	m := map[string]any{}
 	if err := json.Unmarshal([]byte(s), &m); err != nil {
 		// 宽松解析：给无引号的键补引号
-		relaxed := regexp.MustCompile(`([{,]\s*)([A-Za-z_][\w]*)\s*:`).ReplaceAllString(s, `$1"$2":`)
-		if err2 := json.Unmarshal([]byte(relaxed), &m); err2 != nil {
+		if err2 := json.Unmarshal([]byte(util.RelaxJSONKeys(s)), &m); err2 != nil {
 			return nil
 		}
 	}
@@ -434,7 +477,7 @@ func encodeParams(params, charset string, isQuery bool) string {
 		if util.EncodedQuery(params) {
 			return params
 		}
-		return queryEncode(params)
+		return queryEncodeWithCharset(params, cs)
 	}
 	var sb strings.Builder
 	pos := 0
@@ -474,6 +517,8 @@ func encodeParams(params, charset string, isQuery bool) string {
 	return sb.String()
 }
 
+// appendEncoded 对齐 AnalyzeUrl.appendEncoded：
+// charset 为空时只跳过已编码片段；charset=escape 走 escape；其余按 charset 字节百分号编码
 func appendEncoded(value string, checkEncoded bool, cs string) string {
 	if checkEncoded && util.EncodedForm(value) {
 		return value
@@ -481,7 +526,7 @@ func appendEncoded(value string, checkEncoded bool, cs string) string {
 	if cs == "escape" {
 		return escapeEncode(value)
 	}
-	return queryEncode(value)
+	return queryEncodeWithCharset(value, cs)
 }
 
 var queryEscaper = strings.NewReplacer(
@@ -509,6 +554,23 @@ func queryEncode(s string) string {
 	return sb.String()
 }
 
+// queryEncodeWithCharset 先把字符串按 charset 编码成字节，再对非保留字节做百分号编码。
+// 对齐 legado 的 queryEncoder.encode(params, charset)：保留字符原样输出，其余按目标编码的字节逐个 %XX。
+func queryEncodeWithCharset(s, cs string) string {
+	if cs == "" || cs == "utf-8" {
+		return queryEncode(s)
+	}
+	var sb strings.Builder
+	for _, b := range util.EncodeBytes(s, cs) {
+		if b < 0x80 && shouldKeepQuery(rune(b)) {
+			sb.WriteByte(b)
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("%%%02X", b))
+	}
+	return sb.String()
+}
+
 func shouldKeepQuery(r rune) bool {
 	switch {
 	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
@@ -518,24 +580,6 @@ func shouldKeepQuery(r rune) bool {
 }
 
 func escapeEncode(s string) string { return queryEncode(s) }
-
-// jsToString 对齐 legado 对 JS 返回值的字符串化
-func jsToString(v any) string {
-	switch t := v.(type) {
-	case nil:
-		return ""
-	case string:
-		return t
-	case float64:
-		if t == float64(int64(t)) {
-			return strconv.FormatInt(int64(t), 10)
-		}
-		return strconv.FormatFloat(t, 'f', -1, 64)
-	case bool:
-		return strconv.FormatBool(t)
-	}
-	return fmt.Sprint(v)
-}
 
 func init() {
 	// 书源请求头中的 @js / <js> 求值

@@ -80,3 +80,22 @@ tasks:
     cmds:
       - rm -rf {{.DIST}}
       - echo "已清理 {{.DIST}}"
+
+  # 提交前质量门（AGENTS.md 第 7 节）。任一命令非零退出即中止。
+  # 注意：gofmt -l . 只列出未格式化文件，不返回失败，需人工确认为空。
+  # go fix 用 -json 判据：-diff 在"多分析器抢同一 import 块"时会静默跳过，看不出漏改。
+  check:
+    desc: 质量门：构建 / vet / 测试 / 现代化自检
+    cmds:
+      - gofmt -l .
+      - go build ./...
+      - go vet ./...
+      - go test ./...
+      - test -z "$(go fix -json ./... | grep -v '^{}$')"
+      - echo "质量门通过（上面 gofmt 若无文件名输出、go fix 若无诊断即合格）"
+
+  check:race:
+    desc: 并发改动专用：带竞态检测跑全部测试
+    cmds:
+      - go test -race ./...
+      - echo "race 检测通过"

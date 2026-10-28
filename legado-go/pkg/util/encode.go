@@ -70,6 +70,26 @@ func DecodeBytes(b []byte, charset string) string {
 	return buf.String()
 }
 
+// EncodeBytes 按编码名把字符串编码为字节（未知编码回退 UTF-8）
+//
+// 与 DecodeBytes 对称：URL 选项里的 charset=gbk 要求把关键字按 GBK 字节发出去，
+// 否则 GBK 站点会把 UTF-8 字节当 GBK 解，得到乱码且搜不到结果。
+func EncodeBytes(s string, charset string) []byte {
+	cs := NormalizeCharset(charset)
+	if cs == "utf-8" {
+		return []byte(s)
+	}
+	enc, err := htmlindex.Get(cs)
+	if err != nil || enc == nil {
+		return []byte(s)
+	}
+	b, _, err := transform.Bytes(enc.NewEncoder(), []byte(s))
+	if err != nil {
+		return []byte(s)
+	}
+	return b
+}
+
 // Base64Encode / Base64Decode
 func Base64Encode(s string, flags int) string {
 	switch flags {

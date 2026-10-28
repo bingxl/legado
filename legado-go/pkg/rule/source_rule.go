@@ -3,9 +3,13 @@ package rule
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/legado/legado-go/pkg/util"
 )
 
 // Mode 规则解析模式（对齐 legado AnalyzeRule.Mode）
@@ -124,17 +128,12 @@ func (sr *SourceRule) splitPutRule(ruleStr string) string {
 		out = strings.Replace(out, m[0], "", 1)
 		var obj map[string]string
 		if err := json.Unmarshal([]byte(m[1]), &obj); err == nil {
-			for k, v := range obj {
-				sr.PutMap[k] = v
-			}
+			maps.Copy(sr.PutMap, obj)
 			continue
 		}
 		// 非规范 JSON（键无引号）容错
-		relaxed := regexp.MustCompile(`([{,]\s*)([A-Za-z_][\w]*)\s*:`).ReplaceAllString(m[1], `$1"$2":`)
-		if err := json.Unmarshal([]byte(relaxed), &obj); err == nil {
-			for k, v := range obj {
-				sr.PutMap[k] = v
-			}
+		if err := json.Unmarshal([]byte(util.RelaxJSONKeys(m[1])), &obj); err == nil {
+			maps.Copy(sr.PutMap, obj)
 		}
 	}
 	return out
@@ -187,7 +186,7 @@ func isRule(s string) bool {
 func (sr *SourceRule) MakeUpRule(result any) {
 	if len(sr.ruleParam) > 0 {
 		parts := make([]string, 0, len(sr.ruleParam))
-		for i := len(sr.ruleParam) - 1; i >= 0; i-- {
+		for i := range slices.Backward(sr.ruleParam) {
 			typ := sr.ruleType[i]
 			var v string
 			switch {
@@ -204,7 +203,7 @@ func (sr *SourceRule) MakeUpRule(result any) {
 						v = sr.ar.getString(sr.ar.SplitSourceRule(p), nil, false)
 					}
 				} else {
-					v = jsToString(sr.ar.evalJS(p, result))
+					v = JsToString(sr.ar.evalJS(p, result))
 				}
 			case typ == getRuleType:
 				v = sr.ar.get(sr.ruleParam[i])
@@ -215,8 +214,8 @@ func (sr *SourceRule) MakeUpRule(result any) {
 		}
 		// parts 是逆序收集的，反转后拼接
 		var sb strings.Builder
-		for i := len(parts) - 1; i >= 0; i-- {
-			sb.WriteString(parts[i])
+		for _, p := range slices.Backward(parts) {
+			sb.WriteString(p)
 		}
 		sr.Rule = sb.String()
 	}
@@ -267,8 +266,9 @@ func toStrList(v any) ([]any, bool) {
 	return nil, false
 }
 
-// jsToString 对齐 legado 对 JS 返回值的字符串化（整数 double 去小数位）
-func jsToString(v any) string {
+// JsToString 对齐 legado 对 JS 返回值的字符串化（整数 double 去小数位）。
+// 导出供 urlx 等上层包复用，避免各写一份。
+func JsToString(v any) string {
 	switch t := v.(type) {
 	case nil:
 		return ""
@@ -290,7 +290,7 @@ func jsToString(v any) string {
 	case []any:
 		parts := make([]string, 0, len(t))
 		for _, x := range t {
-			parts = append(parts, jsToString(x))
+			parts = append(parts, JsToString(x))
 		}
 		return strings.Join(parts, "\n")
 	case map[string]any:

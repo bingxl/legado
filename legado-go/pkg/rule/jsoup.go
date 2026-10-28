@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -109,14 +110,17 @@ func getResultList(roots []*html.Node, ruleStr string) []string {
 	if len(parts) == 0 {
 		return nil
 	}
-	// 单段：整段是元素规则，取值默认为 text（对齐 legado getString0）
+	// 单段：可能是取值关键字、元素规则，或**属性名**
+	// （对齐 legado getResultList：单段时 elements 不筛选，直接交给 getResultLast，
+	//  因此 `chapterUrl: "href"` 这类写法取的是当前元素的属性）
 	if len(parts) == 1 {
-		if isValueKeyword(parts[0]) {
-			return getResultLast(roots, parts[0])
+		seg := parts[0]
+		if isValueKeyword(seg) || !isSelectorRule(seg) {
+			return getResultLast(roots, seg)
 		}
 		es := make([]*html.Node, 0, len(roots))
 		for _, et := range roots {
-			es = append(es, elementsSingle(et, parts[0])...)
+			es = append(es, elementsSingle(et, seg)...)
 		}
 		return getResultLast(es, "text")
 	}
@@ -139,6 +143,34 @@ func isValueKeyword(s string) bool {
 	switch strings.TrimSpace(s) {
 	case "text", "textNodes", "ownText", "html", "all":
 		return true
+	}
+	return false
+}
+
+// selectorPrefixes legado 的 ElementsSingle 选择器前缀（class./tag./id./text./ownText.）
+var selectorPrefixes = []string{"class.", "tag.", "id.", "text.", "ownText.", "children", "css:"}
+
+// isSelectorRule 判断单段规则是「元素选择器」还是「属性名」。
+// 属性名不会包含空白、索引符号或选择器前缀，据此区分：
+//   - `href` / `title` / `src`      → 属性名（走 getResultLast 的 attr 分支）
+//   - `text.最新章节` / `class.on`   → 元素选择器
+//   - `.item` / `tag.a[0]` / `a > b` → 元素选择器
+func isSelectorRule(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	if strings.ContainsAny(s, " []!>") {
+		return true
+	}
+	// CSS 选择符（.class / #id）与 legado 的选择器前缀
+	if strings.HasPrefix(s, ".") || strings.HasPrefix(s, "#") {
+		return true
+	}
+	for _, p := range selectorPrefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
 	}
 	return false
 }
@@ -180,14 +212,7 @@ func getResultLast(nodes []*html.Node, lastRule string) []string {
 			if strings.TrimSpace(v) == "" {
 				continue
 			}
-			dup := false
-			for _, x := range out {
-				if x == v {
-					dup = true
-					break
-				}
-			}
-			if !dup {
+			if !slices.Contains(out, v) {
 				out = append(out, v)
 			}
 		}
@@ -366,11 +391,8 @@ func (es *indexSpec) baseElements(temp *html.Node) []*html.Node {
 func byClass(n *html.Node, cls string) []*html.Node {
 	out := []*html.Node{}
 	for _, d := range util.Descendants(n) {
-		for _, c := range strings.Fields(util.NodeAttr(d, "class")) {
-			if c == cls {
-				out = append(out, d)
-				break
-			}
+		if slices.Contains(strings.Fields(util.NodeAttr(d, "class")), cls) {
+			out = append(out, d)
 		}
 	}
 	return out
@@ -503,7 +525,7 @@ func parseIndexItems(inner string) ([]indexItem, bool) {
 		return nil, false
 	}
 	var items []indexItem
-	for _, part := range strings.Split(inner, ",") {
+	for part := range strings.SplitSeq(inner, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue

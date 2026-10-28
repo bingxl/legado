@@ -1,0 +1,58 @@
+{
+  "recorded_at": "2026-10-27T06:29:04+08:00",
+  "entries": [
+    {
+      "method": "POST",
+      "url": "http://yumanhua.com/s",
+      "body_sha1": "8c797ecb7221e970914dae1e40f2fe5aa3227898",
+      "status": 200,
+      "content_type": "text/html;charset=utf-8",
+      "set_cookie": [
+        "server_session_e6faaa55=0a9c886e84903024d14a957487aff84e; Max-Age=864000; httponly; path=/"
+      ],
+      "file": "001_post_s.html"
+    },
+    {
+      "method": "POST",
+      "url": "http://yumanhua.com/data/sort",
+      "body_sha1": "532ce60bc5cbf07c7e81807e784679747557b1dc",
+      "status": 200,
+      "content_type": "text/html;charset=utf-8",
+      "set_cookie": [
+        "server_session_e6faaa55=0a9c886e84903024d14a957487aff84e; Max-Age=864000; httponly; path=/"
+      ],
+      "file": "002_post_data_sort.html"
+    },
+    {
+      "method": "GET",
+      "url": "http://yumanhua.com/GZxNZae/",
+      "status": 200,
+      "content_type": "text/html;charset=utf-8",
+      "set_cookie": [
+        "server_session_e6faaa55=0a9c886e84903024d14a957487aff84e; Max-Age=864000; httponly; path=/"
+      ],
+      "file": "003_get_GZxNZae.html"
+    },
+    {
+      "method": "POST",
+      "url": "http://yumanhua.com/morechapter",
+      "body_sha1": "8190747ec02c021e3ee8a6fd74c5d14a886843ee",
+      "status": 200,
+      "content_type": "text/html;charset=utf-8",
+      "set_cookie": [
+        "server_session_e6faaa55=0a9c886e84903024d14a957487aff84e; Max-Age=864000; httponly; path=/"
+      ],
+      "file": "004_post_morechapter.html"
+    },
+    {
+      "method": "GET",
+      "url": "http://yumanhua.com/GZxNZae/GxaaQOe.html",
+      "status": 200,
+      "content_type": "text/html;charset=utf-8",
+      "set_cookie": [
+        "server_session_e6faaa55=0a9c886e84903024d14a957487aff84e; Max-Age=864000; httponly; path=/"
+      ],
+      "file": "005_get_GZxNZae_GxaaQOe_html.html"
+    }
+  ]
+}

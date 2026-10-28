@@ -133,10 +133,14 @@ func Trim(data string) string {
 }
 
 // InnerBraceReplace 替换内嵌规则 {{...}}（对齐 RuleAnalyzer.innerRule / EVAL_PATTERN）
-// open 形如 "{{"，fn 返回替换值；若 fn 返回空串则保留原样并继续向后查找。
-func InnerBraceReplace(data, open string, startStep, endStep int, fn func(string) string) string {
+//
+// open 形如 "{{"，fn 返回替换值。第二返回值表示是否命中过至少一段内嵌规则：
+// 只要命中过就返回替换后的完整串——**替换值为空串时同样生效**（与 legado 的
+// Kt 实现一致，如首页要把 `{{page === 1 ? ” : '_2_' + page}}` 整段去掉）。
+// 未命中任何内嵌规则时返回 ("", false)，调用方据此判断是否沿用原串。
+func InnerBraceReplace(data, open string, startStep, endStep int, fn func(string) string) (string, bool) {
 	if !strings.Contains(data, open) {
-		return ""
+		return "", false
 	}
 	var sb strings.Builder
 	start := 0
@@ -153,26 +157,19 @@ func InnerBraceReplace(data, open string, startStep, endStep int, fn func(string
 			start = abs + len(open)
 			continue
 		}
-		innerEnd := endIdx - endStep + 1
-		if innerEnd < innerStart {
-			innerEnd = innerStart
-		}
+		innerEnd := max(endIdx-endStep+1, innerStart)
 		inner := data[innerStart:innerEnd]
 		val := fn(inner)
-		if val != "" {
-			sb.WriteString(data[start:abs])
-			sb.WriteString(val)
-			replaced = true
-			start = endIdx + 1
-		} else {
-			start = abs + len(open)
-		}
+		sb.WriteString(data[start:abs])
+		sb.WriteString(val)
+		replaced = true
+		start = endIdx + 1
 	}
 	if !replaced {
-		return ""
+		return "", false
 	}
 	sb.WriteString(data[start:])
-	return sb.String()
+	return sb.String(), true
 }
 
 // matchBrace 给定 open 的最后一个字符位置，返回配对闭括号位置
