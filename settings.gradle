@@ -50,3 +50,5 @@ rootProject.name = 'legado'
 include ':app'
 include ':modules:book'
 include ':modules:rhino'
+// 桌面端 CLI（纯 JVM），复用 app 里的规则解析源码
+include ':cli'

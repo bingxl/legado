@@ -25,6 +25,7 @@ nanoHttpd = "2.3.1"
 okhttp = "5.3.2"
 preference = "1.2.1"
 quickChineseTransfer = "0.2.16"
+slf4j = "2.0.17"
 
 splitties = "3.0.0"
 desugar = "2.1.5"
@@ -168,6 +169,7 @@ gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
 json-path = { module = "com.jayway.jsonpath:json-path", version.ref = "jsonPath" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 jsoupxpath = { module = "cn.wanghaomiao:JsoupXpath", version.ref = "jsoupxpath" }
+slf4j-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j" }
 junit = { module = "junit:junit", version = "4.13.2" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }

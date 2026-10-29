@@ -1,0 +1,31 @@
+{
+  "bookSourceUrl": "https://t66y.com/thread0806.php?fid=20",
+  "bookSourceName": "草榴社区-文学",
+  "bookSourceGroup": "文学",
+  "bookSourceType": 0,
+  "bookUrlPattern": "read\\.php\\?tid=\\d+",
+  "enabled": true,
+  "enabledExplore": true,
+  "header": "{\"User-Agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\"}",
+  "exploreUrl": "https://t66y.com/thread0806.php?fid=20&search=&page={{page}}",
+  "ruleExplore": {
+    "bookList": "#tbody tr.tr3",
+    "name": "h3 a@text",
+    "author": "td a.bl@text",
+    "kind": "@js:(result.select('td.tal').text().match(/\\[.*?\\]/)||[''])[0]",
+    "bookUrl": "@js:'https://t66y.com/read.php?tid='+result.select('h3 a').attr('id').replace(/[^0-9]/g,'')+'&fpage=0&toread=2'"
+  },
+  "ruleBookInfo": {
+    "name": "@js:src.match(/<title>([^<]+)<\\/title>/)[1].replace(/^\\[[^\\]]*\\]\\s*/,'').replace(/\\s*作者：.*$/,'').trim()",
+    "author": "@js:(src.match(/作者：([^<\\s-]+)/)||['',''])[1]"
+  },
+  "ruleToc": {
+    "chapterList": "@js:[1]",
+    "chapterName": "@js:'正文'",
+    "chapterUrl": "@js:book.tocUrl"
+  },
+  "ruleContent": {
+    "content": "div.tpc_content@textNodes",
+    "nextContentUrl": "div.pages a:contains(下一頁)@href"
+  }
+}

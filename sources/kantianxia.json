@@ -1,0 +1,83 @@
+[
+    {
+        "bookSourceComment": "纯发现源",
+        "bookSourceGroup": "校验可用",
+        "bookSourceName": "VISTA看天下(纯发现源)",
+        "bookSourceType": 0,
+        "bookSourceUrl": "https://open3.vistastory.com",
+        "customOrder": 20,
+        "enabled": true,
+        "enabledCookieJar": false,
+        "enabledExplore": true,
+        "exploreUrl": "看天下::https://open3.vistastory.com/v3/api/magazine/all_mag_page?pageNo={{page-1}}&pageSize=18&magType=1\n号外::https://open3.vistastory.com/v3/api/magazine/all_mag_page?pageNo={{page-1}}&pageSize=18&magType=2\nVbook::https://open3.vistastory.com/v3/api/magazine/all_mag_page?pageNo={{page-1}}&pageSize=18&magType=3",
+        "lastUpdateTime": 1792959341156,
+        "respondTime": 542,
+        "ruleBookInfo": {},
+        "ruleContent": {
+            "content": "<img src=\"{{$.article.coverUrl}}\">\n{{$.article..content}}"
+        },
+        "ruleExplore": {},
+        "ruleSearch": {
+            "author": "<js>\"VISTA看天下\"</js>",
+            "bookList": "$.magList",
+            "bookUrl": "https://open3.vistastory.com/v3/api/magazine/mag_column_detail?magId={{$.id}}",
+            "coverUrl": "$.coverUrl",
+            "intro": "$.articleTitle",
+            "kind": "$.magStyle",
+            "lastChapter": "$.subtitle",
+            "name": "$.title",
+            "wordCount": "$.releaseDateFormat"
+        },
+        "ruleToc": {
+            "chapterList": "$..articles.*",
+            "chapterName": "$.title",
+            "chapterUrl": "https://open3.vistastory.com/v3/api/article/article_detail2?articleId={{$.id}}&isShowNext=0"
+        },
+        "weight": 0
+    },
+    {
+        "bookSourceGroup": "🍕 图片,🎨 漫画",
+        "bookSourceName": "神奇漫画",
+        "bookSourceType": 2,
+        "bookSourceUrl": "https://shenqimanhua.net",
+        "customOrder": 1,
+        "enabled": true,
+        "enabledCookieJar": true,
+        "enabledExplore": true,
+        "exploreUrl": "全部::/comics?tag=全部&sort=latest&page={{page}}\n复仇::/comics?tag=复仇&sort=latest&page={{page}}\n奇幻::/comics?tag=奇幻&sort=latest&page={{page}}\n宫廷::/comics?tag=宫廷&sort=latest&page={{page}}\n幻想::/comics?tag=幻想&sort=latest&page={{page}}\n恋爱::/comics?tag=恋爱&sort=latest&page={{page}}\n悬疑::/comics?tag=悬疑&sort=latest&page={{page}}\\n暗黑::/comics?tag=暗黑&sort=latest&page={{page}}\\n校园::/comics?tag=校园&sort=latest&page={{page}}\\n欲望::/comics?tag=欲望&sort=latest&page={{page}}\\n武侠::/comics?tag=武侠&sort=latest&page={{page}}\\n治愈::/comics?tag=治愈&sort=latest&page={{page}}\\n热血::/comics?tag=热血&sort=latest&page={{page}}\\n禁忌::/comics?tag=禁忌&sort=latest&page={{page}}\\n科幻::/comics?tag=科幻&sort=latest&page={{page}}\\n穿越::/comics?tag=穿越&sort=latest&page={{page}}\\n轻松::/comics?tag=轻松&sort=latest&page={{page}}\\n进阶::/comics?tag=进阶&sort=latest&page={{page}}\\n逆袭::/comics?tag=逆袭&sort=latest&page={{page}}\\n都市::/comics?tag=都市&sort=latest&page={{page}}\n最新::/comics?tag=全部&sort=latest&page={{page}}",
+        "header": "{\n  \"User-Agent\": \"Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.230 Mobile Safari/537.36\",\n  \"header\": \"{\\\"Referer\\\":\\\"{{baseUrl}}\\\"}\"\n}",
+        "lastUpdateTime": 1785515743735,
+        "respondTime": 180000,
+        "ruleBookInfo": {
+            "author": "@css:a[itemProp=\"author\"]@text",
+            "coverUrl": "@css:img[class*=\"aspect-3\"]@src",
+            "intro": "@css:h2[itemProp=\"description\"]@text",
+            "kind": "@css:a[href^=\"/comics?tag=\"]@text",
+            "lastChapter": "@css:a[itemProp=\"hasPart\"] span@text",
+            "name": "@css:h1[itemProp=\"name\"]@text"
+        },
+        "ruleContent": {
+            "content": "@js:(function(){var imgs=result.match(/<img[^>]+src=\"([^\"]+)\"[^>]*>/g)||[];var list=[];var base='https://shenqimanhua.net';imgs.forEach(function(img){var m=img.match(/src=\"([^\"]+)\"/);if(m&&m[1].indexOf('/image/')>-1){var src=m[1];if(src.indexOf('://')===-1)src=base+src;list.push('<img src=\"'+src+'\">')}});return list.join('\\n')})()",
+            "imageStyle": "FULL"
+        },
+        "ruleExplore": {
+            "bookList": "@css:a[href^=\"/comic/\"]",
+            "bookUrl": "@href",
+            "coverUrl": "@css:img@src",
+            "name": "@css:div.line-clamp-1@text"
+        },
+        "ruleSearch": {
+            "bookList": "@css:a[href^=\"/comic/\"]",
+            "bookUrl": "@href",
+            "coverUrl": "@css:img@src",
+            "name": "@css:div.line-clamp-1@text"
+        },
+        "ruleToc": {
+            "chapterList": "@js:\n(function () {\n  var html = typeof result !== 'undefined' ? result : '';\n\n  if (!html) {\n    java.log('未找到 result 变量');\n    return [];\n  }\n\n  var MARKER = '\\\\\"chapters\\\\\":[';\n  var idx = html.indexOf(MARKER);\n  if (idx < 0) {\n    java.log('未找到 chapters 标记');\n    return [];\n  }\n\n  var arrStart = idx + MARKER.length - 1;\n\n  var i = arrStart, depth = 0, inStr = false, esc = false;\n  while (i < html.length) {\n    var c = html[i];\n    if (esc) { esc = false; i++; continue; }\n    if (c === '\\\\') { esc = true; i++; continue; }\n    if (c === '\"') { inStr = !inStr; i++; continue; }\n    if (!inStr) {\n      if (c === '[') depth++;\n      else if (c === ']') { depth--; if (depth === 0) break; }\n    }\n    i++;\n  }\n\n  var raw = html.substring(arrStart, i + 1);\n  var jsonStr = raw\n    .replace(/\\\\\\\\/g, '\\u0000')\n    .replace(/\\\\\"/g, '\"')\n    .replace(/\\u0000/g, '\\\\');\nvar comicId = book.bookUrl.match(/\\/comic\\/([^/?#]+)/)?.[1];\njava.log('bookid' + comicId);\n  if (!comicId) {\n    java.log('未能从 baseUrl 提取 comicId, bookurl:' + book.bookUrl);\n    return [];\n  }\n  var chaptersRaw = JSON.parse(jsonStr);\n\n  var chapters = chaptersRaw.map(function (ch) {\n    return {\n      number: ch.number,\n      title:  ch.title,\n      url:    '/read/' + comicId +'/' + ch.id,\n    };\n  });\n\n  chapters.sort(function (a, b) { return a.number - b.number; });\n  //java.log(JSON.stringify(chapters)\t);\n  return chapters;\n})();\n",
+            "chapterName": "title",
+            "chapterUrl": "url"
+        },
+        "searchUrl": "/search?query={{key}}",
+        "weight": 0
+    }
+]

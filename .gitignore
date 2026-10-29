@@ -3,7 +3,6 @@
 local.properties
 .DS_Store
 /build
-build/
 /captures
 .externalNativeBuild
 /release
@@ -18,3 +17,10 @@ package-lock.json
 .idea/
 # Kotlin 2.0
 .kotlin/
+
+# 各模块构建产物（Gradle/Kotlin 编译输出）
+/cli/build/
+/modules/*/build/
+
+# AI 助手本地工作状态（目录内是会话记忆与日志，不入库）
+/.workbuddy/

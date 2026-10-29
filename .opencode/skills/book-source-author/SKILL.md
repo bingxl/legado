@@ -164,6 +164,7 @@ JS can return HTML fragments (e.g. `<a href="...">章名</a>`) which then contin
 
 - Example working source: `shenqimanhua_source.json` (image/comic site: explore+search+bookInfo+toc via embedded JSON, content via `@js` img extraction).
 - Architecture analysis: `book_source_analysis.txt`.
+- **Cracked site case (encrypted chapter images)**: `manwame_source_crack.md` + `scripts/manwame_decrypt.js` — how to recover an AES key/IV from a jsjiami.v7-obfuscated `CMS.chapter.decrypt()` by running the site's own JS in Node and hooking `CryptoJS.enc.*.parse`/`AES.decrypt`; includes KYE_HEX and the reusable script.
 - Rule docs: `app/src/main/assets/web/help/md/ruleHelp.md` and `jsHelp.md`.
 - Rule engine: `app/src/main/java/io/legado/app/model/analyzeRule/`.
 - Rule entity shapes: `app/src/main/java/io/legado/app/data/entities/rule/`.
