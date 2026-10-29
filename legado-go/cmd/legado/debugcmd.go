@@ -194,7 +194,7 @@ func (d *dbgRun) exploreURL(prefix, rest string) (string, error) {
 	if u := strings.TrimSpace(rest); u != "" {
 		return u, nil
 	}
-	kinds := d.src.GetExploreKinds()
+	kinds := webbook.GetExploreKinds(d.src)
 	if len(kinds) == 0 {
 		return "", fmt.Errorf("书源没有 exploreUrl，无法调试发现页；可直接用 -key 传完整地址")
 	}

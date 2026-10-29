@@ -151,20 +151,21 @@ func isValueKeyword(s string) bool {
 var selectorPrefixes = []string{"class.", "tag.", "id.", "text.", "ownText.", "children", "css:"}
 
 // isSelectorRule 判断单段规则是「元素选择器」还是「属性名」。
-// 属性名不会包含空白、索引符号或选择器前缀，据此区分：
-//   - `href` / `title` / `src`      → 属性名（走 getResultLast 的 attr 分支）
-//   - `text.最新章节` / `class.on`   → 元素选择器
-//   - `.item` / `tag.a[0]` / `a > b` → 元素选择器
+// 属性名只会是字母/数字/连字符（href、data-src、abs:href），
+// 只要出现 CSS 选择器特征字符，就按选择器处理：
+//   - `href` / `title` / `src`         → 属性名（走 getResultLast 的 attr 分支）
+//   - `li.col-4` / `.item` / `#list`   → 标签+类、类、id 选择器
+//   - `tag.a[0]` / `a > b`             → 带索引/组合符的选择器
+//   - `text.最新章节` / `class.on`      → legado 的选择器前缀
+//
+// 注意 `li.col-4`（真实书源「哔哩轻小说」的目录规则）曾因不含空格而被当成属性名，
+// 结果 NodeAttr 取不到任何东西，整本书解析出 0 章。
 func isSelectorRule(s string) bool {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return false
 	}
-	if strings.ContainsAny(s, " []!>") {
-		return true
-	}
-	// CSS 选择符（.class / #id）与 legado 的选择器前缀
-	if strings.HasPrefix(s, ".") || strings.HasPrefix(s, "#") {
+	if strings.ContainsAny(s, " []!>.#") {
 		return true
 	}
 	for _, p := range selectorPrefixes {

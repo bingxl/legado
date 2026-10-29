@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"golang.org/x/text/encoding/htmlindex"
@@ -143,3 +144,65 @@ func HexDecode(s string) []byte {
 }
 
 func HexDecodeString(s string) string { return string(HexDecode(s)) }
+
+// UnescapeJSString 还原 JS/JSON 字符串字面量里的转义。
+//
+// 书源常见写法是从页面里正则抠出一段 base64：
+//
+//	params = 'GE2nZOf...Kc\/nzf...5pZu\/VCvRfaRWAo2\u002bYad1...'
+//
+// 浏览器里这是字符串字面量，`\/` 和 `\u002b` 会被解析成 `/` 和 `+`；
+// 而规则引擎拿到的是页面原文，直接送去 base64 解码会因 `\` 非法而失败，
+// 表现就是「解密函数全部执行了，但结果是空」。
+//
+// 只在字符串里确实含反斜杠时才处理，避免影响正常输入。
+func UnescapeJSString(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			b.WriteByte(s[i])
+			continue
+		}
+		i++
+		switch s[i] {
+		case 'u':
+			if i+4 < len(s) {
+				if r, err := strconv.ParseUint(s[i+1:i+5], 16, 32); err == nil {
+					b.WriteRune(rune(r))
+					i += 4
+					continue
+				}
+			}
+			b.WriteByte('u')
+		case 'x':
+			if i+2 < len(s) {
+				if r, err := strconv.ParseUint(s[i+1:i+3], 16, 32); err == nil {
+					b.WriteRune(rune(r))
+					i += 2
+					continue
+				}
+			}
+			b.WriteByte('x')
+		case 'n':
+			b.WriteByte('\n')
+		case 'r':
+			b.WriteByte('\r')
+		case 't':
+			b.WriteByte('\t')
+		case 'b':
+			b.WriteByte('\b')
+		case 'f':
+			b.WriteByte('\f')
+		case '0':
+			b.WriteByte(0)
+		default:
+			// \/ \\ \' \" 等：转义符去掉，保留字符本身
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
+}

@@ -1,0 +1,90 @@
+version: '3'
+
+vars:
+  # 与 main.go 里的 Wails 应用名保持一致，产物是 bin/legado-desktop.exe
+  APP_NAME: "legado-desktop"
+  BIN_DIR: "bin"
+  # 前端用 pnpm（仓库里是 pnpm-lock.yaml + node_modules/.pnpm 布局）。
+  # 默认走 npm 时 arborist 读 .pnpm 布局会报 "Cannot read properties of null (reading 'edgesOut')"。
+  PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "pnpm"}}'
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
+  # Target OS for build/package/run. Defaults to the host OS, and is overridden
+  # by `wails3 build GOOS=...` (or the GOOS env var) for cross-compilation. The
+  # tasks below dispatch to the matching platform Taskfile via this variable.
+  GOOS: '{{.GOOS | default OS}}'
+
+includes:
+  common: ./build/Taskfile.yml
+  windows: ./build/windows/Taskfile.yml
+  darwin: ./build/darwin/Taskfile.yml
+  linux: ./build/linux/Taskfile.yml
+  # 模板默认还带 ios / android 两个 include，但本项目只做桌面端，
+  # 对应目录不存在会让 `wails3 build` 在解析阶段直接报错，故移除。
+
+tasks:
+  build:
+    summary: Builds the application
+    cmds:
+      - task: "{{.GOOS}}:build"
+      # 构建完顺手签名。未配置自签名证书的机器（CI、他人）脚本会自己跳过，
+      # 不会让构建失败。配置见 build/windows/setup-dev-cert.ps1。
+      - task: sign:dev
+        platforms: [windows]
+
+  sign:dev:
+    summary: Signs the Windows binary with the local self-signed dev certificate
+    desc: |
+      用本机自签名证书给 bin/<APP_NAME>.exe 签名，让 SmartScreen 和受控文件夹访问
+      认得出这个应用，避免每次重建后又被拦。
+
+      证书指纹来源：-Thumbprint 参数 > 环境变量 LEGADO_CODESIGN_THUMBPRINT >
+      %USERPROFILE%\.legado-codesign-thumbprint。
+
+      证书不存在时只打印提示并以 0 退出，不阻塞构建。
+    cmds:
+      - pwsh -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}/build/windows/sign-dev.ps1" -Exe "{{.BIN_DIR}}/{{.APP_NAME}}.exe"
+
+  package:
+    summary: Packages a production build of the application
+    cmds:
+      - task: "{{.GOOS}}:package"
+
+  run:
+    summary: Runs the application
+    cmds:
+      - task: "{{.GOOS}}:run"
+
+  dev:
+    summary: Runs the application in development mode
+    cmds:
+      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+
+  install:msix:tools:
+    summary: Installs tools required for Windows MSIX packaging
+    cmds:
+      - task: windows:install:msix:tools
+
+  setup:docker:
+    summary: Builds Docker image for cross-compilation (~800MB download)
+    cmds:
+      - task: common:setup:docker
+
+  build:server:
+    summary: Builds the application in server mode (no GUI, HTTP server only)
+    cmds:
+      - task: common:build:server
+
+  run:server:
+    summary: Runs the application in server mode
+    cmds:
+      - task: common:run:server
+
+  build:docker:
+    summary: Builds a Docker image for server mode deployment
+    cmds:
+      - task: common:build:docker
+
+  run:docker:
+    summary: Builds and runs the Docker image
+    cmds:
+      - task: common:run:docker

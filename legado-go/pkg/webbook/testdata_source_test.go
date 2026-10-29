@@ -164,10 +164,12 @@ func TestSourceLangrenReplay(t *testing.T) {
 	if len(explore) != 30 {
 		t.Fatalf("发现数量错误: 期望 30，实际 %d", len(explore))
 	}
-	if explore[0].Name != "受全体师生认可赞扬的高冷学生会长" {
+	// 断言语义是「发现页首条能正确解析出书名/作者」，具体值随站点更新而变化，
+	// 重录快照时同步更新。
+	if explore[0].Name != "按摩的升级欲望" {
 		t.Errorf("发现首条书名错误: %q", explore[0].Name)
 	}
-	if explore[0].Author != "莫良" {
+	if explore[0].Author != "Yulu" {
 		t.Errorf("发现首条作者错误: %q", explore[0].Author)
 	}
 	// `bookUrl: tag.a.0@href` 旧式索引
@@ -197,8 +199,9 @@ func TestSourceLangrenReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("目录失败: %v", err)
 	}
-	if len(chapters) != 70 {
-		t.Fatalf("章节数错误: 期望 70，实际 %d", len(chapters))
+	// 章节数随站点连裁增长，重录快照时同步更新。
+	if len(chapters) != 73 {
+		t.Fatalf("章节数错误: 期望 73，实际 %d", len(chapters))
 	}
 	if chapters[0].Title != "【监禁王】（第一章1-4）" {
 		t.Errorf("首章标题错误: %q", chapters[0].Title)

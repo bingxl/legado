@@ -39,8 +39,16 @@ type AnalyzeRule struct {
 	varsMu sync.RWMutex
 }
 
+// selectorErrOnce 只注册一次选择器错误回调
+var selectorErrOnce sync.Once
+
 // New 创建规则引擎
 func New(source *model.BookSource) *AnalyzeRule {
+	selectorErrOnce.Do(func() {
+		util.OnSelectorError = func(sel string, err error) {
+			js.OnLog("[rule] 选择器无法解析，已跳过：" + sel + "（" + err.Error() + "）")
+		}
+	})
 	return &AnalyzeRule{
 		Source:    source,
 		ruleCache: map[string][]*SourceRule{},

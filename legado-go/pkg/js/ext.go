@@ -4,11 +4,13 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/md5"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -118,6 +120,86 @@ func (e *ElementWrap) Object(vm *goja.Runtime) *goja.Object {
 		}
 		return goja.Null()
 	})
+	// parentNode 是 jsoup Node 上的同义方法。书源 JS 里非常常见的是
+	// `result.parentNode().parentNode()...`（逐级上溯到包含章节标题的容器），
+	// 早期只提供了 parent，导致这类规则抛「parentNode is not a function」，
+	// 章节名取空 → 整本书解析出 0 章。
+	o.Set("parentNode", func(goja.FunctionCall) goja.Value {
+		if e.node.Parent != nil {
+			return toJSValue(vm, &ElementWrap{e.node.Parent})
+		}
+		return goja.Null()
+	})
+	// selectFirst 对应 jsoup Element#selectFirst
+	o.Set("selectFirst", func(call goja.FunctionCall) goja.Value {
+		css := fmt.Sprint(exportValue(call.Argument(0)))
+		if ns := util.Select(e.node, css); len(ns) > 0 {
+			return toJSValue(vm, &ElementWrap{ns[0]})
+		}
+		return goja.Null()
+	})
+	// getElementsByClass / getElementsByTag / getElementById：jsoup 传统 API
+	o.Set("getElementsByClass", func(call goja.FunctionCall) goja.Value {
+		cls := strings.TrimSpace(fmt.Sprint(exportValue(call.Argument(0))))
+		if cls == "" {
+			return toJSValue(vm, WrapNodes(nil))
+		}
+		return toJSValue(vm, WrapNodes(util.Select(e.node, "."+strings.ReplaceAll(cls, " ", "."))))
+	})
+	o.Set("getElementsByTag", func(call goja.FunctionCall) goja.Value {
+		tag := strings.ToLower(strings.TrimSpace(fmt.Sprint(exportValue(call.Argument(0)))))
+		return toJSValue(vm, WrapNodes(util.Select(e.node, tag)))
+	})
+	o.Set("getElementById", func(call goja.FunctionCall) goja.Value {
+		id := strings.TrimSpace(fmt.Sprint(exportValue(call.Argument(0))))
+		if id == "" {
+			return goja.Null()
+		}
+		if ns := util.Select(e.node, "#"+id); len(ns) > 0 {
+			return toJSValue(vm, &ElementWrap{ns[0]})
+		}
+		return goja.Null()
+	})
+	// allElements 返回子树内所有元素（jsoup Element#allElements）
+	o.Set("allElements", func(goja.FunctionCall) goja.Value {
+		return toJSValue(vm, WrapNodes(util.Descendants(e.node)))
+	})
+	o.Set("hasClass", func(call goja.FunctionCall) goja.Value {
+		cls := strings.TrimSpace(fmt.Sprint(exportValue(call.Argument(0))))
+		return vm.ToValue(slices.Contains(strings.Fields(util.NodeAttr(e.node, "class")), cls))
+	})
+	o.Set("classNames", func(goja.FunctionCall) goja.Value {
+		cls := util.NodeAttr(e.node, "class")
+		return vm.ToValue(strings.Fields(cls))
+	})
+	o.Set("absUrl", func(call goja.FunctionCall) goja.Value {
+		name := fmt.Sprint(exportValue(call.Argument(0)))
+		return vm.ToValue(util.GetAbsoluteURL("", util.NodeAttr(e.node, name)))
+	})
+	o.Set("elementSiblingIndex", func(goja.FunctionCall) goja.Value {
+		i := 0
+		for n := e.node.PrevSibling; n != nil; n = n.PrevSibling {
+			if n.Type == html.ElementNode {
+				i++
+			}
+		}
+		return vm.ToValue(i)
+	})
+	o.Set("siblingIndex", func(goja.FunctionCall) goja.Value {
+		i := 0
+		for n := e.node.PrevSibling; n != nil; n = n.PrevSibling {
+			i++
+		}
+		return vm.ToValue(i)
+	})
+	o.Set("previousElementSibling", func(goja.FunctionCall) goja.Value {
+		for n := e.node.PrevSibling; n != nil; n = n.PrevSibling {
+			if n.Type == html.ElementNode {
+				return toJSValue(vm, &ElementWrap{n})
+			}
+		}
+		return goja.Null()
+	})
 	o.Set("children", func(goja.FunctionCall) goja.Value {
 		return toJSValue(vm, WrapNodes(util.ChildElements(e.node)))
 	})
@@ -199,6 +281,30 @@ func elementsObject(vm *goja.Runtime, list []*ElementWrap) *goja.Object {
 		return vm.ToValue(util.NodeAttr(list[0].node, name))
 	})
 	obj.Set("size", func(goja.FunctionCall) goja.Value { return vm.ToValue(len(list)) })
+	// select / selectFirst：jsoup Elements 上的同名方法，把每个元素的匹配结果合并
+	obj.Set("select", func(call goja.FunctionCall) goja.Value {
+		css := fmt.Sprint(exportValue(call.Argument(0)))
+		var nodes []*html.Node
+		seen := map[*html.Node]bool{}
+		for _, e := range list {
+			for _, n := range util.Select(e.node, css) {
+				if !seen[n] {
+					seen[n] = true
+					nodes = append(nodes, n)
+				}
+			}
+		}
+		return toJSValue(vm, WrapNodes(nodes))
+	})
+	obj.Set("selectFirst", func(call goja.FunctionCall) goja.Value {
+		css := fmt.Sprint(exportValue(call.Argument(0)))
+		for _, e := range list {
+			if ns := util.Select(e.node, css); len(ns) > 0 {
+				return toJSValue(vm, &ElementWrap{ns[0]})
+			}
+		}
+		return goja.Null()
+	})
 	obj.Set("get", func(call goja.FunctionCall) goja.Value {
 		i := toInt(exportValue(call.Argument(0)))
 		if i < 0 || i >= len(list) {
@@ -239,6 +345,42 @@ func elementsObject(vm *goja.Runtime, list []*ElementWrap) *goja.Object {
 		return vm.ToValue(sb.String())
 	})
 	return obj
+}
+
+// —— org.* 静态类（模拟 Rhino 里的 Java 类访问） ——
+
+// newOrgObject 提供书源 JS 常用的 `org.*` 静态方法。
+//
+// legado 的 JS 跑在 Rhino 上，脚本能直接引用 Java 类；书源因此大量使用
+// `org.jsoup.Jsoup.parse(java.ajax(url))` 把接口/页面字符串变成可 select 的文档。
+// Go 侧没有 Java，必须显式造出同名对象——否则脚本一开始就抛
+// "org is not defined"，整个发现分类/规则链拿不到任何结果，且往往只表现为空列表。
+func newOrgObject(vm *goja.Runtime) *goja.Object {
+	org := vm.NewObject()
+	jsoup := vm.NewObject()
+
+	parse := func(call goja.FunctionCall) goja.Value {
+		raw := fmt.Sprint(exportValue(call.Argument(0)))
+		if strings.TrimSpace(raw) == "" {
+			return goja.Null()
+		}
+		doc, err := util.ParseHTML(raw)
+		if err != nil {
+			return goja.Null()
+		}
+		return toJSValue(vm, &ElementWrap{doc})
+	}
+
+	// org.jsoup.Jsoup.parse —— 包名 / 库名 / 类名三层，书源就是这么写的。
+	class := vm.NewObject()
+	class.Set("parse", parse)
+	// parseBodyFragment 是同一用途的别名写法。
+	class.Set("parseBodyFragment", parse)
+	jsoup.Set("Jsoup", class)
+	// 少数脚本写成 org.jsoup.parse（省掉类名），一并兼容。
+	jsoup.Set("parse", parse)
+	org.Set("jsoup", jsoup)
+	return org
 }
 
 // —— java 扩展对象 ——
@@ -395,6 +537,29 @@ func newJavaObject(vm *goja.Runtime, b *Bindings) *goja.Object {
 		}
 		return vm.ToValue(util.Base64Decode(s, flags))
 	})
+	// base64DecodeToByteArray —— 返回字节数组而不是字符串。
+	//
+	// 漫画源常用它解码页面里的加密负载（AES 的 key/iv 也是这么来的）：
+	// 先 base64 解出「16 字节 IV + 密文」，再喂给 createSymmetricCrypto。
+	set("base64DecodeToByteArray", func(call goja.FunctionCall) goja.Value {
+		// 页面里的 base64 常被 JS 转义（`\/`、`\u002b`），先还原再解码。
+		s := strings.TrimSpace(util.UnescapeJSString(fmt.Sprint(exportValue(call.Argument(0)))))
+		if s == "" {
+			// 对齐原版：空入参返回 null，而不是空数组，避免脚本误判长度。
+			return goja.Null()
+		}
+		flags := 0
+		if len(call.Arguments) > 1 {
+			flags = toInt(exportValue(call.Argument(1)))
+		}
+		var data []byte
+		if flags == 1 {
+			data, _ = base64.URLEncoding.DecodeString(s)
+		} else {
+			data = util.Base64DecodeBytes(s)
+		}
+		return toJSBytes(vm, data)
+	})
 	set("base64Encode", func(call goja.FunctionCall) goja.Value {
 		s := fmt.Sprint(exportValue(call.Argument(0)))
 		flags := 2
@@ -415,17 +580,51 @@ func newJavaObject(vm *goja.Runtime, b *Bindings) *goja.Object {
 	set("hexDecodeToString", func(call goja.FunctionCall) goja.Value {
 		return vm.ToValue(util.HexDecodeString(fmt.Sprint(exportValue(call.Argument(0)))))
 	})
+	set("hexDecodeToByteArray", func(call goja.FunctionCall) goja.Value {
+		s := strings.TrimSpace(util.UnescapeJSString(fmt.Sprint(exportValue(call.Argument(0)))))
+		if s == "" {
+			return goja.Null()
+		}
+		return toJSBytes(vm, util.HexDecode(s))
+	})
 	set("strToBytes", func(call goja.FunctionCall) goja.Value {
-		return vm.ToValue([]byte(fmt.Sprint(exportValue(call.Argument(0)))))
+		// 统一用数字数组（= Java byte[]），脚本里的 buf.length / buf[i] 才成立。
+		return toJSBytes(vm, []byte(fmt.Sprint(exportValue(call.Argument(0)))))
 	})
 	set("bytesToStr", func(call goja.FunctionCall) goja.Value {
-		switch t := exportValue(call.Argument(0)).(type) {
-		case []byte:
-			return vm.ToValue(string(t))
-		case string:
-			return vm.ToValue(t)
+		data := bytesArg(call, 0)
+		// 第二个参数是编码名，如 java.bytesToStr(buf, 'UTF-8')。
+		charset := "UTF-8"
+		if len(call.Arguments) > 1 {
+			if s := strings.TrimSpace(fmt.Sprint(exportValue(call.Argument(1)))); s != "" {
+				charset = s
+			}
 		}
-		return vm.ToValue("")
+		if len(data) == 0 {
+			// 入参本来就是字符串时要原样返回，不能因为解不出字节就变空串。
+			if s, ok := exportValue(call.Argument(0)).(string); ok {
+				return vm.ToValue(s)
+			}
+			return vm.ToValue("")
+		}
+		return vm.ToValue(util.DecodeBytes(data, charset))
+	})
+	// createSymmetricCrypto —— 漫画源用来解章节图片清单（AES/DES 系）。
+	//
+	// 签名对齐 Hutool：createSymmetricCrypto(transformation, key, iv?)，
+	// key / iv 既可以是字节数组，也可以是字符串（按 UTF-8 取字节）。
+	set("createSymmetricCrypto", func(call goja.FunctionCall) goja.Value {
+		trans := strings.TrimSpace(fmt.Sprint(exportValue(call.Argument(0))))
+		key := cryptoBytes(call.Argument(1))
+		var iv []byte
+		if len(call.Arguments) > 2 {
+			iv = cryptoBytes(call.Argument(2))
+		}
+		c, err := newSymmetricCrypto(trans, key, iv)
+		if err != nil {
+			panic(vm.NewGoError(fmt.Errorf("createSymmetricCrypto: %w", err)))
+		}
+		return c.toJSObject(vm)
 	})
 	set("encodeURI", func(call goja.FunctionCall) goja.Value {
 		s := fmt.Sprint(exportValue(call.Argument(0)))
@@ -440,6 +639,12 @@ func newJavaObject(vm *goja.Runtime, b *Bindings) *goja.Object {
 	set("htmlFormat", func(call goja.FunctionCall) goja.Value {
 		return vm.ToValue(util.FormatKeepImg(fmt.Sprint(exportValue(call.Argument(0))), ""))
 	})
+	// java.util.Arrays：不少源写 Packages.java.util.Arrays，也有直接写 java.util.Arrays 的，
+	// 两条路径都指向同一份实现。
+	jutil := vm.NewObject()
+	jutil.Set("Arrays", newJavaArraysClass(vm))
+	o.Set("util", jutil)
+
 	// ---------- 简繁（无第三方库时原样返回）----------
 	set("t2s", func(call goja.FunctionCall) goja.Value { return call.Argument(0) })
 	set("s2t", func(call goja.FunctionCall) goja.Value { return call.Argument(0) })

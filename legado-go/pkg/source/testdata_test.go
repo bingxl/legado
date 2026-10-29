@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/legado/legado-go/pkg/model"
 )
 
 const testdataDir = "../../testdata/sources"
@@ -79,7 +81,7 @@ func TestSourceShapes(t *testing.T) {
 			if s.BookSourceType != 2 {
 				t.Errorf("漫画客类型应为 2（图片/漫画），实际 %d", s.BookSourceType)
 			}
-			kinds := s.GetExploreKinds()
+			kinds := model.ParseExploreKinds(s.ExploreUrl)
 			if len(kinds) < 3 {
 				t.Errorf("漫画客分类数量异常: %d", len(kinds))
 			} else if kinds[0].Title != "冒险" || !strings.Contains(kinds[0].Url, "/data/sort") {
@@ -95,7 +97,7 @@ func TestSourceShapes(t *testing.T) {
 			if !strings.Contains(s.SearchUrl, "charset") || !strings.Contains(s.SearchUrl, "gbk") {
 				t.Errorf("狼人小说搜索应声明 gbk: %s", s.SearchUrl)
 			}
-			kinds := s.GetExploreKinds()
+			kinds := model.ParseExploreKinds(s.ExploreUrl)
 			if len(kinds) == 0 || !strings.Contains(kinds[0].Url, "{{page") {
 				t.Errorf("狼人小说分类地址应含 {{page}}: %+v", kinds)
 			}

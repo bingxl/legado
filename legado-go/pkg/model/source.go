@@ -399,47 +399,69 @@ func (s *BookSource) GetCheckKeyword(def string) string {
 	return def
 }
 
-// GetExploreKinds 解析发现分类列表。
-// 兼容两种写法：
+// ParseExploreKinds 把「非 JS 形式」的发现配置解析成分类列表。
+//
+// 对齐 Legado 的 BookSourceExtensions.exploreKinds()：
 //  1. JSON 数组：[{"title":"分类","url":"/xx"}, ...]
-//  2. 按行书写：分类名::/xx（或裸地址）
-func (s *BookSource) GetExploreKinds() []ExploreKind {
-	raw := strings.TrimSpace(s.ExploreUrl)
+//  2. 文本行：分类名::地址，多段以 `&&` 或换行分隔
+//
+// 与原版一致，**没有 `::` 时整段是分类名而不是地址**——很多书源用
+// `{'title':'全站总榜','url':''}` 或空地址项做「分组标题」，把整段当地址
+// 会产生一堆点进去 404 的伪分类。
+//
+// JS 形式的配置（`@js:` / `<js>`）不在这里处理：model 包不依赖 JS 引擎，
+// 由 webbook.GetExploreKinds 先求值再交给本函数。
+func ParseExploreKinds(raw string) []ExploreKind {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil
 	}
 	if strings.HasPrefix(raw, "[") || strings.HasPrefix(raw, "{") {
 		var kinds []ExploreKind
 		if err := json.Unmarshal([]byte(raw), &kinds); err == nil {
-			out := make([]ExploreKind, 0, len(kinds))
-			for _, k := range kinds {
-				if strings.TrimSpace(k.Url) != "" {
-					out = append(out, k)
-				}
-			}
-			if len(out) > 0 {
+			if out := usableKinds(kinds); len(out) > 0 {
 				return out
 			}
 		}
 		var one ExploreKind
-		if err := json.Unmarshal([]byte(raw), &one); err == nil && strings.TrimSpace(one.Url) != "" {
-			return []ExploreKind{one}
+		if err := json.Unmarshal([]byte(raw), &one); err == nil {
+			if out := usableKinds([]ExploreKind{one}); len(out) > 0 {
+				return out
+			}
 		}
+		// JSON 解析失败时继续按文本行处理：个别书源把 JSON 写坏了但仍能用。
 	}
+
 	out := []ExploreKind{}
-	for line := range strings.SplitSeq(raw, "\n") {
-		line = strings.TrimSpace(strings.TrimRight(line, "\r"))
-		if line == "" {
-			continue
-		}
-		title, u := "", line
-		if i := strings.LastIndex(line, "::"); i >= 0 {
-			title = strings.TrimSpace(line[:i])
-			u = strings.TrimSpace(line[i+2:])
-		}
-		if u != "" {
+	for seg := range strings.SplitSeq(raw, "&&") {
+		for line := range strings.SplitSeq(seg, "\n") {
+			line = strings.TrimSpace(strings.TrimRight(line, "\r"))
+			if line == "" {
+				continue
+			}
+			title, u := line, ""
+			if i := strings.Index(line, "::"); i >= 0 {
+				title = strings.TrimSpace(line[:i])
+				u = strings.TrimSpace(line[i+2:])
+			}
+			// 地址为空的项是分组标题，桌面上没有 style 可渲染，直接丢弃。
+			if u == "" {
+				continue
+			}
 			out = append(out, ExploreKind{Title: title, Url: u})
 		}
+	}
+	return out
+}
+
+// usableKinds 过滤掉没有地址的分类（分组标题）。
+func usableKinds(in []ExploreKind) []ExploreKind {
+	out := make([]ExploreKind, 0, len(in))
+	for _, k := range in {
+		if strings.TrimSpace(k.Url) == "" {
+			continue
+		}
+		out = append(out, k)
 	}
 	return out
 }

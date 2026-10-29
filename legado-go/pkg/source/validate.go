@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	regexp2 "github.com/dlclark/regexp2/v2"
 	"github.com/dop251/goja"
 	"github.com/legado/legado-go/pkg/model"
 	"github.com/legado/legado-go/pkg/webbook"
@@ -51,6 +52,8 @@ var (
 	jsBlockRe = regexp.MustCompile(`(?is)<js>([\s\S]*?)</js>|@js:([\s\S]*)`)
 	getRe     = regexp.MustCompile(`(?i)@get:\{[^}]+?\}`)
 	putRe     = regexp.MustCompile(`(?i)@put:(\{[^}]+?\})`)
+	// mustacheRe 匹配 legado 的变量插值 {{...}}，用于在 JS 编译前做占位替换
+	mustacheRe = regexp.MustCompile(`(?s)\{\{.*?\}\}`)
 )
 
 // Validate 离线校验书源语法
@@ -210,6 +213,11 @@ func checkRule(field, rule string) []Issue {
 		if code == "" {
 			continue
 		}
+		// JS 里可以内嵌 legado 的变量插值，例如
+		//   ({{$.sid}} != 0) ? "..." : "..."
+		// 这些 {{...}} 在交给 JS 引擎前会被 legado 换成字面量，直接编译必然报
+		// "Unexpected token {"。统一换成 0 后再编译（数字在表达式与字符串里都合法）。
+		code = mustacheRe.ReplaceAllString(code, "0")
 		if _, err := goja.Compile(field, code, false); err != nil {
 			add(LevelError, "JS 语法错误: "+err.Error())
 		}
@@ -223,21 +231,34 @@ func checkRule(field, rule string) []Issue {
 	if !mustachePaired(rest) {
 		add(LevelError, "{{ }} 未配对")
 	}
-	// 括号平衡（排除引号内）
-	if !bracketsBalanced(rest) {
-		add(LevelWarn, "括号 [] () 未平衡")
-	}
 	// ## 正则检查
+	//
+	// 书源里的替换正则写的是 **Java 正则**，普遍使用环视（`(?<=`、`(?!`），
+	// 而 Go 的 RE2 不支持——直接拿 regexp.Compile 判断会把正常书源判成有错。
+	// 因此先用 Go 编译，失败再交给 regexp2（支持环视）兜底。
 	parts := strings.Split(rest, "##")
 	if len(parts) > 4 {
 		add(LevelWarn, "## 分隔段超过 4 段，多余的将被忽略")
 	}
 	if len(parts) >= 2 && strings.TrimSpace(parts[1]) != "" {
-		if _, err := regexp.Compile(parts[1]); err != nil {
+		if err := compileJavaRegex(parts[1]); err != nil {
 			add(LevelError, "替换正则不合法: "+err.Error())
 		}
 	}
 	return out
+}
+
+// compileJavaRegex 以 Java 正则语义校验表达式是否可用。
+//
+// 顺序：RE2（快）→ regexp2（支持环视/反向引用等 RE2 缺失的语法）。
+func compileJavaRegex(pattern string) error {
+	if _, err := regexp.Compile(pattern); err == nil {
+		return nil
+	}
+	if _, err := regexp2.Compile(pattern, regexp2.None); err != nil {
+		return err
+	}
+	return nil
 }
 
 // mustachePaired 检查 {{ }} 是否配对（允许嵌套）
@@ -263,35 +284,6 @@ func isJSONObject(s string) bool {
 	return strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")
 }
 
-// bracketsBalanced 检查 [] 与 () 是否在引号外平衡
-func bracketsBalanced(s string) bool {
-	depth := 0
-	inS, inD := false, false
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c == '\\':
-			i++
-			continue
-		case c == '\'' && !inD:
-			inS = !inS
-		case c == '"' && !inS:
-			inD = !inD
-		case inS || inD:
-		default:
-			if c == '[' || c == '(' {
-				depth++
-			} else if c == ']' || c == ')' {
-				depth--
-				if depth < 0 {
-					return false
-				}
-			}
-		}
-	}
-	return depth == 0
-}
-
 func sortStrings(a []string) {
 	for i := 1; i < len(a); i++ {
 		for j := i; j > 0 && a[j] < a[j-1]; j-- {
@@ -302,7 +294,7 @@ func sortStrings(a []string) {
 
 // FirstExploreUrl 取 exploreUrl 第一个分类的地址
 func FirstExploreUrl(exploreUrl string) string {
-	if kinds := (&model.BookSource{ExploreUrl: exploreUrl}).GetExploreKinds(); len(kinds) > 0 {
+	if kinds := model.ParseExploreKinds(exploreUrl); len(kinds) > 0 {
 		return kinds[0].Url
 	}
 	return ""
@@ -355,7 +347,7 @@ func ValidateOnline(src *model.BookSource, keyword string, items CheckItems) *Re
 				return r
 			}
 			if len(list) == 0 {
-				add(LevelError, "search", "搜索结果为空")
+				add(LevelError, "search", fmt.Sprintf("搜索 %q 无结果（可能关键词无匹配，或站点反爬/要求登录）", keyword))
 				return r
 			}
 			add(LevelInfo, "search", fmt.Sprintf("搜索成功，命中 %d 条", len(list)))
@@ -380,16 +372,58 @@ func ValidateOnline(src *model.BookSource, keyword string, items CheckItems) *Re
 		add(LevelInfo, "toc", fmt.Sprintf("目录解析成功，共 %d 章", len(chapters)))
 	}
 	if items.Content && book != nil && len(chapters) > 0 {
-		c, err := webbook.GetContent(src, book, chapters[0], "")
+		idx, content, err := probeContent(src, book, chapters)
 		if err != nil {
 			add(LevelError, "content", "获取正文失败: "+err.Error())
 		} else {
-			preview := c
+			preview := content
 			if len([]rune(preview)) > 60 {
 				preview = string([]rune(preview)[:60])
 			}
-			add(LevelInfo, "content", fmt.Sprintf("正文解析成功(%d 字)，预览: %s…", len([]rune(c)), strings.ReplaceAll(preview, "\n", " ")))
+			if idx > 0 {
+				add(LevelWarn, "content", fmt.Sprintf("前 %d 章正文为空，第 %d 章可读", idx, idx+1))
+			}
+			add(LevelInfo, "content", fmt.Sprintf("正文解析成功(%d 字)，预览: %s…", len([]rune(content)), strings.ReplaceAll(preview, "\n", " ")))
 		}
 	}
 	return r
+}
+
+// contentProbeLimit 正文探测最多尝试几章
+const contentProbeLimit = 3
+
+// minContentRunes 判定「正文有效」的最小字数
+//
+// 书源首章经常指向详情页、公告页或空页（例如 ESJ Zone 的「序章」就是详情页），
+// 只试第 1 章会把本来可用的书源误判为不可用，因此逐章探测。
+// 同时用它挡住「抓回来一两个字符（诸如分隔符、undefined）」的假成功。
+const minContentRunes = 50
+
+// probeContent 逐章探测正文，返回首个成功的章节下标（从 0 开始）与内容
+func probeContent(src *model.BookSource, book *model.Book, chapters []*model.BookChapter) (int, string, error) {
+	n := len(chapters)
+	if n > contentProbeLimit {
+		n = contentProbeLimit
+	}
+	var firstErr error
+	for i := 0; i < n; i++ {
+		c, err := webbook.GetContent(src, book, chapters[i], "")
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("第 %d 章: %w", i+1, err)
+			}
+			continue
+		}
+		if got := len([]rune(strings.TrimSpace(c))); got < minContentRunes {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("第 %d 章正文仅 %d 字", i+1, got)
+			}
+			continue
+		}
+		return i, c, nil
+	}
+	if firstErr == nil {
+		firstErr = fmt.Errorf("前 %d 章均无有效正文", n)
+	}
+	return -1, "", firstErr
 }

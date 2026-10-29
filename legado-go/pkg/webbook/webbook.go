@@ -1,6 +1,7 @@
 package webbook
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"slices"
@@ -98,7 +99,7 @@ func fetch(src *model.BookSource, mUrl, baseUrl string, book *model.Book, chapte
 func SearchBook(src *model.BookSource, key string, page int) ([]*model.SearchBook, error) {
 	if strings.TrimSpace(src.SearchUrl) == "" {
 		hint := ""
-		if len(src.GetExploreKinds()) > 0 {
+		if len(GetExploreKinds(src)) > 0 {
 			hint = "；该源有发现地址，可改用 explore"
 		}
 		return nil, fmt.Errorf("书源「%s」没有 searchUrl（纯发现源）%s", src.BookSourceName, hint)
@@ -115,11 +116,72 @@ func SearchBook(src *model.BookSource, key string, page int) ([]*model.SearchBoo
 	return analyzeBookList(src, rd, au, finalURL, body, true, false)
 }
 
+// GetExploreKinds 解析书源的发现分类。
+//
+// exploreUrl 有两种形态，必须都支持：
+//  1. 静态配置：JSON 数组，或 `分类名::地址` 行；
+//  2. JS 代码：`@js:{...}` 或 `<js>...</js>`，脚本返回分类配置字符串。
+//
+// 第 2 种在真实书源里占多数（分类地址要拼签名、时间戳、分区参数），
+// 只做静态解析会把整段 JS 按行拆成一堆同名分类——不报错，但全部不可用。
+func GetExploreKinds(src *model.BookSource) []model.ExploreKind {
+	raw := strings.TrimSpace(src.ExploreUrl)
+	if raw == "" {
+		return nil
+	}
+	code, isJS := exploreKindsJS(raw)
+	if !isJS {
+		return model.ParseExploreKinds(raw)
+	}
+	v, err := js.DefaultEngine().Eval(code, &js.Bindings{Source: src})
+	if err != nil {
+		debug.Log("◇发现分类 JS 执行失败: " + err.Error())
+		return nil
+	}
+	return model.ParseExploreKinds(exploreKindsText(v))
+}
+
+// exploreKindsJS 判断 exploreUrl 是否为 JS 形式，并截出脚本正文。
+func exploreKindsJS(raw string) (string, bool) {
+	lower := strings.ToLower(raw)
+	switch {
+	case strings.HasPrefix(lower, "@js:"):
+		return raw[len("@js:"):], true
+	case strings.HasPrefix(lower, "<js>"):
+		// 容错：结尾的 </js> 缺失时按「到字符串结尾」处理，
+		// 原版这里会抛下标越界，没必要跟着一起崩。
+		body := raw[len("<js>"):]
+		if i := strings.LastIndex(strings.ToLower(body), "</js>"); i >= 0 {
+			body = body[:i]
+		}
+		return body, true
+	}
+	return "", false
+}
+
+// exploreKindsText 把 JS 执行结果转成待解析的文本。
+// 书源通常返回 JSON 字符串，也有的直接 return 数组，两种都要接。
+func exploreKindsText(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case []byte:
+		return string(t)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	return string(b)
+}
+
 // ExploreBook 发现书籍
 func ExploreBook(src *model.BookSource, url string, page int) ([]*model.SearchBook, error) {
 	// 未指定地址时用 exploreUrl 的第一个分类
 	if strings.TrimSpace(url) == "" {
-		if kinds := src.GetExploreKinds(); len(kinds) > 0 {
+		if kinds := GetExploreKinds(src); len(kinds) > 0 {
 			url = kinds[0].Url
 		}
 	}
@@ -547,7 +609,9 @@ func analyzeChapterList(src *model.BookSource, book *model.Book, baseUrl, redire
 	}
 	if len(chapters) == 0 {
 		debug.Log("◇章节列表为空")
-		return nil, fmt.Errorf("章节列表为空")
+		// 带上规则串与页面地址：只有「章节列表为空」时无从判断是站点改版、
+		// 选择器写错还是页面根本是登录墙，排查全靠猜。
+		return nil, fmt.Errorf("章节列表为空：目录规则 %q 在 %s 上未匹配到任何章节", listRule, baseUrl)
 	}
 	if !reverse {
 		reverseSlice(chapters)
@@ -676,6 +740,14 @@ func parseChapterPage(src *model.BookSource, book *model.Book, baseUrl, redirect
 
 // —— 正文 ——
 
+const (
+	// maxContentPages 单章分页抓取的页数上限。规则异常时（例如每页都返回带
+	// 自增参数的新地址）若不设上限会一直请求下去。
+	maxContentPages = 50
+	// maxContentConcurrency 规则一次命中多个分页链接时的并发度。
+	maxContentConcurrency = 4
+)
+
 func analyzeContent(src *model.BookSource, book *model.Book, chapter *model.BookChapter, baseUrl, redirectUrl, body, nextChapterUrl string) (string, error) {
 	if body == "" {
 		return "", fmt.Errorf("获取正文内容失败: %s", baseUrl)
@@ -683,17 +755,28 @@ func analyzeContent(src *model.BookSource, book *model.Book, chapter *model.Book
 	logFetched(debug.StateContentBody, baseUrl, body)
 	contentRule := src.GetContentRule()
 	parts := []string{}
-	nextUrlList := []string{redirectUrl}
+	// 已抓过的页（统一存绝对地址）。相对/绝对混用时也能正确去重，
+	// 避免同一页被规则既给相对路径又给绝对路径时重复抓取。
+	nextUrlList := []string{util.GetAbsoluteURL(redirectUrl, redirectUrl)}
 	content, nextUrls := parseContent(src, book, chapter, baseUrl, redirectUrl, body, nextChapterUrl, true)
 	parts = append(parts, content)
-	if len(nextUrls) == 1 {
+
+	switch {
+	case len(nextUrls) == 1:
+		// 逐页向后找：每页只给出一个「下一页」，直到没有下一页或撞上下一章。
 		next := nextUrls[0]
-		for next != "" && !contains(nextUrlList, next) {
-			if nextChapterUrl != "" &&
-				util.GetAbsoluteURL(redirectUrl, next) == util.GetAbsoluteURL(redirectUrl, nextChapterUrl) {
+		for next != "" && len(parts) < maxContentPages {
+			absNext := util.GetAbsoluteURL(redirectUrl, next)
+			if contains(nextUrlList, absNext) {
 				break
 			}
-			nextUrlList = append(nextUrlList, next)
+			// 有些源的「下一页」规则会选中「下一章」链接，撞上就停，
+			// 否则会把下一章正文拼到本章结尾。
+			if nextChapterUrl != "" &&
+				absNext == util.GetAbsoluteURL(redirectUrl, nextChapterUrl) {
+				break
+			}
+			nextUrlList = append(nextUrlList, absNext)
 			au := urlx.New(urlx.Options{Url: next, Source: src, Book: book, Chapter: chapter})
 			resp, err := au.GetStrResponse()
 			if err != nil || resp.Body == "" {
@@ -705,6 +788,43 @@ func analyzeContent(src *model.BookSource, book *model.Book, chapter *model.Book
 				break
 			}
 			next = nu[0]
+		}
+
+	case len(nextUrls) > 1:
+		// 规则一次命中多页（例如 CSS 选择器选中了页面上所有分页链接）。
+		// 原版 legado 在这种情况并发抓取全部链接，并且不再往下递归找「下一页」，
+		// 否则会把同一批链接反复抓。这里对齐：并发抓、按原顺序拼、不递归。
+		pages := make([]string, len(nextUrls))
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, maxContentConcurrency)
+		for i, u := range nextUrls {
+			absU := util.GetAbsoluteURL(redirectUrl, u)
+			if contains(nextUrlList, absU) {
+				continue
+			}
+			if nextChapterUrl != "" && absU == util.GetAbsoluteURL(redirectUrl, nextChapterUrl) {
+				continue
+			}
+			nextUrlList = append(nextUrlList, absU)
+			wg.Add(1)
+			go func(i int, u string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				au := urlx.New(urlx.Options{Url: u, Source: src, Book: book, Chapter: chapter})
+				resp, err := au.GetStrResponse()
+				if err != nil || resp.Body == "" {
+					return
+				}
+				c, _ := parseContent(src, book, chapter, u, resp.URL, resp.Body, nextChapterUrl, false)
+				pages[i] = c
+			}(i, u)
+		}
+		wg.Wait()
+		for _, c := range pages {
+			if strings.TrimSpace(c) != "" {
+				parts = append(parts, c)
+			}
 		}
 	}
 	contentStr := strings.Join(parts, "\n")

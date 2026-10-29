@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.1.0"
+	},
+	"info": {
+		"0409": {
+			"ProductVersion": "0.1.0",
+			"CompanyName": "Legado Desktop",
+			"FileDescription": "Legado 桌面阅读器",
+			"LegalCopyright": "© 2026 Legado Desktop",
+			"ProductName": "Legado Desktop",
+			"Comments": "Legado 的桌面客户端（Wails v3 + Vue 3）"
+		}
+	}
+}

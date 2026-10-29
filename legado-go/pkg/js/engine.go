@@ -202,6 +202,10 @@ func inject(vm *goja.Runtime, b *Bindings) {
 		b = &Bindings{}
 	}
 	g.Set("java", newJavaObject(vm, b))
+	g.Set("org", newOrgObject(vm))
+	// Rhino 提供 Packages.* 直接访问 Java 类；部分书源靠它调 java.util.Arrays
+	// 切字节数组（如漫蛙漫画拆 IV 与密文）。
+	g.Set("Packages", newPackagesObject(vm))
 	g.Set("cookie", newCookieObject(vm))
 	g.Set("cache", newCacheObject(vm))
 

@@ -92,6 +92,11 @@ func TestIsSelectorRule(t *testing.T) {
 		"!0":         true,
 		"":           false,
 		"ownText.第":  true,
+		// 标签+类 的 CSS 写法：真实书源「哔哩轻小说」的目录规则 chapterList=li.col-4。
+		// 早先因为它不含空格而被当成属性名 → NodeAttr 取空 → 整本书 0 章。
+		"li.col-4": true,
+		"div.item": true,
+		"#list":    true,
 	}
 	for in, want := range cases {
 		if got := isSelectorRule(in); got != want {

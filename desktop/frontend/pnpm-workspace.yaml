@@ -1,0 +1,4 @@
+# pnpm 10+ 默认不跑依赖的 install 脚本，未批准时安装会直接失败。
+# vue-demi 的 postinstall 只按 Vue 版本切换兼容入口（pinia 依赖它），放行。
+allowBuilds:
+  vue-demi: true

@@ -97,3 +97,47 @@ func TestEvalBasics(t *testing.T) {
 		t.Fatal("语法错误应报错")
 	}
 }
+
+// 回归：jsoup 的 Node#parentNode() 必须可用。
+//
+// 真实书源（轻之文库）用 `result.parentNode().parentNode()...` 逐级上溯到含
+// 章节标题的容器；早先只实现了 parent，JS 抛「parentNode is not a function」，
+// 章节名取空 → 整本书解析出 0 章，且没有任何报错提示。
+func TestElementParentNodeChain(t *testing.T) {
+	doc := parseNode(t, `<html><body>
+	<section class="volume"><h2>第一卷 樱花</h2>
+	  <ul><li class="chapter"><a href="/1">序章</a></li>
+	           <li class="chapter"><a href="/2">第一章</a></li></ul>
+	</section>
+	</body></html>`)
+	li := NewElementWrap(doc)
+	b := &Bindings{Result: li}
+
+	cases := []struct{ js, want string }{
+		{`result.select('li.chapter').size()`, "2"},
+		// li → ul → section，在 section 里取 h2
+		{`result.select('li.chapter').get(0).parentNode().parentNode().select('h2').text()`, "第一卷 樱花"},
+		// parent() 与 parentNode() 等价
+		{`result.select('li.chapter').get(0).parent().tagName()`, "ul"},
+		{`result.select('li.chapter').get(0).parentNode().tagName()`, "ul"},
+		// 其他常用 jsoup API
+		{`result.select('li.chapter').get(1).previousElementSibling().text()`, "序章"},
+		{`result.select('section').get(0).hasClass('volume')`, "true"},
+		{`result.select('section').get(0).getElementsByTag('a').size()`, "2"},
+		{`result.select('section').get(0).getElementById('nope')`, ""}, // 未命中返回 null
+		{`result.select('section').get(0).selectFirst('h2').text()`, "第一卷 樱花"},
+		// Elements 上的 select / selectFirst
+		{`result.select('li.chapter').select('a').size()`, "2"},
+		{`result.select('li.chapter').selectFirst('a').text()`, "序章"},
+	}
+	for _, c := range cases {
+		v, err := DefaultEngine().Eval(c.js, b)
+		if err != nil {
+			t.Errorf("%s 执行失败: %v", c.js, err)
+			continue
+		}
+		if got := valStr(v); got != c.want {
+			t.Errorf("%s = %q, 期望 %q", c.js, got, c.want)
+		}
+	}
+}

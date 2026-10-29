@@ -53,6 +53,14 @@ func UnescapeHtml4(s string) string {
 	})
 }
 
+// ParseHTML 把 HTML 字符串解析成文档根节点。
+//
+// 对应 jsoup 的 Jsoup.parse：书源 JS 里常见
+// `var doc = org.jsoup.Jsoup.parse(java.ajax(url))`，拿到可 select 的文档。
+func ParseHTML(s string) (*html.Node, error) {
+	return html.Parse(strings.NewReader(s))
+}
+
 // Render 将节点渲染为 HTML
 func Render(n *html.Node) string {
 	if n == nil {
