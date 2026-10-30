@@ -24,7 +24,7 @@ var _ port.BookRepository = (*BookRepo)(nil)
 
 const bookColumns = `id, name, author, intro, cover_url, kind, format, origin, book_url,
 	group_id, sort_order, total_chapters, last_chapter, dur_chapter_index, dur_chapter_title,
-	dur_chapter_pos, created_at, updated_at, last_read_at`
+	dur_chapter_pos, created_at, updated_at, last_read_at, variable`
 
 // Create 插入一本书并回填主键。
 func (r *BookRepo) Create(ctx context.Context, b *domain.Book) error {
@@ -40,14 +40,14 @@ func (r *BookRepo) Create(ctx context.Context, b *domain.Book) error {
 	}
 
 	const query = `INSERT INTO books (` + bookColumns + `)
-		VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id`
-	// bookColumns 含 id，故需 18 个占位符（不含 id）。
+	// bookColumns 含 id，故需 19 个占位符（不含 id）。
 	args := []any{
 		b.Name, b.Author, b.Intro, b.CoverURL, string(b.Kind), string(b.Format),
 		b.Origin, b.BookURL, b.GroupID, b.Order, b.TotalChapters, b.LastChapter,
 		b.DurChapterIndex, b.DurChapterTitle, b.DurChapterPos,
-		b.CreatedAt, b.UpdatedAt, nullableTime(b.LastReadAt),
+		b.CreatedAt, b.UpdatedAt, nullableTime(b.LastReadAt), b.Variable,
 	}
 	row := r.db.q(ctx).QueryRowContext(ctx, query, args...)
 	if err := row.Scan(&b.ID); err != nil {
@@ -67,11 +67,11 @@ func (r *BookRepo) Update(ctx context.Context, b *domain.Book) error {
 	b.UpdatedAt = time.Now()
 	const query = `UPDATE books SET name=?, author=?, intro=?, cover_url=?, kind=?, format=?,
 		group_id=?, sort_order=?, total_chapters=?, last_chapter=?, dur_chapter_index=?,
-		dur_chapter_title=?, dur_chapter_pos=?, updated_at=?, last_read_at=? WHERE id=?`
+		dur_chapter_title=?, dur_chapter_pos=?, variable=?, updated_at=?, last_read_at=? WHERE id=?`
 	res, err := r.db.q(ctx).ExecContext(ctx, query,
 		b.Name, b.Author, b.Intro, b.CoverURL, string(b.Kind), string(b.Format),
 		b.GroupID, b.Order, b.TotalChapters, b.LastChapter,
-		b.DurChapterIndex, b.DurChapterTitle, b.DurChapterPos,
+		b.DurChapterIndex, b.DurChapterTitle, b.DurChapterPos, b.Variable,
 		b.UpdatedAt, nullableTime(b.LastReadAt), b.ID)
 	if err != nil {
 		return fmt.Errorf("更新书籍失败: %w", err)
@@ -162,7 +162,7 @@ func scanBook(s scanner) (*domain.Book, error) {
 		&b.ID, &b.Name, &b.Author, &b.Intro, &b.CoverURL, &kind, &format,
 		&b.Origin, &b.BookURL, &b.GroupID, &b.Order, &b.TotalChapters, &b.LastChapter,
 		&b.DurChapterIndex, &b.DurChapterTitle, &b.DurChapterPos,
-		&createdAt, &updatedAt, &lastReadAt,
+		&createdAt, &updatedAt, &lastReadAt, &b.Variable,
 	)
 	if err != nil {
 		return nil, err

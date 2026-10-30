@@ -12,3 +12,7 @@ build/android/gen/
 # 本地端到端测试数据（书源数据库与导出结果，不入库）
 tmp-sourcedl/
 downloads/
+# 本地 UI 回归脚本 / 一次性试验台（含日志与结果快照，依赖本机书库，不入库）
+tmp-mcptest/
+tmp-pdfspike/
+tmpcheck/

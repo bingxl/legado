@@ -59,6 +59,44 @@ tasks:
     cmds:
       - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
 
+  dev:mcp:
+    summary: Runs the app in dev mode with the Wails MCP server enabled
+    desc: |
+      给 UI 测试用的开发模式：WAILS_MCP=1 会让 wails3 追加 `mcp` 构建标签，把应用内 MCP
+      服务编进二进制，App.Run() 时自动在 http://127.0.0.1:9099/mcp 起 Streamable HTTP 端点。
+
+      端点/端口可用环境变量覆盖：WAILS_MCP_PORT（0 = 随机空闲端口）、WAILS_MCP_HOST、
+      WAILS_MCP_TOKEN（仅非 loopback 绑定时必需）、WAILS_MCP_TIMEOUT（JS eval 毫秒）、
+      WAILS_MCP_HIDE_CURSOR=1（隐藏动画指针）。探针工具含 dom_query / dom_html /
+      screenshot_dom / mouse_* / keyboard_* / js_eval / call_bound_method / wait_for_event。
+
+      mcp 标签只用于开发与测试，`task build` 的生产链路不会带它。
+    cmds:
+      - cmd: WAILS_MCP=1 wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+
+  ui:mcp:
+    summary: Runs the app (production build + MCP) for UI testing
+    desc: |
+      UI 测试请走这条链路，不要用 dev:mcp——后者是白屏（原因见下）。
+
+      为什么 dev:mcp 会白屏：`wails3 dev` 会设置 FRONTEND_DEVSERVER_URL，让应用把页面
+      反向代理到 Vite dev server。但 Wails 的 AssetServer 对 WebSocket 一律返回 501
+      （internal/assetserver/common.go 的 isWebSocket 命中后直接 StatusNotImplemented），
+      而 Vite 的 HMR 客户端正是靠 WS 与 dev server 通信；握手被 501 后客户端认为连接
+      断开并触发整页 reload，重载后 WS 再次失败——页面陷入无限重载。表现是窗口全白，
+      且 MCP 探针全部超时：
+      "timed out after … waiting for the page to respond; the window may be reloading,
+      busy or showing a native dialog"。
+
+      本 task 不设 FRONTEND_DEVSERVER_URL，页面由嵌入的 frontend/dist 提供，
+      已验证 UI 完整渲染且 dom_query / js_eval 等探针可用。
+      代价：改前端后需要重跑一次本 task（没有热更新）。
+
+      端点与环境变量同 dev:mcp（WAILS_MCP_PORT / HOST / TOKEN / TIMEOUT / HIDE_CURSOR）。
+    cmds:
+      - cmd: WAILS_MCP=1 wails3 build
+      - task: "{{.GOOS}}:run"
+
   install:msix:tools:
     summary: Installs tools required for Windows MSIX packaging
     cmds:

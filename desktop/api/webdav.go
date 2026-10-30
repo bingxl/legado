@@ -20,6 +20,11 @@ type webdavService interface {
 	UploadBackup(ctx context.Context) (dto.SyncProgress, error)
 	DownloadBackup(ctx context.Context, remotePath, localDir string) (string, error)
 	Delete(ctx context.Context, relPath string) error
+	// 以下四个方法服务于「从 WebDAV 选择并导入书籍」。
+	ScanBooks(ctx context.Context, relPath string) ([]dto.RemoteBookView, error)
+	StartBookImport(ctx context.Context, relPaths []string, groupID int64) (dto.WebDAVImportJob, error)
+	CancelBookImport() error
+	ImportStatus() dto.WebDAVImportJob
 }
 
 // NewWebDAVAPI 创建 WebDAV 绑定服务。
@@ -66,4 +71,38 @@ func (a *WebDAVAPI) Delete(relPath string) error {
 		return errBadRequest("缺少远端文件路径")
 	}
 	return a.svc.Delete(newCtx(), relPath)
+}
+
+// ScanBooks 递归扫描远端目录下的书籍文件（txt / epub / pdf / zip / cbz 等）。
+//
+// relPath 为空表示工作根目录。返回的 Path 相对工作根目录，可直接回传给 StartBookImport。
+func (a *WebDAVAPI) ScanBooks(relPath string) ([]dto.RemoteBookView, error) {
+	books, err := a.svc.ScanBooks(newCtx(), relPath)
+	if err != nil {
+		return nil, err
+	}
+	if books == nil {
+		books = []dto.RemoteBookView{}
+	}
+	return books, nil
+}
+
+// StartBookImport 后台下载并导入所选文件/目录，立即返回任务快照。
+//
+// 进度经 webdav:import:progress 事件推送；也可用 BookImportStatus 轮询兜底。
+func (a *WebDAVAPI) StartBookImport(relPaths []string, groupID int64) (dto.WebDAVImportJob, error) {
+	if len(relPaths) == 0 {
+		return dto.WebDAVImportJob{}, errBadRequest("请先选择要导入的文件或目录")
+	}
+	return a.svc.StartBookImport(newCtx(), relPaths, groupID)
+}
+
+// CancelBookImport 取消正在进行的导入任务。
+func (a *WebDAVAPI) CancelBookImport() error {
+	return a.svc.CancelBookImport()
+}
+
+// BookImportStatus 返回当前（或最近一次）导入任务的状态。
+func (a *WebDAVAPI) BookImportStatus() dto.WebDAVImportJob {
+	return a.svc.ImportStatus()
 }

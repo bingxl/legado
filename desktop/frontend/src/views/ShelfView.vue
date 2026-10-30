@@ -57,8 +57,18 @@ async function importComicDir() {
 }
 
 async function createGroup() {
-  if (!newGroupName.value.trim()) return;
-  await bookshelfApi.createGroup(newGroupName.value.trim());
+  const name = newGroupName.value.trim();
+  if (!name) {
+    // 不能静默 return：弹窗不动、也没有提示，用户会以为按钮坏了。
+    ElMessage.warning("请输入分组名称");
+    return;
+  }
+  try {
+    await bookshelfApi.createGroup(name);
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+    return;
+  }
   newGroupName.value = "";
   groupDialog.value = false;
   await shelf.loadGroups();

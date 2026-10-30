@@ -168,6 +168,7 @@ SQLite 用 `modernc.org/sqlite`，EPUB、WebDAV、漫画解压（zip / rar / 7z�
 - ❌ 前端组件直接 `import ... from '@/bindings/...'`
 - ❌ 把 `domain` 实体直接作为绑定方法的返回值
 - ❌ 引入任何需要 cgo 的依赖（会破坏 `CGO_ENABLED=0`）
+- ❌ 用 Playwright / 外部截图工具 / 临时脚本验证 UI —— 桌面端 UI 测试统一走 Wails MCP 模式（`task dev:mcp`，见 README）
 
 ## 10. 书源规则引擎的兼容性陷阱
 

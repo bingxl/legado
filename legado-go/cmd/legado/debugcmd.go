@@ -71,7 +71,7 @@ func (d *dbgRun) newBook() *model.Book {
 	book := model.NewBook()
 	book.Origin = d.src.BookSourceUrl
 	book.OriginName = d.src.BookSourceName
-	book.Type = d.src.GetBookType()
+	book.SetSourceType(d.src.GetBookType())
 	return book
 }
 
@@ -200,12 +200,17 @@ func (d *dbgRun) exploreURL(prefix, rest string) (string, error) {
 	}
 	name := strings.TrimSpace(prefix)
 	if name == "" {
-		return kinds[0].Url, nil
+		for _, k := range kinds {
+			if u := strings.TrimSpace(k.Url); u != "" {
+				return u, nil
+			}
+		}
+		return "", fmt.Errorf("书源 exploreUrl 里没有带地址的分类，只有分组标题")
 	}
 	names := make([]string, 0, len(kinds))
 	for _, k := range kinds {
-		if k.Title == name {
-			return k.Url, nil
+		if u := strings.TrimSpace(k.Url); u != "" && k.Title == name {
+			return u, nil
 		}
 		names = append(names, k.Title)
 	}

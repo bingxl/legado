@@ -20,6 +20,15 @@ type BookshelfService struct {
 	groups   port.BookGroupRepository
 	progress port.ProgressRepository
 	uow      port.UnitOfWork
+	cache    cachePurger
+}
+
+// cachePurger 清理某本书的内容缓存。
+//
+// 定义在 app 包内而不是 port 里：它只是 BookshelfService 的一个可选协作者，
+// 没有缓存能力（例如命令行工具）时留空即可。
+type cachePurger interface {
+	PurgeBook(ctx context.Context, bookID int64) error
 }
 
 // NewBookshelfService 构造书架服务，依赖由调用方注入。
@@ -30,6 +39,15 @@ func NewBookshelfService(
 	uow port.UnitOfWork,
 ) *BookshelfService {
 	return &BookshelfService{books: books, groups: groups, progress: progress, uow: uow}
+}
+
+// WithCache 注入缓存清理能力，返回自身以便链式调用。
+//
+// 删除书籍时必须同时清掉它的章节缓存：数据库行有外键级联，但漫画图片
+// 是磁盘上的文件，不主动删就会变成永远查不到的垃圾。
+func (s *BookshelfService) WithCache(p cachePurger) *BookshelfService {
+	s.cache = p
+	return s
 }
 
 // ListGroups 列出可显示的书架分组。
@@ -70,10 +88,15 @@ func (s *BookshelfService) GetBook(ctx context.Context, id int64) (dto.BookDetai
 	return dto.NewBookDetail(b), nil
 }
 
-// DeleteBook 从书架移除书籍（章节与进度由级联删除清理）。
+// DeleteBook 从书架移除书籍（章节、进度与内容缓存一并清理）。
 func (s *BookshelfService) DeleteBook(ctx context.Context, id int64) error {
 	if id == 0 {
 		return fmt.Errorf("%w: 缺少书籍 ID", domain.ErrInvalidArgument)
+	}
+	// 先停掉/清理缓存再删书：缓存任务持有书 ID 仍会尝试写入，
+	// 顺序反过来会留下「书已删除但图片还在写」的中间态。
+	if s.cache != nil {
+		_ = s.cache.PurgeBook(ctx, id)
 	}
 	return s.books.Delete(ctx, id)
 }

@@ -3,12 +3,14 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/legado/desktop/internal/app/dto"
@@ -26,6 +28,15 @@ type WebDAVService struct {
 	events   port.EventBus
 	// dbPath 是本地数据库文件路径，用于备份上传。
 	dbPath string
+
+	// ── 以下字段服务于「从 WebDAV 选择并导入书籍」，见 webdav_import.go ──
+	// importRoot 是远端书籍下载到本地的落点（数据根目录下的 webdav/）。
+	importRoot string
+	// importer 负责把下载好的本地文件解析入库。
+	importer bookImporter
+	// jobMu 保护 job；同一时刻只允许一个导入任务（下载是带宽密集的，并行只会互相拖慢）。
+	jobMu sync.Mutex
+	job   *webdavImportJob
 }
 
 // NewWebDAVService 构造 WebDAV 服务。dbPath 为本地数据库路径（可为空）。
@@ -33,12 +44,26 @@ func NewWebDAVService(settings port.SettingsStore, factory port.WebDAVClientFact
 	return &WebDAVService{settings: settings, factory: factory, events: events, dbPath: dbPath}
 }
 
+// WithBookImport 启用「从 WebDAV 导入书籍」能力。
+//
+// 用链式注入而不是加构造参数：既有的 WebDAV 测试与备份链路只关心配置与传输，
+// 不该被导入能力牵着改签名。
+//
+// root 是数据根目录，远端文件会落到 root/webdav/ 下——必须落在数据目录内，
+// 因为书架记录的是**本地绝对路径**（见 LibraryService.importOne），
+// 放到系统临时目录里，重启或清理后书就打不开了。
+func (s *WebDAVService) WithBookImport(root string, importer bookImporter) *WebDAVService {
+	s.importRoot = filepath.Join(root, "webdav")
+	s.importer = importer
+	return s
+}
+
 // GetConfig 读取当前配置；密码不返回前端（见 dto.WebDAVConfigView）。
 func (s *WebDAVService) GetConfig(ctx context.Context) (dto.WebDAVConfigView, error) {
 	cfg, err := s.load(ctx)
 	if err != nil {
 		// 尚未配置属于正常初始状态，返回空视图而非报错。
-		if err == domain.ErrNotFound {
+		if errors.Is(err, errWebDAVUnset) || errors.Is(err, domain.ErrNotFound) {
 			return dto.WebDAVConfigView{}, nil
 		}
 		return dto.WebDAVConfigView{}, err
@@ -91,6 +116,11 @@ func (s *WebDAVService) Test(ctx context.Context) error {
 }
 
 // List 列出远端目录下的条目。
+//
+// 返回的 Path 一律**相对工作根目录**（例如 "novels/a.txt"）。
+// 这一点很关键：前端拿它去再次 List、下载或删除时都会原样回传，
+// 而这些方法内部都会自己拼上 remoteRoot；若这里给完整路径，
+// 就会拼成 /legado-desktop/legado-desktop/... 而 404。
 func (s *WebDAVService) List(ctx context.Context, relPath string) ([]dto.WebDAVEntryView, error) {
 	cfg, err := s.load(ctx)
 	if err != nil {
@@ -100,9 +130,13 @@ func (s *WebDAVService) List(ctx context.Context, relPath string) ([]dto.WebDAVE
 	if err != nil {
 		return nil, err
 	}
-	entries, err := client.List(ctx, joinRemote(s.remoteRoot(cfg), relPath))
+	root := s.remoteRoot(cfg)
+	entries, err := client.List(ctx, joinRemote(root, relPath))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", domain.ErrRemoteFailed, err.Error())
+	}
+	for i := range entries {
+		entries[i].Path = relOf(root, entries[i].Path)
 	}
 	return dto.NewWebDAVEntryViews(entries), nil
 }
@@ -201,6 +235,13 @@ func (s *WebDAVService) Delete(ctx context.Context, relPath string) error {
 	return nil
 }
 
+// errWebDAVUnset 表示还没配置服务地址。
+//
+// 这是全新安装的正常状态，不是故障：读配置时要当「空配置」处理，
+// 而用户主动点「测试连接」时要给一句看得懂的话，而不是仓储层的
+// 「资源不存在」。
+var errWebDAVUnset = fmt.Errorf("%w: WebDAV 服务地址还是空的，请先在「连接配置」里填写并保存", domain.ErrNotConfigured)
+
 // load 读取并反序列化配置。
 func (s *WebDAVService) load(ctx context.Context) (*domain.WebDAVConfig, error) {
 	if s.settings == nil {
@@ -208,14 +249,21 @@ func (s *WebDAVService) load(ctx context.Context) (*domain.WebDAVConfig, error) 
 	}
 	raw, err := s.settings.Get(ctx, port.SettingWebDAV)
 	if err != nil {
+		// 从没保存过配置时仓储返回 ErrNotFound，直接冒泡会变成「资源不存在」。
+		if errors.Is(err, domain.ErrNotFound) {
+			return nil, errWebDAVUnset
+		}
 		return nil, err
+	}
+	if strings.TrimSpace(raw) == "" {
+		return nil, errWebDAVUnset
 	}
 	var cfg domain.WebDAVConfig
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		return nil, fmt.Errorf("%w: 配置解析失败", domain.ErrNotConfigured)
 	}
-	if cfg.URL == "" {
-		return nil, fmt.Errorf("%w: 尚未配置 WebDAV", domain.ErrNotConfigured)
+	if strings.TrimSpace(cfg.URL) == "" {
+		return nil, errWebDAVUnset
 	}
 	return &cfg, nil
 }

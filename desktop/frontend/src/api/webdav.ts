@@ -30,4 +30,19 @@ export const webdavApi = {
 
   /** 删除远端文件。 */
   delete: (relPath: string) => call(binding.Delete(relPath)),
+
+  // ── 从 WebDAV 选书导入 ────────────────────────────────────────────────
+
+  /** 递归扫描远端目录下的书籍文件（txt / epub / pdf / zip / cbz）。 */
+  scanBooks: (relPath = "") => callList(binding.ScanBooks(relPath)),
+
+  /** 后台下载并导入所选文件/目录，立即返回任务快照。 */
+  startBookImport: (relPaths: string[], groupID = 0) =>
+    call(binding.StartBookImport(relPaths, groupID)),
+
+  /** 取消正在进行的导入任务。 */
+  cancelBookImport: () => call(binding.CancelBookImport()),
+
+  /** 当前（或最近一次）导入任务的状态。 */
+  bookImportStatus: () => call(binding.BookImportStatus()),
 };

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { useRouter } from "vue-router";
+import { ElMessage, ElMessageBox } from "element-plus";
 
 import { sourceApi } from "@/api/source";
 import { systemApi } from "@/api/system";
@@ -12,19 +13,23 @@ const sources = ref<SourceView[]>([]);
 const loading = ref(false);
 const keyword = ref("");
 const checkProgress = ref<ProgressPayload | null>(null);
+const router = useRouter();
 
-// ── 编辑弹窗 ────────────────────────────────────────────────
-const editDialog = ref(false);
-const form = ref({
-  id: 0,
-  name: "",
-  group: "",
-  url: "",
-  comment: "",
-  raw: "",
-  enabled: true,
-  order: 0,
-});
+// ── 编辑入口 ────────────────────────────────────────────────
+// 编辑不再是弹窗：书源有 70 个字段，还要边改边调试，弹窗装不下。
+// 跳转到独立的编辑页（布局参考 Legado 官方 Web 编辑器）。
+function openCreate() {
+  router.push("/sources/new");
+}
+
+function openEdit(s: SourceView) {
+  router.push(`/sources/${s.id}/edit`);
+}
+
+/** 直接跳到编辑页的调试标签，省去「先进编辑、再点调试」两步。 */
+function openDebug(s: SourceView) {
+  router.push(`/sources/${s.id}/edit?tab=debug`);
+}
 
 async function load() {
   loading.value = true;
@@ -32,45 +37,6 @@ async function load() {
     sources.value = await sourceApi.list("");
   } finally {
     loading.value = false;
-  }
-}
-
-function openCreate() {
-  form.value = {
-    id: 0,
-    name: "",
-    group: "",
-    url: "",
-    comment: "",
-    raw: "",
-    enabled: true,
-    order: 0,
-  };
-  editDialog.value = true;
-}
-
-function openEdit(s: SourceView) {
-  form.value = { ...s };
-  editDialog.value = true;
-}
-
-async function save() {
-  try {
-    await sourceApi.save(
-      form.value.id,
-      form.value.name,
-      form.value.group,
-      form.value.url,
-      form.value.comment,
-      form.value.raw,
-      form.value.enabled,
-      form.value.order,
-    );
-    editDialog.value = false;
-    await load();
-    ElMessage.success("已保存");
-  } catch (e) {
-    ElMessage.error((e as Error).message);
   }
 }
 
@@ -128,6 +94,17 @@ const checkDialog = ref(false);
 const checkResults = ref<SourceCheckResult[]>([]);
 
 async function validate() {
+  // 表格没有多选，校验的永远是「全部启用书源」。这一步可能跑几十秒到几分钟，
+  // 不给确认就直接开跑，用户会以为卡死了。
+  try {
+    await ElMessageBox.confirm(
+      `将校验全部 ${sources.value.length} 个书源，耗时可能较长，期间可以关闭进度条继续用其他功能。是否开始？`,
+      "校验书源",
+      { confirmButtonText: "开始校验", cancelButtonText: "取消", type: "warning" },
+    );
+  } catch {
+    return; // 用户取消
+  }
   checkDialog.value = true;
   checkResults.value = [];
   try {
@@ -189,9 +166,10 @@ onMounted(() => {
           />
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="140" fixed="right">
+      <el-table-column label="操作" width="178" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+          <el-button link type="primary" @click="openDebug(row)">调试</el-button>
           <el-button link type="danger" @click="remove(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -199,34 +177,6 @@ onMounted(() => {
         <el-empty description="还没有书源，导入一份试试" />
       </template>
     </el-table>
-
-    <!-- 编辑 -->
-    <el-dialog v-model="editDialog" :title="form.id ? '编辑书源' : '新建书源'" width="640">
-      <el-form label-width="80px">
-        <el-form-item label="名称">
-          <el-input v-model="form.name" />
-        </el-form-item>
-        <el-form-item label="分组">
-          <el-input v-model="form.group" />
-        </el-form-item>
-        <el-form-item label="地址">
-          <el-input v-model="form.url" placeholder="bookSourceUrl" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="form.comment" />
-        </el-form-item>
-        <el-form-item label="原始JSON">
-          <el-input v-model="form.raw" type="textarea" :rows="10" />
-        </el-form-item>
-        <el-form-item label="启用">
-          <el-switch v-model="form.enabled" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="editDialog = false">取消</el-button>
-        <el-button type="primary" @click="save">保存</el-button>
-      </template>
-    </el-dialog>
 
     <!-- 校验结果 -->
     <el-dialog v-model="checkDialog" title="书源校验结果" width="680">

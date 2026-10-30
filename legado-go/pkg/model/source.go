@@ -9,13 +9,40 @@ import (
 	"github.com/legado/legado-go/pkg/util"
 )
 
-// 书源类型（对齐 BookSourceType）
+// 书源类型（对齐 BookSourceType）。
+// 注意：`Book.Type` / `SearchBook.Type` 存的**不是**这套值，而是下面
+// `BookFlag*` 位域（legado 的 `Book.type` 是位域）。转换用 SourceTypeToBookType，
+// 判断「是否文件型书籍」用 Book.IsWebFile。
 const (
 	BookTypeText  = 0 // 文本
 	BookTypeAudio = 1 // 音频
 	BookTypeImage = 2 // 图片/漫画
 	BookTypeFile  = 3 // 文件（下载站）
 )
+
+// Book.type 位域（对齐 app/constant/BookType.kt）
+const (
+	BookFlagText    = 1 << 0 // 1 文本
+	BookFlagAudio   = 1 << 1 // 2 音频
+	BookFlagImage   = 1 << 6 // 64 图片
+	BookFlagWebFile = 1 << 7 // 128 只提供下载服务的网站
+)
+
+// SourceTypeToBookType 书源类型 → Book.type 位域（对齐 BookSource.getBookType）
+//
+// 书源里写 `book.type === 64` / `book.type & 128` 的规则依赖这套映射，
+// 直接存 bookSourceType（0..3）会全部判错。
+func SourceTypeToBookType(t int) int {
+	switch t {
+	case BookTypeFile:
+		return BookFlagText | BookFlagWebFile
+	case BookTypeImage:
+		return BookFlagImage
+	case BookTypeAudio:
+		return BookFlagAudio
+	}
+	return BookFlagText
+}
 
 // SearchRule 搜索结果规则
 type SearchRule struct {
@@ -444,21 +471,22 @@ func ParseExploreKinds(raw string) []ExploreKind {
 				title = strings.TrimSpace(line[:i])
 				u = strings.TrimSpace(line[i+2:])
 			}
-			// 地址为空的项是分组标题，桌面上没有 style 可渲染，直接丢弃。
-			if u == "" {
-				continue
-			}
+			// 地址为空的项是分组标题（legado 的 ExploreKind.url == ""），
+			// 保留下来供 UI 分组；选默认地址时用 FirstExploreURL 跳过。
 			out = append(out, ExploreKind{Title: title, Url: u})
 		}
 	}
 	return out
 }
 
-// usableKinds 过滤掉没有地址的分类（分组标题）。
+// IsGroup 是否为分组标题（没有地址，仅用于分组展示）
+func (k ExploreKind) IsGroup() bool { return strings.TrimSpace(k.Url) == "" }
+
+// usableKinds 过滤掉空标题且空地址的项；分组标题（有标题无地址）保留。
 func usableKinds(in []ExploreKind) []ExploreKind {
 	out := make([]ExploreKind, 0, len(in))
 	for _, k := range in {
-		if strings.TrimSpace(k.Url) == "" {
+		if strings.TrimSpace(k.Url) == "" && strings.TrimSpace(k.Title) == "" {
 			continue
 		}
 		out = append(out, k)

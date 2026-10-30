@@ -1,6 +1,7 @@
 package urlx
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -212,8 +213,52 @@ func (au *AnalyzeUrl) analyzeUrl() {
 	}
 }
 
+// StrResponseOptions 请求时的附加选项（对齐 getStrResponseAwait(jsStr, sourceRegex)）
+type StrResponseOptions struct {
+	// JsStr 正文规则的 webJs：页面需要 JS 渲染时才实现
+	JsStr string
+	// SourceRegex 从源码里抠内容的规则（同样依赖 WebView）
+	SourceRegex string
+}
+
 // GetStrResponse 发起请求
 func (au *AnalyzeUrl) GetStrResponse() (*net.Response, error) {
+	return au.GetStrResponseOpt(StrResponseOptions{})
+}
+
+// GetStrResponseOpt 发起请求（可带 webJs / sourceRegex）
+func (au *AnalyzeUrl) GetStrResponseOpt(opt StrResponseOptions) (*net.Response, error) {
+	// 对齐 legado：URL 选项里给了 type（音频/图片）时返回的是 **hex 字符串**，
+	// 书源 JS 再 hexDecodeToByteArray 处理。这里漏掉会让漫画/音频源拿到乱码。
+	if au.Type != "" {
+		raw, err := au.doRequest()
+		if err != nil {
+			return nil, err
+		}
+		resp := *raw
+		resp.Body = hex.EncodeToString(raw.Bytes)
+		return &resp, nil
+	}
+	resp, err := au.doRequest()
+	if err != nil {
+		return nil, err
+	}
+	// WebView 只在 URL 选项显式要求时启用（对齐 Kotlin 的 `this.useWebView`）。
+	// 当前宿主没有 WebView 实现，Hook 返回空即退回原始 HTML。
+	if au.UseWebView && js.Hooks.WebView != nil {
+		jsStr := au.WebJs
+		if jsStr == "" {
+			jsStr = opt.JsStr
+		}
+		if out := js.Hooks.WebView(au.source, resp.Body, resp.URL, jsStr); out != "" {
+			resp.Body = out
+		}
+	}
+	return resp, nil
+}
+
+// doRequest 真正发请求
+func (au *AnalyzeUrl) doRequest() (*net.Response, error) {
 	reqURL := au.Url
 	body := au.Body
 	contentType := au.HeaderMap["Content-Type"]
@@ -331,7 +376,7 @@ func (au *AnalyzeUrl) GetBytes() ([]byte, error) {
 			return util.Base64DecodeBytes(m[1]), nil
 		}
 	}
-	r, err := au.GetStrResponse()
+	r, err := au.doRequest()
 	if err != nil {
 		return nil, err
 	}
@@ -605,15 +650,15 @@ func init() {
 		}
 		return r.Body
 	}
-	js.Hooks.AjaxAll = func(src *model.BookSource, urls []string) []string {
-		out := make([]string, 0, len(urls))
+	js.Hooks.AjaxAll = func(src *model.BookSource, urls []string) []*js.ConnectResult {
+		out := make([]*js.ConnectResult, 0, len(urls))
 		for _, u := range urls {
 			au := New(Options{Url: u, Source: src})
 			r, err := au.GetStrResponse()
-			if err == nil {
-				out = append(out, r.Body)
+			if err != nil {
+				out = append(out, &js.ConnectResult{URL: u})
 			} else {
-				out = append(out, "")
+				out = append(out, &js.ConnectResult{URL: r.URL, Body: r.Body, Code: r.StatusCode})
 			}
 		}
 		return out
@@ -629,5 +674,9 @@ func init() {
 	js.Hooks.WebView = func(src *model.BookSource, htmlStr, urlStr, jsStr string) string {
 		js.OnLog("[webView] 本环境不支持内置浏览器，java.webView 已降级为空")
 		return ""
+	}
+	// java.downloadFile(content, url) 需要知道 URL 规则里的 type
+	js.Hooks.URLType = func(src *model.BookSource, u string) string {
+		return New(Options{Url: u, Source: src}).Type
 	}
 }

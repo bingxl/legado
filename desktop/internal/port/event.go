@@ -17,8 +17,16 @@ const (
 	EventImportProgress = "import:progress"
 	// EventSourceCheckProgress 书源校验进度，payload 为 dto.SourceCheckProgress。
 	EventSourceCheckProgress = "source:check:progress"
+	// EventSourceDebug 书源调试打点，payload 为 dto.DebugEntryView（每条一行）。
+	EventSourceDebug = "source:debug"
+	// EventSourceDebugDone 书源调试结束，payload 为 dto.DebugDoneView。
+	EventSourceDebugDone = "source:debug:done"
 	// EventDownloadProgress 章节下载进度，payload 为 dto.DownloadProgress。
 	EventDownloadProgress = "download:progress"
+	// EventCacheProgress 章节缓存进度，payload 为 dto.CacheProgress。
+	EventCacheProgress = "cache:progress"
 	// EventWebDAVSyncProgress WebDAV 同步进度，payload 为 dto.SyncProgress。
 	EventWebDAVSyncProgress = "webdav:sync:progress"
+	// EventWebDAVImportProgress 从 WebDAV 导入书籍的进度，payload 为 dto.WebDAVImportProgress。
+	EventWebDAVImportProgress = "webdav:import:progress"
 )

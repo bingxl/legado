@@ -78,10 +78,21 @@ go test ./internal/...
 - **书源管理**：增删改查、启停、JSON 导入导出（兼容 Legado 备份格式）、规则校验、搜索与发现、结果入架
 - **发现（探索）**：照原生 `ExploreFragment` 的两级结构实现——书源手风琴列表（每条 6px 圆角灰条、12px 行距，展开后缩进 8px 铺分类胶囊，同时只展开一个）→ 点分类整页进入书单（80×110 封面 + 触底自动加载），分类按需解析并缓存 10 分钟
 - **WebDAV**：连接配置、连接测试、远端浏览、备份上传下载与删除
+  - **从 WebDAV 选书导入**：在目录里逐层浏览、勾选文件或整个目录（目录会被递归展开），
+    下载到 `<数据根>/webdav/...` 后自动解析入架；支持进度、取消与失败明细，
+    已下载且未变更的文件不会重复传输
+- **内容缓存（离线阅读）**：手动把章节正文与漫画图片落到本地，断网仍可正常翻章
+  - 四种范围：当前章、剩余章节、缺失章节、整本；分卷标题自动跳过
+  - 管理页按书汇总章数与占用空间，支持按章多选删除、按书清空、全部清空；删书时自动级联清理
+  - 阅读器目录里已缓存章节显示绿点，全局进度条可随时查看/取消正在进行的任务
+- **朗读（TTS）**：系统语音朗读文本章节，跨章节连续朗读、当前句高亮跟随；可调语速与音色，
+  离开阅读器后仍继续播放
 
 ## 架构
 
-分层与解耦约束见 **[ARCHITECTURE.md](./ARCHITECTURE.md)**，核心是四条铁律：
+分层与解耦约束见 **[ARCHITECTURE.md](./ARCHITECTURE.md)**，
+真实调用链与页面跳转（20 张 Mermaid 图）见 **[ARCHITECTURE-FLOWS.md](./ARCHITECTURE-FLOWS.md)**。
+核心是四条铁律：
 
 1. `api/` 只做参数校验、调用与 DTO 转换，**不含业务逻辑**
 2. `internal/app/` **禁止 import Wails**（业务可脱离 GUI 测试）
@@ -99,6 +110,17 @@ go test ./internal/...
 因此只在展开某个书源时才解析它的分类，结果按「书源 + 原始规则」缓存 10 分钟；
 布局尺寸直接对齐原生 `item_find_book.xml` / `item_fillet_text.xml` / `item_search.xml`，
 桌面端只额外加了列表居中限宽与标题栏分组筛选。
+
+**缓存以「章节 URL」而非序号判定有效。** 目录随时可能增删章节，同一个 `index`
+在两次抓取之间完全可能指向另一章，所以 `chapter_cache` 连 URL 一起存：
+读取时 URL 比对不上就视为未缓存并重抓。这样不必做全量失效，
+也不会出现「缓存的是旧第三章、读出来却是新第三章」的错位。
+
+**漫画缓存落盘而非入库。** 一章上百张图若走 base64 存 SQLite，体积膨胀三分之一以上，
+且每次读章都要把整章载入内存。改为下载到 `cache/chapter/<bookId>/<idx>/`，
+数据库只存 `/local/...` 路径；写新版本前先删旧目录，任一张失败则整章回滚，
+避免留下半套图片让阅读器渲染出断图。图片请求必须带书源 `scheme://host` 作 Referer，
+否则多数图床直接 403。
 
 **PDF 不在 Go 侧解析。** 安卓端 PDF 本质是按页渲染的位图（无文本层）；
 桌面端交给 WebView（pdf.js 或内置 PDF 能力），既拿到真实文本层又避开 CJK CID 字体与 cgo 问题。
@@ -133,6 +155,34 @@ bin/bookprobe.exe -chapter 3 一本.epub       # 另读第 3 章正文
 bin/bookprobe.exe -chapter 10,11,12 一本.epub  # 连读多章，可观察翻页开销
 ```
 
+## UI 测试（Wails v3 MCP 模式）
+
+Wails v3 带一个**实验性**的 MCP 服务，能把运行中的 WebView 交给 AI 代理驱动。**桌面端 UI 的验证统一走这条路**，
+不再用 Playwright / 自写截图工具 / 临时脚本（旧的 `tmpshot` 已删）。
+
+```bash
+task dev:mcp          # 等价于 WAILS_MCP=1 wails3 dev
+```
+
+- `WAILS_MCP=1` 让 wails3 CLI 追加 `mcp` 构建标签（也可直接 `wails3 build -tags mcp`），
+  应用内 MCP 服务被编进二进制，`App.Run()` 时自动启动；**不加标签时是无操作的空实现**，
+  连不上端点先检查环境变量而不是代码。
+- 端点 `http://127.0.0.1:9099/mcp`，Streamable HTTP。可调环境变量：`WAILS_MCP_PORT`（0 = 随机端口）、
+  `WAILS_MCP_HOST`、`WAILS_MCP_TOKEN`（仅非 loopback 绑定时必需）、`WAILS_MCP_TIMEOUT`（JS eval 毫秒，默认 30000）、
+  `WAILS_MCP_HIDE_CURSOR=1`（隐藏动画指针，便于快照）。
+- 客户端注册（以 Claude Code 为例）：`claude mcp add --transport http wails-legado http://127.0.0.1:9099/mcp`
+- 工具集：`app_info`、`windows_list`、`window_control`、`js_eval`、`dom_html`、`dom_query`、`screenshot_dom`、
+  `mouse_move`、`mouse_click`、`mouse_drag`、`mouse_scroll`、`keyboard_type`、`keyboard_press`、
+  `call_bound_method`、`emit_event`、`wait_for_event`。
+- 约定：断言用 `dom_query` / `js_eval`，不靠肉眼看图（`screenshot_dom` 给的是**结构快照**不是位图）；
+  点击优先传选择器而非像素坐标；造数据用 `call_bound_method` 直接调 Go 服务，只有被测流程本身才走真实点击；
+  等待用 `dom_query` / `wait_for_event` 轮询状态，不要固定 sleep；同一时间只跑一个实例（端口 9099 会冲突）。
+- `mcp` 标签只用于开发/测试：`task build` 的生产链路不带它，别把标签加进 Taskfile 默认值或发布构建。
+
+> `wails3 mcp` 子命令是另一个服务：它暴露的是项目生命周期工具（`wails_project_build`、
+> `wails_project_dev_start`、`wails_project_task_run`、`wails_job_status` 等），看不到也点不到窗口。
+> 测 UI 用 `WAILS_MCP=1` 起应用。
+
 ## 真机回归测试
 
 EPUB 体积大且不便入库，因此针对真实书籍的回归默认关闭，
@@ -150,8 +200,13 @@ LEGADO_EPUB_SAMPLE_DIR=~/Downloads go test ./internal/adapter/bookparser -run Te
 - 漫画压缩包支持 zip / cbz / rar / cbr / 7z / cb7，全部纯 Go 解压（rardecode + sevenzip），
   无需 cgo；扩展名与实际格式不符时按文件头识别
 - EPUB 正文图片内联为 data URI（自包含但占内存），后续可改为按需路由
-- 尚未实现：替换规则 UI、RSS、备份恢复界面、TTS
+- 尚未实现：替换规则 UI、RSS、备份恢复界面、TTS 的 PDF 朗读与 HTTP 语音引擎
+- 缓存仅由用户手动触发，不做后台自动预缓存；已缓存章节不会因书源规则更新而变化，
+  只有章节 URL 变了（目录重排后同序号指向另一章）才判定失效并重新抓取
 - WebDAV 只做备份上传下载，不自动覆盖运行中的数据库（需重启应用生效）
+- WebDAV 导入是一次性拷贝：书目指向 `<数据根>/webdav/...` 的本地副本，
+  之后远端改动**不会**自动同步到本地（重新导入同一路径会按文件大小与修改时间判断是否需要重新下载）
+- WebDAV 导入不支持断点续传；中途取消会丢弃当前文件的 `.part`，已完成的书保留
 - 底层 `raitucarp/epub` v0.5.1 有两处会 panic 的缺陷（`CoverBytes` 空指针、
   `Description` 未校验 nil 节点）。已用原始字节取封面 + 解析边界 recover 规避，
   升级该依赖后需重跑真机回归确认是否可移除兜底

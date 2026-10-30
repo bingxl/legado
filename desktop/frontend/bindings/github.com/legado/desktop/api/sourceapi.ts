@@ -20,9 +20,11 @@ import * as dto$0 from "../internal/app/dto/models.js";
  * name/author 来自列表页（搜索或发现）已经解析到的信息：书源的详情页规则
  * 可能取不到书名（改版、需要登录等），此时用列表页的值兜底，
  * 否则落库会因为「书名不能为空」直接失败。
+ * variable 也是列表页的产物（书源 @put 的变量，JSON 对象串），目录/正文
+ * 规则里的 @get 靠它取值，前端必须原样回传。
  */
-export function AddToShelf(sourceID: number, bookURL: string, name: string, author: string, groupID: number): $CancellablePromise<dto$0.BookBrief> {
-    return $Call.ByID(1667135175, sourceID, bookURL, name, author, groupID);
+export function AddToShelf(sourceID: number, bookURL: string, name: string, author: string, variable: string, groupID: number): $CancellablePromise<dto$0.BookBrief> {
+    return $Call.ByID(1667135175, sourceID, bookURL, name, author, variable, groupID);
 }
 
 /**

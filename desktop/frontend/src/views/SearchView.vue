@@ -43,7 +43,8 @@ async function addToShelf(r: SearchResultView) {
   try {
     const sid = await resolveSourceId(r);
     // 带上书名/作者：详情页规则取不到书名时用它兜底，否则落库会失败。
-    await sourceApi.addToShelf(sid, r.bookUrl, r.name, r.author, 0);
+    // variable 是列表页 @put 的变量，目录/正文的 @get 依赖它。
+    await sourceApi.addToShelf(sid, r.bookUrl, r.name, r.author, r.variable ?? "", 0);
     ElMessage.success(`《${r.name}》已加入书架`);
   } catch (e) {
     ElMessage.error((e as Error).message);
@@ -62,6 +63,7 @@ async function openBook(r: SearchResultView) {
       r.bookUrl,
       r.name,
       r.author,
+      r.variable ?? "",
       0,
     );
     if (!brief) return;

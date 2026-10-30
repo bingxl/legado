@@ -219,12 +219,17 @@ func toEngineBook(b *domain.Book) *legadomodel.Book {
 	out.TotalChapterNum = b.TotalChapters
 	out.DurChapterIndex = b.DurChapterIndex
 	out.DurChapterTitle = b.DurChapterTitle
+	// 书源在列表页 @put 的变量要靠它恢复：目录/正文规则里的 @get 从这里取值。
+	out.Variable = b.Variable
+	if b.Variable != "" {
+		out.LoadJSON(b.Variable)
+	}
 	return out
 }
 
 // fromEngineBook 引擎书籍 → 领域书籍。
 func fromEngineBook(b *legadomodel.Book) *domain.Book {
-	return &domain.Book{
+	out := &domain.Book{
 		Name:            b.Name,
 		Author:          b.Author,
 		Intro:           b.Intro,
@@ -238,6 +243,11 @@ func fromEngineBook(b *legadomodel.Book) *domain.Book {
 		DurChapterIndex: b.DurChapterIndex,
 		DurChapterTitle: b.DurChapterTitle,
 	}
+	// 详情页规则也可能 @put 变量，回写一次，别把列表页带来的那份覆盖成空。
+	if s := b.ToJSON(); s != "" {
+		out.Variable = s
+	}
+	return out
 }
 
 // fromEngineSearchList 引擎搜索结果 → 领域搜索结果。
@@ -258,6 +268,7 @@ func fromEngineSearchList(in []*legadomodel.SearchBook, src *domain.BookSource) 
 			OriginName:  s.OriginName,
 			LastChapter: s.LatestChapterTitle,
 			Kind:        s.Kind,
+			Variable:    s.Variable,
 		})
 	}
 	return out

@@ -27,6 +27,26 @@ const routes = [
     meta: { title: "书源" },
   },
   {
+    // 必须排在 /sources/:id/edit 前面，否则 "new" 会被当成 ID。
+    path: "/sources/new",
+    name: "source-new",
+    component: () => import("@/views/SourceEditView.vue"),
+    meta: { title: "新建书源" },
+  },
+  {
+    path: "/sources/:id/edit",
+    name: "source-edit",
+    component: () => import("@/views/SourceEditView.vue"),
+    meta: { title: "编辑书源" },
+    props: true,
+  },
+  {
+    path: "/cache",
+    name: "cache",
+    component: () => import("@/views/CacheView.vue"),
+    meta: { title: "缓存" },
+  },
+  {
     path: "/webdav",
     name: "webdav",
     component: () => import("@/views/WebDAVView.vue"),
@@ -45,6 +65,13 @@ const routes = [
     component: () => import("@/views/ReaderView.vue"),
     meta: { title: "阅读" },
     props: true,
+  },
+  {
+    // 兜底：未知路径回书架。
+    // 后端对无扩展名的路径统一回退到 index.html（见 main.go spaHandler），
+    // 所以这类地址会真的落到这里；没有它就会白屏。
+    path: "/:pathMatch(.*)*",
+    redirect: "/",
   },
 ];
 

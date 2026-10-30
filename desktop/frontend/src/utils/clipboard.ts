@@ -1,11 +1,23 @@
+import { Clipboard } from "@wailsio/runtime";
+
 /**
  * 复制文本到剪贴板。
  *
- * WebView 里 `navigator.clipboard` 不保证可用（非安全上下文、缺少权限时直接拒绝），
- * 所以失败后退回 `textarea + execCommand('copy')`——老 API 在 WebView 里反而稳。
+ * 顺序有讲究：WebView2 里 `navigator.clipboard` 与 `textarea + execCommand('copy')`
+ * 都可能被直接拒绝（非安全上下文、缺少用户手势），所以先走 Wails 运行时的
+ * `Clipboard.SetText`——它落到 Go 侧的操作系统剪贴板，不受 WebView 权限影响。
+ * 后两条只在前者不可用时兜底（例如在浏览器里单独调试前端）。
  */
 export async function copyText(text: string): Promise<boolean> {
   if (!text) return false;
+
+  try {
+    await Clipboard.SetText(text);
+    return true;
+  } catch {
+    // 落到下面的浏览器实现
+  }
+
   try {
     await navigator.clipboard.writeText(text);
     return true;

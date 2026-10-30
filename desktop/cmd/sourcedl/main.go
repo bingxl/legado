@@ -396,10 +396,11 @@ func cmdDownload(biz *bootstrap.App, args []string) error {
 
 	// 确定待下载的书籍：可直接指定，也可由搜索结果取前几本。
 	// 带上列表页已有的书名/作者，与 GUI 入架走同一条路径。
-	type target struct{ url, name, author string }
+	// variable 是搜索阶段书源 @put 出来的变量，目录/正文的 @get 依赖它
+	type target struct{ url, name, author, variable string }
 	var targets []target
 	if *bookURL != "" {
-		targets = append(targets, target{*bookURL, *name, *author})
+		targets = append(targets, target{*bookURL, *name, *author, ""})
 	} else {
 		found, err := biz.Source.Search(ctx, *sourceID, *kw, 1)
 		if err != nil {
@@ -412,7 +413,7 @@ func cmdDownload(biz *bootstrap.App, args []string) error {
 			*pick = len(found)
 		}
 		for _, r := range found[:*pick] {
-			targets = append(targets, target{r.BookURL, r.Name, r.Author})
+			targets = append(targets, target{r.BookURL, r.Name, r.Author, r.Variable})
 		}
 	}
 
@@ -423,7 +424,7 @@ func cmdDownload(biz *bootstrap.App, args []string) error {
 	var failed int
 	for i, t := range targets {
 		fmt.Printf("\n---- 第 %d/%d 本: %s\n", i+1, len(targets), t.url)
-		if err := downloadOne(ctx, biz, *sourceID, t.url, t.name, t.author, *chapters, *outDir); err != nil {
+		if err := downloadOne(ctx, biz, *sourceID, t.url, t.name, t.author, t.variable, *chapters, *outDir); err != nil {
 			fmt.Printf("  >>> 失败: %v\n", err)
 			failed++
 		}
@@ -433,8 +434,8 @@ func cmdDownload(biz *bootstrap.App, args []string) error {
 }
 
 // downloadOne 下载单本书并导出 TXT。
-func downloadOne(ctx context.Context, biz *bootstrap.App, sourceID int64, bookURL, name, author string, maxChapters int, outDir string) error {
-	brief, err := biz.Source.AddToShelf(ctx, sourceID, bookURL, name, author, 0)
+func downloadOne(ctx context.Context, biz *bootstrap.App, sourceID int64, bookURL, name, author, variable string, maxChapters int, outDir string) error {
+	brief, err := biz.Source.AddToShelf(ctx, sourceID, bookURL, name, author, variable, 0)
 	if err != nil {
 		return fmt.Errorf("入架失败: %w", err)
 	}

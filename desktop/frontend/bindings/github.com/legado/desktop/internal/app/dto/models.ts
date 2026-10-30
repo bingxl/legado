@@ -74,6 +74,83 @@ export interface BookGroupView {
 }
 
 /**
+ * CacheBookStatus 是单本书的缓存概况，供详情页/阅读器展示。
+ */
+export interface CacheBookStatus {
+    "bookId": number;
+    "cachedChapters": number;
+    "totalChapters": number;
+    "size": number;
+    "job": CacheJob | null;
+}
+
+/**
+ * CacheBookView 是缓存管理列表中的一本书。
+ */
+export interface CacheBookView {
+    "bookId": number;
+    "name": string;
+    "author": string;
+    "cover": string;
+    "kind": string;
+    "format": string;
+    "formatLabel": string;
+    "totalChapters": number;
+    "cachedChapters": number;
+    "size": number;
+    "updatedAt": string | null;
+
+    /**
+     * 该书正在/最近一次运行的任务
+     */
+    "job": CacheJob | null;
+}
+
+/**
+ * CacheJob 是一次缓存任务的快照。
+ */
+export interface CacheJob {
+    "bookId": number;
+    "bookName": string;
+    "scope": string;
+    "state": string;
+    "total": number;
+    "done": number;
+    "failed": number;
+
+    /**
+     * 当前章节标题或最近一条错误
+     */
+    "message": string;
+    "startedAt": string;
+    "finishedAt": string | null;
+}
+
+/**
+ * CacheStats 是全局缓存统计。
+ */
+export interface CacheStats {
+    "books": number;
+    "chapters": number;
+    "size": number;
+
+    /**
+     * 正在运行的缓存任务数
+     */
+    "running": number;
+}
+
+/**
+ * CachedChapterView 是已缓存章节的明细行。
+ */
+export interface CachedChapterView {
+    "index": number;
+    "title": string;
+    "size": number;
+    "updatedAt": string;
+}
+
+/**
  * ChapterContent 是阅读器渲染单章所需的数据。
  * 
  * HTML 与 Images 二选一：文本类章节用 HTML，漫画类章节用 Images。
@@ -106,6 +183,14 @@ export interface ChapterItem {
     "title": string;
     "url": string;
     "isVolume": boolean;
+}
+
+/**
+ * DebugSessionView 是启动调试后立即返回的会话句柄。
+ */
+export interface DebugSessionView {
+    "session": string;
+    "running": boolean;
 }
 
 /**
@@ -171,6 +256,24 @@ export interface ReadingPosition {
 }
 
 /**
+ * RemoteBookView 是远端扫描到的一个可导入书籍文件。
+ */
+export interface RemoteBookView {
+    /**
+     * Path 是相对 WebDAV 工作根目录的路径，前端原样回传给 StartImport。
+     */
+    "path": string;
+    "name": string;
+    "size": number;
+
+    /**
+     * Format 是归一化后的格式名（TXT / EPUB / PDF / Comic），便于前端显示。
+     */
+    "format": string;
+    "modTime": string | null;
+}
+
+/**
  * SearchResultView 是搜索/发现结果视图。
  */
 export interface SearchResultView {
@@ -183,6 +286,12 @@ export interface SearchResultView {
     "originName": string;
     "lastChapter": string;
     "kind": string;
+
+    /**
+     * Variable 是书源在列表页 @put 出来的变量，加入书架时原样回传，
+     * 目录/正文规则里的 @get 才能取到值。
+     */
+    "variable"?: string;
 }
 
 /**
@@ -316,4 +425,21 @@ export interface WebDAVEntryView {
     "isDir": boolean;
     "size": number;
     "modTime": string | null;
+}
+
+/**
+ * WebDAVImportJob 是一次导入任务的完整快照。
+ */
+export interface WebDAVImportJob {
+    "state": string;
+    "phase": string;
+    "total": number;
+    "done": number;
+    "failed": number;
+    "current": string;
+    "bytes": number;
+    "totalBytes": number;
+    "message": string;
+    "imported": BookBrief[] | null;
+    "failures": ImportFailure[] | null;
 }

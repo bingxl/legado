@@ -19,15 +19,19 @@ type ContentProvider struct {
 	sources  port.BookSourceRepository
 	parsers  port.LocalBookParserRegistry
 	fetcher  port.SourceFetcher
+	cache    port.ChapterCacheRepository
 }
 
 // NewContentProvider 构造内容供给器。
+//
+// cache 为已缓存章节的仓储；传 nil 表示不做缓存优先读取（例如命令行工具）。
 func NewContentProvider(
 	books port.BookRepository,
 	chapters port.ChapterRepository,
 	sources port.BookSourceRepository,
 	parsers port.LocalBookParserRegistry,
 	fetcher port.SourceFetcher,
+	cache port.ChapterCacheRepository,
 ) *ContentProvider {
 	return &ContentProvider{
 		books:    books,
@@ -35,11 +39,26 @@ func NewContentProvider(
 		sources:  sources,
 		parsers:  parsers,
 		fetcher:  fetcher,
+		cache:    cache,
 	}
 }
 
 // Chapter 取指定书籍某一章的正文。
+//
+// 网络书命中缓存时直接返回缓存内容，从而实现离线阅读；
+// 本地书永远读源文件（缓存对本地文件没有意义）。
 func (p *ContentProvider) Chapter(ctx context.Context, bookID int64, index int) (*port.ChapterContent, error) {
+	return p.chapter(ctx, bookID, index, true)
+}
+
+// ChapterFresh 与 Chapter 相同，但跳过缓存强制抓取。
+// 缓存任务写入新内容时用它，避免读到旧缓存而「缓存了个旧章节」。
+func (p *ContentProvider) ChapterFresh(ctx context.Context, bookID int64, index int) (*port.ChapterContent, error) {
+	return p.chapter(ctx, bookID, index, false)
+}
+
+// chapter 是 Chapter/ChapterFresh 的共同实现。
+func (p *ContentProvider) chapter(ctx context.Context, bookID int64, index int, useCache bool) (*port.ChapterContent, error) {
 	book, err := p.books.Get(ctx, bookID)
 	if err != nil {
 		return nil, err
@@ -48,7 +67,37 @@ func (p *ContentProvider) Chapter(ctx context.Context, bookID int64, index int) 
 	if err != nil {
 		return nil, err
 	}
+	if useCache {
+		if c := p.cached(ctx, book, chapter); c != nil {
+			return c, nil
+		}
+	}
 	return p.content(ctx, book, chapter, p.nextChapterURL(ctx, bookID, index))
+}
+
+// cached 返回命中且仍然有效的缓存内容；未命中返回 nil。
+//
+// 有效性判据是章节地址：书源更新目录后同一序号可能指向另一章，
+// 只比序号会造成「读到上一版正文」这种最难排查的问题。
+func (p *ContentProvider) cached(ctx context.Context, book *domain.Book, chapter *domain.BookChapter) *port.ChapterContent {
+	if p.cache == nil || book.IsLocal() || chapter.IsVolume {
+		return nil
+	}
+	c, err := p.cache.Get(ctx, book.ID, chapter.Index)
+	if err != nil || c == nil {
+		return nil
+	}
+	if chapter.URL != "" && c.URL != "" && c.URL != chapter.URL {
+		return nil
+	}
+	if c.HTML == "" && len(c.Images) == 0 {
+		return nil
+	}
+	title := c.Title
+	if title == "" {
+		title = chapter.Title
+	}
+	return &port.ChapterContent{Title: title, HTML: c.HTML, Images: c.Images}
 }
 
 // nextChapterURL 取下一章的地址，供抓取器给书源的「正文下一页」规则踩刹车。

@@ -15,6 +15,7 @@ import (
 	"github.com/legado/desktop/internal/adapter/bookparser"
 	"github.com/legado/desktop/internal/adapter/exporter"
 	"github.com/legado/desktop/internal/adapter/filesystem"
+	"github.com/legado/desktop/internal/adapter/imagefetch"
 	"github.com/legado/desktop/internal/adapter/legado"
 	"github.com/legado/desktop/internal/adapter/persistence/sqlite"
 	legadowebdav "github.com/legado/desktop/internal/adapter/webdav"
@@ -39,6 +40,10 @@ type App struct {
 	Source    *app.SourceService
 	Library   *app.LibraryService
 	WebDAV    *app.WebDAVService
+	// Cache 负责章节的手动缓存与缓存管理。
+	Cache *app.CacheService
+	// SourceDebug 负责书源调试（真跑规则，把每一步打点推给前端）。
+	SourceDebug *app.SourceDebugService
 	// Content 供给章节正文（本地解析或走书源抓取）。
 	// 需要按章节粒度取内容的场景（例如只导出前若干章）直接使用它。
 	Content *app.ContentProvider
@@ -73,6 +78,7 @@ func New(root string, events port.EventBus) (*App, error) {
 	sources := sqlite.NewBookSourceRepo(db)
 	subs := sqlite.NewSubscriptionRepo(db)
 	settings := sqlite.NewSettingsStore(db)
+	chapterCache := sqlite.NewChapterCacheRepo(db)
 
 	// ── 本地书解析与导出 ────────────────────────────────────
 	parsers := bookparser.NewRegistry()
@@ -88,9 +94,20 @@ func New(root string, events port.EventBus) (*App, error) {
 	fetcher := legado.NewFetcher(DefaultUserAgent())
 
 	// ── 应用服务 ────────────────────────────────────────────
-	content := app.NewContentProvider(books, chapters, sources, parsers, fetcher)
+	content := app.NewContentProvider(books, chapters, sources, parsers, fetcher, chapterCache)
 
-	bookshelf := app.NewBookshelfService(books, groups, progress, db)
+	// 缓存服务要先于书架服务构造：删书时要连带清掉该书的缓存文件。
+	cache := app.NewCacheService(app.CacheDeps{
+		Root:     root,
+		Books:    books,
+		Chapters: chapters,
+		Cache:    chapterCache,
+		Content:  content,
+		Images:   imagefetch.New(DefaultUserAgent()),
+		Events:   events,
+	})
+
+	bookshelf := app.NewBookshelfService(books, groups, progress, db).WithCache(cache)
 	reader := app.NewReaderService(content, chapters, books, bookshelf, db)
 	source := app.NewSourceService(app.SourceDeps{
 		Sources:  sources,
@@ -114,25 +131,46 @@ func New(root string, events port.EventBus) (*App, error) {
 		Content:  content,
 		UoW:      db,
 	})
-	webdav := app.NewWebDAVService(settings, legadowebdav.NewFactory(), events, dbPath)
+	// WebDAV：备份上传下载 + 「从 WebDAV 选书导入」。
+	// 导入能力用链式注入，因为下载落点与导入器只有在 library 构造之后才就绪。
+	webdav := app.NewWebDAVService(settings, legadowebdav.NewFactory(), events, dbPath).
+		WithBookImport(root, library)
+	sourceDebug := app.NewSourceDebugService(app.SourceDebugDeps{
+		Sources:  source,
+		Debugger: legado.NewDebugger(DefaultUserAgent()),
+		Events:   events,
+	})
 
 	return &App{
-		Root:      root,
-		DB:        db,
-		Blobs:     blobs,
-		Parsers:   parsers,
-		Bookshelf: bookshelf,
-		Reader:    reader,
-		Source:    source,
-		Library:   library,
-		WebDAV:    webdav,
-		Content:   content,
+		Root:        root,
+		DB:          db,
+		Blobs:       blobs,
+		Parsers:     parsers,
+		Bookshelf:   bookshelf,
+		Reader:      reader,
+		Source:      source,
+		Library:     library,
+		WebDAV:      webdav,
+		Cache:       cache,
+		Content:     content,
+		SourceDebug: sourceDebug,
 	}, nil
 }
 
-// Close 释放装配持有的资源（数据库句柄）。
+// Close 释放装配持有的资源（缓存任务与数据库句柄）。
 func (a *App) Close() error {
-	if a == nil || a.DB == nil {
+	if a == nil {
+		return nil
+	}
+	// 先停掉缓存任务再关库：任务还在写的时候关闭连接会留下半条记录。
+	if a.Cache != nil {
+		a.Cache.StopAll()
+	}
+	// WebDAV 导入是后台下载，退出时也要掐掉，否则进程会被挂住。
+	if a.WebDAV != nil {
+		a.WebDAV.StopImport()
+	}
+	if a.DB == nil {
 		return nil
 	}
 	return a.DB.Close()

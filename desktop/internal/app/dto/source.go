@@ -112,6 +112,9 @@ type SearchResultView struct {
 	OriginName  string `json:"originName"`
 	LastChapter string `json:"lastChapter"`
 	Kind        string `json:"kind"`
+	// Variable 是书源在列表页 @put 出来的变量，加入书架时原样回传，
+	// 目录/正文规则里的 @get 才能取到值。
+	Variable string `json:"variable,omitempty"`
 }
 
 // NewSearchResultView 从领域实体转换搜索结果视图。
@@ -129,6 +132,7 @@ func NewSearchResultView(r *domain.SearchResult) SearchResultView {
 		OriginName:  r.OriginName,
 		LastChapter: r.LastChapter,
 		Kind:        r.Kind,
+		Variable:    r.Variable,
 	}
 }
 

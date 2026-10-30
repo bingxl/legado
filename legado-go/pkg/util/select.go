@@ -78,6 +78,7 @@ func selectNodes(roots []*html.Node, sel string) []*html.Node {
 	if sel == "" {
 		return nil
 	}
+	sel = normalizeAttrQuotes(sel)
 	if _, err := cascadia.Compile(sel); err != nil {
 		reportSelectorError(sel, err)
 		return nil
@@ -111,6 +112,116 @@ func selectNodes(roots []*html.Node, sel string) []*html.Node {
 		})
 	}
 	return out
+}
+
+// normalizeAttrQuotes 给属性选择器里**不带引号**的值补上双引号。
+//
+// cascadia 的 tokenizer 要求裸值是合法标识符（不能以数字开头、不能含 `/`），
+// 而 jsoup 会一路吃到 `]`，所以 `a[href^=/1]`、`[title$=2]` 这类真实书源写法
+// 在 Go 里编译失败、**静默返回空**。CSS 里给裸值加引号与原写法等价，
+// 因此统一在编译前规整一遍。
+func normalizeAttrQuotes(sel string) string {
+	if !strings.Contains(sel, "[") {
+		return sel
+	}
+	var sb strings.Builder
+	i := 0
+	for i < len(sel) {
+		c := sel[i]
+		if c == '\\' && i+1 < len(sel) {
+			sb.WriteString(sel[i : i+2])
+			i += 2
+			continue
+		}
+		if c == '\'' || c == '"' {
+			j := skipQuoted(sel, i)
+			sb.WriteString(sel[i:j])
+			i = j
+			continue
+		}
+		if c != '[' {
+			sb.WriteByte(c)
+			i++
+			continue
+		}
+		j := matchBracket(sel, i)
+		if j < 0 { // 没有配对的 ']'，原样保留
+			sb.WriteString(sel[i:])
+			break
+		}
+		sb.WriteByte('[')
+		sb.WriteString(quoteAttrValue(sel[i+1 : j]))
+		sb.WriteByte(']')
+		i = j + 1
+	}
+	return sb.String()
+}
+
+// skipQuoted 返回从 i（引号）起、跳过该引号串后的下标
+func skipQuoted(s string, i int) int {
+	q := s[i]
+	j := i + 1
+	for j < len(s) {
+		if s[j] == '\\' {
+			j += 2
+			continue
+		}
+		if s[j] == q {
+			return j + 1
+		}
+		j++
+	}
+	return len(s)
+}
+
+// matchBracket 返回与 i 处 '[' 配对的 ']' 下标，找不到返回 -1
+func matchBracket(s string, i int) int {
+	j := i + 1
+	for j < len(s) {
+		switch s[j] {
+		case '\\':
+			j += 2
+			continue
+		case '\'', '"':
+			j = skipQuoted(s, j)
+			continue
+		case ']':
+			return j
+		}
+		j++
+	}
+	return -1
+}
+
+// quoteAttrValue 处理 `[...]` 的内容：`attr op value` 中裸值补引号
+func quoteAttrValue(inner string) string {
+	eq := -1
+	for i := 0; i < len(inner); i++ {
+		switch inner[i] {
+		case '\\':
+			i++
+		case '\'', '"':
+			i = skipQuoted(inner, i) - 1
+		case '=':
+			eq = i
+		}
+		if eq >= 0 {
+			break
+		}
+	}
+	if eq < 0 { // [attr]、[attr!=x] 之外的纯属性名
+		return inner
+	}
+	start := eq
+	if start > 0 && strings.IndexByte("*^$~|", inner[start-1]) >= 0 {
+		start--
+	}
+	val := strings.TrimSpace(inner[eq+1:])
+	if val == "" || val[0] == '"' || val[0] == '\'' {
+		return inner
+	}
+	escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(val)
+	return inner[:eq+1] + `"` + escaped + `"`
 }
 
 // SplitSelectorGroup 按顶层逗号拆分 CSS 分组选择器（`a,b,c`）。
@@ -193,6 +304,7 @@ func SelectWithSelf(root *html.Node, css string) []*html.Node {
 	// 组内处理：自身匹配 + 后代匹配，再统一应用该组的伪类
 	for _, g := range groups {
 		sel, filters := splitJsoupPseudo(g)
+		sel = normalizeAttrQuotes(sel)
 		if _, err := cascadia.Compile(sel); err != nil {
 			reportSelectorError(sel, err)
 			continue

@@ -10,6 +10,11 @@
 export type {
   BookBrief,
   BookDetail,
+  CacheBookStatus,
+  CacheBookView,
+  CachedChapterView,
+  CacheJob,
+  CacheStats,
   BookGroupView,
   ChapterContent,
   ChapterItem,
@@ -19,6 +24,7 @@ export type {
   ImportFailure,
   ImportResult,
   ReadingPosition,
+  RemoteBookView,
   SearchResultView,
   SourceCheckResult,
   SourceFailure,
@@ -28,6 +34,7 @@ export type {
   ValidationIssue,
   WebDAVConfigView,
   WebDAVEntryView,
+  WebDAVImportJob,
 } from "@bindings/github.com/legado/desktop/internal/app/dto/models";
 
 /** 书籍来源类型：网络书 / 本地书。 */

@@ -168,13 +168,19 @@ func (e *Engine) GetChapterList(key string, book *model.Book) ([]*model.BookChap
 	return webbook.GetChapterList(s, book, false)
 }
 
-// GetContent 正文
-func (e *Engine) GetContent(key string, book *model.Book, chapter *model.BookChapter) (string, error) {
+// GetContent 正文。
+// nextChapterUrl 用于「下一页 == 下一章」的刹车判定：规则误选中下一章链接时，
+// 不传它就会把下一章正文拼到本章末尾。省略该参数等价于传空。
+func (e *Engine) GetContent(key string, book *model.Book, chapter *model.BookChapter, nextChapterUrl ...string) (string, error) {
 	s := e.Find(key)
 	if s == nil {
 		return "", notFoundErr(e.Sources, key)
 	}
-	return webbook.GetContent(s, book, chapter, "")
+	next := ""
+	if len(nextChapterUrl) > 0 {
+		next = nextChapterUrl[0]
+	}
+	return webbook.GetContent(s, book, chapter, next)
 }
 
 // Download 下载整本书（书籍或漫画）

@@ -22,6 +22,38 @@ var (
 	authorRegex = regexp.MustCompile(`^\s*作\s*者[:：\s]+|\s+著`)
 )
 
+func init() {
+	// preUpdateJs 里的 java.reGetBook / java.refreshTocUrl 需要回环到详情页抓取，
+	// 实现放在这里通过 Hook 反注给 js 包，避免 js ↔ webbook 循环依赖。
+	js.Hooks.RefreshTocUrl = func(src *model.BookSource, book *model.Book) error {
+		book.TocUrl = ""
+		book.TocHtml = ""
+		return GetBookInfo(src, book)
+	}
+	js.Hooks.ReGetBook = func(src *model.BookSource, book *model.Book) error {
+		// 对齐 Kotlin：按书名+作者精确搜索一次拿到新详情页地址与变量，
+		// 再重新解析详情页（TocUrl 会被重算）。
+		if list, err := SearchBook(src, book.Name, 1); err == nil {
+			for _, sb := range list {
+				if sb.Name != book.Name {
+					continue
+				}
+				if book.Author != "" && sb.Author != book.Author {
+					continue
+				}
+				book.BookUrl = sb.BookUrl
+				if v := sb.ToJSON(); v != "" {
+					book.LoadJSON(v)
+				}
+				break
+			}
+		}
+		book.TocUrl = ""
+		book.TocHtml = ""
+		return GetBookInfo(src, book)
+	}
+}
+
 // —— 调试打点 ——
 // 输出位置与文案对齐 Kotlin 的 model/webBook/*.kt：≡ 提示、┌└ 规则组、◇ 统计。
 // 未启用调试时这些函数只付一次原子读的代价。
@@ -67,11 +99,23 @@ func WordCountFormat(s string) string {
 
 // newRule 创建绑定书源与书籍的规则引擎
 func newRule(src *model.BookSource, book *model.Book, rd *model.RuleData) *rule.AnalyzeRule {
-	return rule.New(src).SetBook(book).SetRuleData(rd)
+	ar := rule.New(src).SetBook(book)
+	if rd != nil {
+		ar.SetRuleData(rd)
+	}
+	return ar
+}
+
+// fetched 一次抓取的结果
+type fetched struct {
+	au         *urlx.AnalyzeUrl
+	body       string
+	url        string
+	isRedirect bool
 }
 
 // fetch 按 URL 规则取回内容，并执行登录检测 JS
-func fetch(src *model.BookSource, mUrl, baseUrl string, book *model.Book, chapter *model.BookChapter, page *int, key string) (*urlx.AnalyzeUrl, string, string, error) {
+func fetch(src *model.BookSource, mUrl, baseUrl string, book *model.Book, chapter *model.BookChapter, page *int, key string) (*fetched, error) {
 	au := urlx.New(urlx.Options{
 		Url:     mUrl,
 		Key:     key,
@@ -83,7 +127,7 @@ func fetch(src *model.BookSource, mUrl, baseUrl string, book *model.Book, chapte
 	})
 	resp, err := au.GetStrResponse()
 	if err != nil {
-		return au, "", "", err
+		return nil, err
 	}
 	body := resp.Body
 	// 登录检测 JS：返回新的 body 或 StrResponse
@@ -92,7 +136,7 @@ func fetch(src *model.BookSource, mUrl, baseUrl string, book *model.Book, chapte
 			body = v
 		}
 	}
-	return au, body, resp.URL, nil
+	return &fetched{au: au, body: body, url: resp.URL, isRedirect: resp.IsRedirect}, nil
 }
 
 // SearchBook 搜索书籍
@@ -109,11 +153,11 @@ func SearchBook(src *model.BookSource, key string, page int) ([]*model.SearchBoo
 		p = 1
 	}
 	rd := model.NewRuleData()
-	au, body, finalURL, err := fetch(src, src.SearchUrl, src.BookSourceUrl, nil, nil, &p, key)
+	f, err := fetch(src, src.SearchUrl, src.BookSourceUrl, nil, nil, &p, key)
 	if err != nil {
 		return nil, err
 	}
-	return analyzeBookList(src, rd, au, finalURL, body, true, false)
+	return analyzeBookList(src, rd, f.au, f.url, f.body, true, f.isRedirect)
 }
 
 // GetExploreKinds 解析书源的发现分类。
@@ -139,6 +183,17 @@ func GetExploreKinds(src *model.BookSource) []model.ExploreKind {
 		return nil
 	}
 	return model.ParseExploreKinds(exploreKindsText(v))
+}
+
+// firstExploreUrl 取第一个有地址的分类（分组标题的 url 为空）。
+// 对齐 legado：分组标题会保留在分类列表里，但选默认地址时要跳过。
+func firstExploreUrl(kinds []model.ExploreKind) string {
+	for _, k := range kinds {
+		if u := strings.TrimSpace(k.Url); u != "" {
+			return u
+		}
+	}
+	return ""
 }
 
 // exploreKindsJS 判断 exploreUrl 是否为 JS 形式，并截出脚本正文。
@@ -179,10 +234,12 @@ func exploreKindsText(v any) string {
 
 // ExploreBook 发现书籍
 func ExploreBook(src *model.BookSource, url string, page int) ([]*model.SearchBook, error) {
-	// 未指定地址时用 exploreUrl 的第一个分类
+	// 未指定地址时用 exploreUrl 的第一个**非分组**分类
 	if strings.TrimSpace(url) == "" {
 		if kinds := GetExploreKinds(src); len(kinds) > 0 {
-			url = kinds[0].Url
+			if u := firstExploreUrl(kinds); u != "" {
+				url = u
+			}
 		}
 	}
 	if strings.TrimSpace(url) == "" {
@@ -193,43 +250,49 @@ func ExploreBook(src *model.BookSource, url string, page int) ([]*model.SearchBo
 		p = 1
 	}
 	rd := model.NewRuleData()
-	au, body, finalURL, err := fetch(src, url, src.BookSourceUrl, nil, nil, &p, "")
+	f, err := fetch(src, url, src.BookSourceUrl, nil, nil, &p, "")
 	if err != nil {
 		return nil, err
 	}
-	return analyzeBookList(src, rd, au, finalURL, body, false, false)
+	return analyzeBookList(src, rd, f.au, f.url, f.body, false, f.isRedirect)
 }
 
 // GetBookInfo 获取书籍详情
 func GetBookInfo(src *model.BookSource, book *model.Book) error {
+	// 对齐 legado：入口重置书籍类型，否则文件型书源走不到 downloadUrls 分支
+	book.SetSourceType(src.GetBookType())
 	if book.InfoHtml != "" {
 		return analyzeBookInfo(src, book, book.BookUrl, book.BookUrl, book.InfoHtml)
 	}
-	au, body, finalURL, err := fetch(src, book.BookUrl, src.BookSourceUrl, book, nil, nil, "")
+	f, err := fetch(src, book.BookUrl, src.BookSourceUrl, book, nil, nil, "")
 	if err != nil {
 		return err
 	}
-	_ = au
-	return analyzeBookInfo(src, book, book.BookUrl, finalURL, body)
+	return analyzeBookInfo(src, book, book.BookUrl, f.url, f.body)
 }
 
 // GetChapterList 获取目录
 func GetChapterList(src *model.BookSource, book *model.Book, runPreUpdateJs bool) ([]*model.BookChapter, error) {
+	book.SetSourceType(src.GetBookType())
 	if runPreUpdateJs {
-		_ = RunPreUpdateJs(src, book)
+		if err := RunPreUpdateJs(src, book); err != nil {
+			return nil, err
+		}
 	}
 	if book.BookUrl == book.TocUrl && book.TocHtml != "" {
 		return analyzeChapterList(src, book, book.TocUrl, book.TocUrl, book.TocHtml)
 	}
-	au, body, finalURL, err := fetch(src, book.TocUrl, book.BookUrl, book, nil, nil, "")
+	f, err := fetch(src, book.TocUrl, book.BookUrl, book, nil, nil, "")
 	if err != nil {
 		return nil, err
 	}
-	_ = au
-	return analyzeChapterList(src, book, book.TocUrl, finalURL, body)
+	return analyzeChapterList(src, book, book.TocUrl, f.url, f.body)
 }
 
-// RunPreUpdateJs 执行目录预更新 JS
+// RunPreUpdateJs 执行目录预更新 JS。
+// 对齐 Kotlin 的 `runPreUpdateJs(...).getOrThrow()`：脚本失败时中断目录抓取，
+// 否则「目录地址要由脚本刷新」的书源会拿旧地址解析出空目录，只剩一句
+// 「章节列表为空」的错误，看不到真实原因。
 func RunPreUpdateJs(src *model.BookSource, book *model.Book) error {
 	preUpdateJs := src.GetTocRule().PreUpdateJs
 	if strings.TrimSpace(preUpdateJs) == "" {
@@ -237,11 +300,18 @@ func RunPreUpdateJs(src *model.BookSource, book *model.Book) error {
 	}
 	ar := rule.New(src).SetBook(book)
 	ar.SetContent("")
-	ar.EvalJS(preUpdateJs)
+	ar.InPreUpdateJs = true
+	if _, err := ar.EvalJSErr(preUpdateJs); err != nil {
+		return fmt.Errorf("preUpdateJs 执行失败: %w", err)
+	}
 	return nil
 }
 
-// GetContent 获取章节正文
+// GetContent 获取章节正文。
+//
+// 这里**不**重置 book.Type：正文是并发抓的（download 一个 book 多章同时跑），
+// 写共享字段会被 race 检测出来。类型由 GetBookInfo / GetChapterList 这两个
+// 串行入口设置，正文解析本身也不依赖它。
 func GetContent(src *model.BookSource, book *model.Book, chapter *model.BookChapter, nextChapterUrl string) (string, error) {
 	contentRule := src.GetContentRule()
 	if contentRule.Content == "" {
@@ -264,7 +334,11 @@ func GetContent(src *model.BookSource, book *model.Book, chapter *model.BookChap
 		Book:    book,
 		Chapter: chapter,
 	})
-	resp, err := au.GetStrResponse()
+	// webJs / sourceRegex 依赖 WebView；这里照常传下去，将来接上不用再改调用点
+	resp, err := au.GetStrResponseOpt(urlx.StrResponseOptions{
+		JsStr:       contentRule.WebJs,
+		SourceRegex: contentRule.SourceRegex,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -364,15 +438,14 @@ func analyzeBookList(src *model.BookSource, rd *model.RuleData, au *urlx.Analyze
 		}
 		bookList = append(bookList, sb)
 	}
-	// 去重
+	// 去重：对齐 SearchBook.equals —— 只按 bookUrl 判重
 	seen := map[string]bool{}
 	unique := make([]*model.SearchBook, 0, len(bookList))
 	for _, b := range bookList {
-		k := b.Name + "\x00" + b.Author + "\x00" + b.BookUrl
-		if seen[k] {
+		if seen[b.BookUrl] {
 			continue
 		}
-		seen[k] = true
+		seen[b.BookUrl] = true
 		unique = append(unique, b)
 	}
 	if reverse {
@@ -396,7 +469,7 @@ func getInfoItem(src *model.BookSource, ar *rule.AnalyzeRule, au *urlx.AnalyzeUr
 	}
 	book.Origin = src.BookSourceUrl
 	book.OriginName = src.BookSourceName
-	book.Type = src.GetBookType()
+	book.SetSourceType(src.GetBookType())
 	ar.SetBook(book)
 	if err := analyzeBookInfoWithRule(src, book, body, ar, baseUrl, baseUrl, false); err != nil {
 		return nil
@@ -416,7 +489,22 @@ func getInfoItem(src *model.BookSource, ar *rule.AnalyzeRule, au *urlx.AnalyzeUr
 	sb.Intro = book.Intro
 	sb.CoverUrl = book.CoverUrl
 	sb.LatestChapterTitle = book.LatestChapterTitle
+	syncVariable(sb)
 	return sb
+}
+
+// syncVariable 把变量表回写到 Variable 字段。
+//
+// 引擎里变量实际存在 VariableHolder（map）中，而 Book/SearchBook 对外的 Variable
+// 是一个 JSON 字符串字段（对齐 Kotlin 里 variable 是 variableMap 的计算属性）。
+// 跨进程/跨模块传递时要靠这个字段，所以在产出搜索结果前同步一次。
+func syncVariable(sb *model.SearchBook) {
+	if sb == nil {
+		return
+	}
+	if s := sb.ToJSON(); s != "" {
+		sb.Variable = s
+	}
 }
 
 func getSearchItem(src *model.BookSource, ar *rule.AnalyzeRule, item any, baseUrl, variable string,
@@ -426,10 +514,13 @@ func getSearchItem(src *model.BookSource, ar *rule.AnalyzeRule, item any, baseUr
 	if variable != "" {
 		sb.LoadJSON(variable)
 	}
-	sb.Type = src.GetBookType()
+	sb.Type = model.SourceTypeToBookType(src.GetBookType())
 	sb.Origin = src.BookSourceUrl
 	sb.OriginName = src.BookSourceName
 	sb.OriginOrder = src.CustomOrder
+	// 对齐 Kotlin 的 analyzeRule.setRuleData(searchBook)：@put 必须落到当前这条
+	// 搜索结果自己的变量表，否则同一页多条结果会互相覆盖，变量也带不到目录/正文。
+	ar.SetRuleData(sb)
 	ar.SetContent(item)
 	// tb 按 Kotlin 的 Debug.log(..., log) 语义，只对首条打字段级日志
 	tb := func(label, val string) {
@@ -463,6 +554,7 @@ func getSearchItem(src *model.BookSource, ar *rule.AnalyzeRule, item any, baseUr
 		sb.BookUrl = baseUrl
 	}
 	tb("获取详情页链接", sb.BookUrl)
+	syncVariable(sb)
 	return sb
 }
 
@@ -633,14 +725,17 @@ func analyzeChapterList(src *model.BookSource, book *model.Book, baseUrl, redire
 	for i, c := range unique {
 		c.Index = i
 	}
-	// formatJs
+	// formatJs：同一 bindings 上逐章执行，gInt 由脚本自己累加（对齐 Kotlin）
 	if tocRule.FormatJs != "" {
+		gInt := 0
 		for i, c := range unique {
 			v, err := js.DefaultEngine().Eval(tocRule.FormatJs, &js.Bindings{
 				Source:  src,
 				Book:    book,
 				Chapter: c,
-				Extra:   map[string]any{"index": i + 1, "gInt": 0},
+				Title:   c.Title,
+				Extra:   map[string]any{"index": i + 1},
+				GInt:    &gInt,
 			})
 			if err == nil && v != nil {
 				if s := fmt.Sprint(v); s != "" {
@@ -754,6 +849,20 @@ func analyzeContent(src *model.BookSource, book *model.Book, chapter *model.Book
 	}
 	logFetched(debug.StateContentBody, baseUrl, body)
 	contentRule := src.GetContentRule()
+	// ruleContent.title：有些站目录页只有「第12章」，真标题只在正文页，
+	// 取到值就回写章节名（legado 还会落库；桌面端没有 DB，回写对象即可，
+	// download 拼文本用的就是它）。必须在解析正文之前执行，正文规则里的
+	// {{title}} / chapter.title 才能拿到新标题。
+	if titleRule := contentRule.Title; strings.TrimSpace(titleRule) != "" {
+		ar := newRule(src, book, nil)
+		ar.SetContent(body, baseUrl)
+		ar.SetRedirectUrl(redirectUrl)
+		ar.SetChapter(chapter)
+		ar.SetNextChapterUrl(nextChapterUrl)
+		if t := strings.TrimSpace(ar.GetString(titleRule)); t != "" {
+			chapter.Title = t
+		}
+	}
 	parts := []string{}
 	// 已抓过的页（统一存绝对地址）。相对/绝对混用时也能正确去重，
 	// 避免同一页被规则既给相对路径又给绝对路径时重复抓取。
@@ -828,21 +937,18 @@ func analyzeContent(src *model.BookSource, book *model.Book, chapter *model.Book
 		}
 	}
 	contentStr := strings.Join(parts, "\n")
+	// 全文替换（对齐 Kotlin 的三步：按行 trim → 替换 → 统一补行首缩进）。
+	// 早期实现只在替换结果为空时补缩进，替换成功时既不 trim 也不缩进，
+	// 带 `^\s*`、`\n\s+` 类正则的书源匹配位置会和 App 里不一致。
 	if contentRule.ReplaceRegex != "" {
+		trimmed := trimEachLine(contentStr)
 		ar := newRule(src, book, nil)
-		ar.SetContent(contentStr)
+		ar.SetContent(trimmed)
 		ar.SetChapter(chapter)
-		lines := strings.Split(contentStr, "\n")
-		var sb strings.Builder
-		for i, l := range lines {
-			if i > 0 {
-				sb.WriteString("\n")
-			}
-			sb.WriteString("\u3000\u3000" + strings.TrimSpace(l))
-		}
-		contentStr = ar.GetString(contentRule.ReplaceRegex)
-		if contentStr == "" {
-			contentStr = sb.String()
+		if replaced := ar.GetString(contentRule.ReplaceRegex); strings.TrimSpace(replaced) != "" {
+			contentStr = indentEachLine(replaced)
+		} else {
+			contentStr = indentEachLine(trimmed)
 		}
 	}
 	if !chapter.IsVolume && strings.TrimSpace(contentStr) == "" {
@@ -888,6 +994,24 @@ func reverseSlice(a []*model.BookChapter) {
 
 func contains(a []string, s string) bool {
 	return slices.Contains(a, s)
+}
+
+// trimEachLine 逐行 trim（对齐 Kotlin `split(LF).joinToString("\n") { it.trim() }`）
+func trimEachLine(s string) string {
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimSpace(lines[i])
+	}
+	return strings.Join(lines, "\n")
+}
+
+// indentEachLine 逐行补两个全角空格缩进
+func indentEachLine(s string) string {
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = "\u3000\u3000" + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func isTrue(s string) bool {

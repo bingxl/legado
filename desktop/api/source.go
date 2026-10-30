@@ -27,7 +27,7 @@ type sourceService interface {
 	ListExploreSources(ctx context.Context) ([]dto.ExploreSourceBrief, error)
 	ExploreKinds(ctx context.Context, sourceID int64) ([]dto.ExploreKindView, error)
 	Explore(ctx context.Context, sourceID int64, url string, page int) ([]dto.SearchResultView, error)
-	AddToShelf(ctx context.Context, sourceID int64, bookURL string, name string, author string, groupID int64) (dto.BookBrief, error)
+	AddToShelf(ctx context.Context, sourceID int64, bookURL string, name string, author string, variable string, groupID int64) (dto.BookBrief, error)
 }
 
 // NewSourceAPI 创建书源绑定服务。
@@ -144,12 +144,14 @@ func (a *SourceAPI) Explore(sourceID int64, url string, page int) ([]dto.SearchR
 // name/author 来自列表页（搜索或发现）已经解析到的信息：书源的详情页规则
 // 可能取不到书名（改版、需要登录等），此时用列表页的值兜底，
 // 否则落库会因为「书名不能为空」直接失败。
-func (a *SourceAPI) AddToShelf(sourceID int64, bookURL string, name string, author string, groupID int64) (dto.BookBrief, error) {
+// variable 也是列表页的产物（书源 @put 的变量，JSON 对象串），目录/正文
+// 规则里的 @get 靠它取值，前端必须原样回传。
+func (a *SourceAPI) AddToShelf(sourceID int64, bookURL string, name string, author string, variable string, groupID int64) (dto.BookBrief, error) {
 	if sourceID == 0 {
 		return dto.BookBrief{}, errBadRequest("缺少书源 ID")
 	}
 	if bookURL == "" {
 		return dto.BookBrief{}, errBadRequest("缺少书籍链接")
 	}
-	return a.svc.AddToShelf(newCtx(), sourceID, bookURL, name, author, groupID)
+	return a.svc.AddToShelf(newCtx(), sourceID, bookURL, name, author, variable, groupID)
 }

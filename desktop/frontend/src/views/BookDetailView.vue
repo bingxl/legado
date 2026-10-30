@@ -14,12 +14,17 @@ import { ElMessage } from "element-plus";
 
 import { bookshelfApi } from "@/api/bookshelf";
 import { readerApi } from "@/api/reader";
+import { CacheScope, cacheApi } from "@/api/cache";
+import { jobPercent, useCacheStore } from "@/stores/cache";
 import { copyText } from "@/utils/clipboard";
+import { formatBytes } from "@/utils/format";
 import { coverURL } from "@/utils/media";
-import type { BookDetail, ChapterItem } from "@/types";
+import type { BookDetail, CacheBookStatus, ChapterItem } from "@/types";
+import type { CacheScopeValue } from "@/api/cache";
 
 const route = useRoute();
 const router = useRouter();
+const cache = useCacheStore();
 
 const bookId = computed(() => Number(route.params.id || 0));
 const book = ref<BookDetail | null>(null);
@@ -29,6 +34,16 @@ const introOpen = ref(false);
 const coverBroken = ref(false);
 /** 目录一次最多渲染多少条：几千章的书全量挂 DOM 会明显卡顿。 */
 const chapterLimit = ref(300);
+
+/** 缓存状态与对话框。 */
+const cacheDialog = ref(false);
+const cacheStatus = ref<CacheBookStatus | null>(null);
+const cacheScope = ref<CacheScopeValue>(CacheScope.Remaining);
+
+/** 本地书读的就是本地文件，缓存没有意义。 */
+const canCache = computed(() => !!book.value && book.value.kind !== "local");
+const cacheJob = computed(() => cache.jobOf(bookId.value));
+const cacheRunning = computed(() => cacheJob.value?.state === "running");
 
 const shownChapters = computed(() => chapters.value.slice(0, chapterLimit.value));
 const hasMoreChapters = computed(() => chapters.value.length > chapterLimit.value);
@@ -49,12 +64,62 @@ async function load() {
   try {
     book.value = await bookshelfApi.getBook(bookId.value);
     chapters.value = (await readerApi.getChapters(bookId.value)) ?? [];
+    await loadCacheStatus();
   } catch (e) {
     ElMessage.error((e as Error).message);
   } finally {
     loading.value = false;
   }
 }
+
+/** 读取缓存概况；失败不影响详情页主体内容。 */
+async function loadCacheStatus() {
+  if (!bookId.value) return;
+  try {
+    cacheStatus.value = await cacheApi.status(bookId.value);
+  } catch {
+    cacheStatus.value = null;
+  }
+}
+
+/** 打开缓存对话框：默认「缓存剩余」，一本书读到哪就缓存到哪。 */
+async function openCacheDialog() {
+  cacheDialog.value = true;
+  cacheScope.value =
+    (cacheStatus.value?.cachedChapters ?? 0) > 0
+      ? CacheScope.Missing
+      : CacheScope.Remaining;
+  await loadCacheStatus();
+}
+
+async function startCache() {
+  try {
+    await cache.start(bookId.value, cacheScope.value);
+    ElMessage.success("已开始缓存，可在「缓存」页查看进度");
+    cacheDialog.value = false;
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  }
+}
+
+async function cancelCache() {
+  try {
+    await cache.cancel(bookId.value);
+    ElMessage.info("已取消缓存");
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  }
+}
+
+/** 任务结束后刷新一次概况，让「已缓存 N 章」立刻更新。 */
+watch(
+  () => cacheJob.value?.state,
+  async (state, prev) => {
+    if (prev === "running" && state && state !== "running") {
+      await loadCacheStatus();
+    }
+  },
+);
 
 /** 进入阅读器，index 指定从哪一章开始（阅读器读 query.index）。 */
 function openReader(index: number) {
@@ -139,6 +204,12 @@ onMounted(load);
               <span v-if="book.totalChapters > 0" class="label">
                 {{ book.totalChapters }} 章
               </span>
+              <span
+                v-if="(cacheStatus?.cachedChapters ?? 0) > 0"
+                class="label cached"
+              >
+                已缓存 {{ cacheStatus?.cachedChapters }} 章
+              </span>
             </div>
             <div v-if="book.lastChapter" class="line">
               最新：{{ book.lastChapter }}
@@ -157,6 +228,12 @@ onMounted(load);
                 v-if="chapters.length"
                 @click="openReader(0)"
               >从第一章开始</el-button>
+              <el-button v-if="canCache" @click="openCacheDialog">
+                <template v-if="cacheRunning">
+                  缓存中 {{ jobPercent(cacheJob) }}%
+                </template>
+                <template v-else>缓存</template>
+              </el-button>
             </div>
           </div>
         </section>
@@ -203,6 +280,45 @@ onMounted(load);
         </section>
       </div>
     </div>
+
+    <!-- 缓存对话框 -->
+    <el-dialog
+      v-model="cacheDialog"
+      :title="`缓存《${book?.name || ''}》`"
+      width="420px"
+    >
+      <div class="cache-info">
+        <span>
+          已缓存 {{ cacheStatus?.cachedChapters ?? 0 }}
+          <template v-if="cacheStatus?.totalChapters">
+            / {{ cacheStatus.totalChapters }}
+          </template>
+          章 · {{ formatBytes(cacheStatus?.size ?? 0) }}
+        </span>
+      </div>
+
+      <el-radio-group v-model="cacheScope" :disabled="cacheRunning">
+        <el-radio :value="CacheScope.Remaining">从阅读位置缓存到结尾</el-radio>
+        <el-radio :value="CacheScope.All">缓存整本</el-radio>
+        <el-radio :value="CacheScope.Missing">只补缺失章节</el-radio>
+      </el-radio-group>
+
+      <div v-if="cacheRunning" class="cache-progress">
+        <el-progress
+          :percentage="jobPercent(cacheJob)"
+          :stroke-width="6"
+        />
+        <div class="cache-current">{{ cacheJob?.message }}</div>
+      </div>
+
+      <template #footer>
+        <el-button @click="cacheDialog = false">关闭</el-button>
+        <el-button v-if="cacheRunning" type="danger" plain @click="cancelCache">
+          取消缓存
+        </el-button>
+        <el-button v-else type="primary" @click="startCache">开始缓存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -354,6 +470,10 @@ onMounted(load);
   flex-wrap: wrap;
   gap: 6px;
 }
+.label.cached {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
 .label {
   padding: 1px 8px;
   border-radius: 10px;
@@ -484,5 +604,23 @@ onMounted(load);
   text-align: center;
   font-size: 13px;
   color: rgba(0, 0, 0, 0.42);
+}
+
+/* ---- 缓存对话框 ---- */
+.cache-info {
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.55);
+}
+.cache-progress {
+  margin-top: 14px;
+}
+.cache-current {
+  margin-top: 6px;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

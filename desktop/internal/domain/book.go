@@ -78,6 +78,9 @@ type Book struct {
 	BookURL    string     `json:"bookUrl"`    // 网络书详情页 URL；本地书为文件绝对路径
 	GroupID    int64      `json:"groupId"`    // 所属分组，0 表示未分组
 	Order      int        `json:"order"`      // 分组内排序号，越小越靠前
+	// Variable 是书源在列表页 @put 出来的变量（JSON 对象串）。
+	// 网络书的目录/正文地址常依赖它，丢失会导致请求参数为空、目录拉不到。
+	Variable string `json:"variable,omitempty"`
 
 	TotalChapters int    `json:"totalChapters"` // 章节总数
 	LastChapter   string `json:"lastChapter"`   // 最新章节标题（用于书架展示"更新到"）

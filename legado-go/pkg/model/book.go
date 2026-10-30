@@ -9,6 +9,29 @@ import (
 	"github.com/legado/legado-go/pkg/util"
 )
 
+// RuleDataInterface 是规则引擎读写变量的落点（对齐 legado 的 RuleDataInterface）。
+//
+// 引擎在解析列表项、详情页、目录、正文时会切换这个落点：搜索列表必须让
+// @put 落到「当前这一条 SearchBook」上，而不是共用的临时容器，否则同一页的
+// 多条结果会互相覆盖，变量也带不到随后的目录/正文请求里。
+// *VariableHolder 与所有内嵌它的实体（Book / SearchBook / BookChapter / RuleData）都满足。
+type RuleDataInterface interface {
+	PutVariable(key, value string)
+	GetVariable(key string) string
+	DelVariable(key string)
+	ToJSON() string
+	LoadJSON(s string)
+}
+
+// 编译期断言：常用实体都能当变量容器用。
+var (
+	_ RuleDataInterface = (*VariableHolder)(nil)
+	_ RuleDataInterface = (*Book)(nil)
+	_ RuleDataInterface = (*SearchBook)(nil)
+	_ RuleDataInterface = (*BookChapter)(nil)
+	_ RuleDataInterface = (*RuleData)(nil)
+)
+
 // VariableHolder 变量容器（对齐 RuleDataInterface）
 type VariableHolder struct {
 	mu   sync.RWMutex
@@ -120,8 +143,14 @@ func NewBook() *Book {
 
 func (b *Book) GetReverseToc() bool { return b.ReverseToc }
 
-// IsWebFile 是否为文件型书籍（下载站）
-func (b *Book) IsWebFile() bool { return b.Type == BookTypeFile }
+// IsWebFile 是否为文件型书籍（下载站）。对齐 legado 的 `type and BookType.webFile`。
+func (b *Book) IsWebFile() bool { return b.Type&BookFlagWebFile != 0 }
+
+// SetSourceType 按书源类型重设 Type（对齐 WebBook 里的
+// removeAllBookType() + addType(source.getBookType())）
+func (b *Book) SetSourceType(sourceType int) {
+	b.Type = SourceTypeToBookType(sourceType)
+}
 
 // BaseList 供列表规则统一访问
 type BookListRule interface {

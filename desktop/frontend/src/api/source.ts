@@ -58,12 +58,19 @@ export const sourceApi = {
    *
    * name/author 一定要传：书源的详情页规则可能取不到书名（改版、需登录等），
    * 后端会拿列表页这两个值兜底，否则落库时会因为「书名不能为空」失败。
+   *
+   * variable 同样是列表页的产物（书源 @put 的变量，JSON 对象串）：
+   * 目录/正文地址里的 @get 靠它取值，漏传就会请求到 "…/book//volumes" 这种空参数地址。
    */
   addToShelf: (
     sourceId: number,
     bookUrl: string,
     name = "",
     author = "",
+    variable = "",
     groupId = 0,
-  ) => call(binding.AddToShelf(sourceId, bookUrl, name, author, groupId)),
+  ) =>
+    call(
+      binding.AddToShelf(sourceId, bookUrl, name, author, variable, groupId),
+    ),
 };

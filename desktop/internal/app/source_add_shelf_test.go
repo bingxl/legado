@@ -47,11 +47,13 @@ func (stubChapters) ReplaceAll(context.Context, int64, []*domain.BookChapter) er
 // 引擎的 analyzeBookInfo 在规则为空时保留 book 上已有的值，这里照此行为实现。
 type stubFetcher struct {
 	port.SourceFetcher
-	seenName string
+	seenName     string
+	seenVariable string
 }
 
 func (f *stubFetcher) GetBookInfo(_ context.Context, _ *domain.BookSource, b *domain.Book) (*domain.Book, []*domain.BookChapter, error) {
 	f.seenName = b.Name
+	f.seenVariable = b.Variable
 	return b, []*domain.BookChapter{{Index: 0, Title: "第一章"}}, nil
 }
 
@@ -70,7 +72,7 @@ func TestAddToShelfKeepsListName(t *testing.T) {
 	fetcher := &stubFetcher{}
 	svc := newTestSourceService(books, fetcher)
 
-	brief, err := svc.AddToShelf(context.Background(), 20, "https://example.com/book/1", " 转生史莱姆 ", "伏濑", 0)
+	brief, err := svc.AddToShelf(context.Background(), 20, "https://example.com/book/1", " 转生史莱姆 ", "伏濑", "", 0)
 	if err != nil {
 		t.Fatalf("AddToShelf 出错: %v", err)
 	}
@@ -90,7 +92,7 @@ func TestAddToShelfWithoutAnyName(t *testing.T) {
 	books := &stubBooks{}
 	svc := newTestSourceService(books, &stubFetcher{})
 
-	_, err := svc.AddToShelf(context.Background(), 20, "https://example.com/book/2", "", "", 0)
+	_, err := svc.AddToShelf(context.Background(), 20, "https://example.com/book/2", "", "", "", 0)
 	if err == nil {
 		t.Fatal("书名为空时应当报错")
 	}
@@ -99,5 +101,24 @@ func TestAddToShelfWithoutAnyName(t *testing.T) {
 	}
 	if books.created != nil {
 		t.Fatal("不应落库")
+	}
+}
+
+// 列表页 @put 出来的变量要一路带到书籍上：目录/正文规则里的 @get 靠它取值，
+// 丢了就会请求到 "…/book//volumes" 这种空参数地址（17k小说 的典型症状）。
+func TestAddToShelfKeepsListVariable(t *testing.T) {
+	books := &stubBooks{}
+	fetcher := &stubFetcher{}
+	svc := newTestSourceService(books, fetcher)
+
+	vars := `{"book":"12345"}`
+	if _, err := svc.AddToShelf(context.Background(), 20, "https://example.com/book/3", "书名", "作者", vars, 0); err != nil {
+		t.Fatalf("AddToShelf 出错: %v", err)
+	}
+	if fetcher.seenVariable != vars {
+		t.Fatalf("变量没有传给抓取器，got %q", fetcher.seenVariable)
+	}
+	if books.created == nil || books.created.Variable != vars {
+		t.Fatalf("变量没有落库: %+v", books.created)
 	}
 }

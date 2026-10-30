@@ -121,6 +121,76 @@ func NodeOwnText(n *html.Node) string {
 	return sb.String()
 }
 
+// blockTags jsoup 视为块级、在 text() 里需要补空格的标签。
+// jsoup 的 `Element.text()` 会折叠空白并 trim，同时块级元素之间补一个空格；
+// 少了这一步，`<li> A1 </li>` 会取到 " A1 "，章节名带换行缩进、去重键失真。
+var blockTags = map[string]bool{
+	"address": true, "article": true, "aside": true, "blockquote": true,
+	"br": true, "dd": true, "div": true, "dl": true, "dt": true,
+	"fieldset": true, "figcaption": true, "figure": true, "footer": true,
+	"form": true, "h1": true, "h2": true, "h3": true, "h4": true, "h5": true,
+	"h6": true, "header": true, "hr": true, "li": true, "main": true,
+	"nav": true, "ol": true, "p": true, "pre": true, "section": true,
+	"table": true, "tbody": true, "td": true, "tfoot": true, "th": true,
+	"thead": true, "tr": true, "ul": true,
+}
+
+// NodeTextNorm 对齐 jsoup `Element.text()`：块级边界补空格、折叠空白、trim。
+// 这是 `@text` / JS `element.text()` 的取值口径，`data()` 仍走 NodeText。
+func NodeTextNorm(n *html.Node) string {
+	if n == nil {
+		return ""
+	}
+	var sb strings.Builder
+	var walk func(*html.Node)
+	walk = func(x *html.Node) {
+		if x.Type == html.TextNode {
+			sb.WriteString(x.Data)
+			return
+		}
+		block := x.Type == html.ElementNode && blockTags[strings.ToLower(x.Data)]
+		if block {
+			sb.WriteByte(' ')
+		}
+		for c := x.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+		if block {
+			sb.WriteByte(' ')
+		}
+	}
+	walk(n)
+	return collapseSpace(sb.String())
+}
+
+// NodeOwnTextNorm 对齐 jsoup `Element.ownText()`：只取直接文本子节点，
+// 折叠空白并 trim（`<br>` 视作一个空格）。
+func NodeOwnTextNorm(n *html.Node) string {
+	if n == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		switch c.Type {
+		case html.TextNode:
+			sb.WriteString(c.Data)
+		case html.ElementNode:
+			if strings.EqualFold(c.Data, "br") {
+				sb.WriteByte(' ')
+			}
+		}
+	}
+	return collapseSpace(sb.String())
+}
+
+// collapseSpace 把连续空白（含 &nbsp;）折叠成单个空格并 trim
+func collapseSpace(s string) string {
+	if s == "" {
+		return ""
+	}
+	return strings.Join(strings.Fields(s), " ")
+}
+
 // NodeTextNodes 直接文本子节点列表（已 trim，去空）
 func NodeTextNodes(n *html.Node) []string {
 	var out []string

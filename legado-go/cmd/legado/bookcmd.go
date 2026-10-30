@@ -122,7 +122,12 @@ func cmdContent(args []string) {
 		failf("章节下标越界，目录共 %d 章", len(chapters))
 	}
 	chapter := chapters[*index]
-	content, err := e.GetContent(g.source, book, chapter)
+	// 下一章地址用于正文分页的刹车判定，不传会让「下一页」规则误把下一章拼进来
+	next := ""
+	if *index+1 < len(chapters) {
+		next = chapters[*index+1].Url
+	}
+	content, err := e.GetContent(g.source, book, chapter, next)
 	if err != nil {
 		failErr("获取正文", err)
 	}

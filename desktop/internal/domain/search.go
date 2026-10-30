@@ -12,6 +12,10 @@ type SearchResult struct {
 	OriginName  string `json:"originName"`  // 来源书源名称
 	LastChapter string `json:"lastChapter"` // 最新章节
 	Kind        string `json:"kind"`        // 源站点标注的类型
+	// Variable 是书源规则在列表页 @put 出来的变量（JSON 对象串）。
+	// 有些书源的目录/正文地址要靠它拼（"…/book/@get:{book}/volumes"），
+	// 丢掉就会请求到 book//volumes 这种空参数地址，所以必须一路带到书籍上。
+	Variable string `json:"variable,omitempty"`
 }
 
 // ToBook 将搜索结果转换为待入库的书籍实体。
@@ -27,6 +31,7 @@ func (r *SearchResult) ToBook() *Book {
 		Origin:      r.Origin,
 		BookURL:     r.BookURL,
 		LastChapter: r.LastChapter,
+		Variable:    r.Variable,
 	}
 }
 

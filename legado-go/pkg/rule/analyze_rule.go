@@ -15,10 +15,12 @@ import (
 
 // AnalyzeRule 规则引擎总入口（对齐 legado model/analyzeRule/AnalyzeRule.kt）
 type AnalyzeRule struct {
-	Source   *model.BookSource
-	Book     *model.Book
-	Chapter  *model.BookChapter
-	RuleData *model.RuleData
+	Source  *model.BookSource
+	Book    *model.Book
+	Chapter *model.BookChapter
+	// RuleData 是 @put 的落点（对齐 Kotlin 的 ruleData）。
+	// 解析列表项时会被临时切换到当前这一条 SearchBook，见 webbook.getSearchItem。
+	RuleData model.RuleDataInterface
 
 	content        any
 	baseUrl        string
@@ -26,6 +28,9 @@ type AnalyzeRule struct {
 	nextChapterUrl string
 	isJSON         bool
 	isRegex        bool
+	// InPreUpdateJs 当前是否在 preUpdateJs 里执行（java.reGetBook /
+	// java.refreshTocUrl 只允许在这个阶段调用）
+	InPreUpdateJs bool
 
 	nodes       []*html.Node
 	nodesParsed bool
@@ -136,7 +141,13 @@ func (ar *AnalyzeRule) SetNextChapterUrl(u string) *AnalyzeRule {
 	return ar
 }
 
-func (ar *AnalyzeRule) SetRuleData(d *model.RuleData) *AnalyzeRule {
+// SetRuleData 切换变量落点（对齐 Kotlin 的 setRuleData）。
+// 传 nil 表示不落任何容器，此时 @put 退回到 ar.vars。
+func (ar *AnalyzeRule) SetRuleData(d model.RuleDataInterface) *AnalyzeRule {
+	if d == nil {
+		ar.RuleData = nil
+		return ar
+	}
 	ar.RuleData = d
 	return ar
 }
@@ -567,19 +578,10 @@ func (ar *AnalyzeRule) getStringEx(list []*SourceRule, mContent any, isUrl, unes
 	if result == nil {
 		result = ""
 	}
-	str := ""
-	switch t := result.(type) {
-	case []any:
-		if len(t) > 0 {
-			str = JsToString(t[0])
-		}
-	case []string:
-		if len(t) > 0 {
-			str = t[0]
-		}
-	default:
-		str = JsToString(result)
-	}
+	// 对齐 Kotlin `result.toString()`：JS/规则链返回 List 时得到 Java 的
+	// `[a, b]` 形式，而不是首元素。与 App 行为一致，避免"Go 里能跑、
+	// legado 里跑不通"的反向不兼容。
+	str := listToString(result)
 	if unescape && strings.Contains(str, "&") {
 		str = util.UnescapeHtml4(str)
 	}
@@ -766,6 +768,15 @@ func (ar *AnalyzeRule) toRuleList(rule any, allInOne bool) []*SourceRule {
 // —— JS ——
 
 func (ar *AnalyzeRule) evalJS(jsStr string, result any) any {
+	v, err := ar.evalJSRaw(jsStr, result)
+	if err != nil {
+		ar.log("JS 执行出错: " + err.Error())
+		return nil
+	}
+	return v
+}
+
+func (ar *AnalyzeRule) evalJSRaw(jsStr string, result any) (any, error) {
 	b := &js.Bindings{
 		Source:         ar.Source,
 		Book:           ar.Book,
@@ -775,17 +786,25 @@ func (ar *AnalyzeRule) evalJS(jsStr string, result any) any {
 		Src:            unwrapNative(ar.content),
 		NextChapterUrl: ar.nextChapterUrl,
 		Vars:           ar,
+		InPreUpdateJs:  ar.InPreUpdateJs,
 	}
 	if ar.Chapter != nil {
 		b.Title = ar.Chapter.Title
 	}
 	v, err := js.DefaultEngine().Eval(jsStr, b)
 	if err != nil {
-		ar.log("JS 执行出错: " + err.Error())
-		return nil
+		return nil, err
 	}
 	// JS 返回的对象需要标记为 NativeObject（对应 Rhino 的 NativeObject）
-	return wrapNative(v)
+	return wrapNative(v), nil
+}
+
+// EvalJSErr 以当前上下文执行 JS，保留错误（preUpdateJs 失败要中断目录抓取）
+func (ar *AnalyzeRule) EvalJSErr(jsStr string) (any, error) {
+	if ar.content == nil {
+		ar.SetContent("")
+	}
+	return ar.evalJSRaw(jsStr, ar.content)
 }
 
 // toJSResult 把中间结果转成 JS 友好形式
@@ -827,6 +846,29 @@ func (ar *AnalyzeRule) log(msg string) {
 }
 
 // —— 辅助 ——
+
+// listToString 对齐 Java 的 List.toString()：`[a, b]`，null 元素记为 "null"。
+// legado 的 getString 最后一步是 `result.toString()`，JS 返回数组时就是这个形状。
+func listToString(v any) string {
+	switch t := v.(type) {
+	case []any:
+		parts := make([]string, 0, len(t))
+		for _, x := range t {
+			switch y := x.(type) {
+			case nil:
+				parts = append(parts, "null")
+			case []any:
+				parts = append(parts, listToString(y))
+			default:
+				parts = append(parts, JsToString(y))
+			}
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	case []string:
+		return "[" + strings.Join(t, ", ") + "]"
+	}
+	return JsToString(v)
+}
 
 func isJSONString(s string) bool {
 	t := strings.TrimSpace(s)

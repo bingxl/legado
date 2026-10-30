@@ -28,6 +28,11 @@ type Bindings struct {
 	Extra          map[string]any
 	// Vars 变量读写（java.put/java.get），由 AnalyzeRule 提供
 	Vars VarStore
+	// InPreUpdateJs 是否在 preUpdateJs 阶段执行（限制 reGetBook/refreshTocUrl）
+	InPreUpdateJs bool
+	// GInt 跨调用累加的全局计数（formatJs 的 `gInt++` 依赖它）。
+	// 调用后会把脚本改写的值写回指针。
+	GInt *int
 }
 
 // Engine JS 引擎：按书源隔离运行时 + 脚本编译缓存
@@ -141,6 +146,9 @@ func (e *Engine) Eval(jsStr string, b *Bindings) (out any, err error) {
 			return
 		}
 		if vm != nil {
+			// goja 的 Interrupt 标记是粘性的：被中断过的 vm 回池后，
+			// 后续 RunProgram 会直接返回"超时"，整个池子从此废掉。
+			vm.ClearInterrupt()
 			p.Put(vm)
 		}
 	}()
@@ -155,7 +163,26 @@ func (e *Engine) Eval(jsStr string, b *Bindings) (out any, err error) {
 	if rerr != nil {
 		return nil, fmt.Errorf("JS 执行失败: %w", rerr)
 	}
+	if b != nil && b.GInt != nil {
+		*b.GInt = exportInt(vm.Get("gInt"))
+	}
 	return exportValue(v), nil
+}
+
+// exportInt 把 JS 数字转成 int（gInt 这类计数用）
+func exportInt(v goja.Value) int {
+	if v == nil {
+		return 0
+	}
+	switch t := v.Export().(type) {
+	case int64:
+		return int(t)
+	case int:
+		return t
+	case float64:
+		return int(t)
+	}
+	return 0
 }
 
 var errTimeout = fmt.Errorf("JS 执行超时")
@@ -240,7 +267,11 @@ func inject(vm *goja.Runtime, b *Bindings) {
 		g.Set("speakText", vm.ToValue(b.SpeakText))
 	}
 	g.Set("speakSpeed", vm.ToValue(b.SpeakSpeed))
-	g.Set("gInt", vm.ToValue(0))
+	if b.GInt != nil {
+		g.Set("gInt", vm.ToValue(*b.GInt))
+	} else {
+		g.Set("gInt", vm.ToValue(0))
+	}
 	if b.Extra != nil {
 		for k, v := range b.Extra {
 			g.Set(k, toJSValue(vm, v))

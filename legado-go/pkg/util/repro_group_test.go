@@ -11,6 +11,10 @@ import (
 // legado 书源里真实存在，如 ESJ Zone 的
 // `div.forum-content.mt-3,div[class =d_post_content j_d_post_content]`），
 // 不能让整条规则静默返回 0 个节点。
+//
+// 现在 `[class =a b]` 这种「裸值带空格/数字/斜杠」的写法会在编译前补引号，
+// 与 jsoup 的解析结果一致（整串作为一个值做全等匹配），因此不再报错；
+// 仍然要保证真正非法的分组被上报、且不牵连合法分组。
 func TestSelectGroupToleratesBadSelector(t *testing.T) {
 	doc := parse(t, `<html><body>
 	  <div class="forum-content mt-3"><p>正文A</p><p>正文B</p></div>
@@ -29,6 +33,17 @@ func TestSelectGroupToleratesBadSelector(t *testing.T) {
 	}
 	if NodeAttr(got[0], "class") != "forum-content mt-3" {
 		t.Fatalf("命中节点不对: %v", NodeAttr(got[0], "class"))
+	}
+	// 裸值补引号后是合法选择器，不应再上报错误
+	if len(reported) != 0 {
+		t.Fatalf("jsoup 兼容写法不应上报错误，实际 %v", reported)
+	}
+
+	// 真正非法的分组仍要上报，且不影响合法分组
+	reported = nil
+	got = SelectAll([]*html.Node{doc}, `div.other,div::bogus`)
+	if len(got) != 1 || NodeAttr(got[0], "class") != "other" {
+		t.Fatalf("非法分组不应牵连合法分组，实际 %d", len(got))
 	}
 	if len(reported) != 1 {
 		t.Fatalf("非法分组应上报 1 次，实际 %d: %v", len(reported), reported)

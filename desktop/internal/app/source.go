@@ -422,7 +422,10 @@ func (s *SourceService) SearchAll(ctx context.Context, keyword string, page int)
 // name/author 是列表页（搜索/发现）已经解析出来的信息，先填进 book 再抓详情：
 // 详情规则取到值会覆盖它（见 webbook.analyzeBookInfo：规则为空时保留旧值），
 // 取不到时也不至于因为书名为空而落库失败。
-func (s *SourceService) AddToShelf(ctx context.Context, sourceID int64, bookURL, name, author string, groupID int64) (dto.BookBrief, error) {
+//
+// variable 同样是列表页的产物：书源用 @put 存下的变量（JSON 对象串），
+// 目录/正文地址里的 @get 依赖它，丢了就会请求到参数为空的地址。
+func (s *SourceService) AddToShelf(ctx context.Context, sourceID int64, bookURL, name, author, variable string, groupID int64) (dto.BookBrief, error) {
 	if s.fetcher == nil {
 		return dto.BookBrief{}, fmt.Errorf("%w: 未配置书源抓取器", domain.ErrNotConfigured)
 	}
@@ -437,12 +440,13 @@ func (s *SourceService) AddToShelf(ctx context.Context, sourceID int64, bookURL,
 	}
 
 	book := &domain.Book{
-		Name:    strings.TrimSpace(name),
-		Author:  strings.TrimSpace(author),
-		Origin:  src.URL,
-		BookURL: bookURL,
-		Kind:    domain.BookKindWeb,
-		GroupID: groupID,
+		Name:     strings.TrimSpace(name),
+		Author:   strings.TrimSpace(author),
+		Origin:   src.URL,
+		BookURL:  bookURL,
+		Kind:     domain.BookKindWeb,
+		Variable: variable,
+		GroupID:  groupID,
 	}
 	book, chapters, err := s.fetcher.GetBookInfo(ctx, src, book)
 	if err != nil {

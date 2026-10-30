@@ -407,7 +407,11 @@ func probeContent(src *model.BookSource, book *model.Book, chapters []*model.Boo
 	}
 	var firstErr error
 	for i := 0; i < n; i++ {
-		c, err := webbook.GetContent(src, book, chapters[i], "")
+		next := ""
+		if i+1 < len(chapters) {
+			next = chapters[i+1].Url
+		}
+		c, err := webbook.GetContent(src, book, chapters[i], next)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("第 %d 章: %w", i+1, err)

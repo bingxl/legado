@@ -22,18 +22,19 @@ func TestParseExploreKinds(t *testing.T) {
 		t.Fatalf("按行解析错误: %#v", k)
 	}
 
-	// 裸地址行：整段是**分类名**而不是地址（与 Legado 原版一致），
-	// 地址为空即分组标题，桌面上无法点击，直接丢弃。
-	if k := ParseExploreKinds("/only"); len(k) != 0 {
-		t.Fatalf("裸地址行应视为无地址的分组标题被丢弃, 得到 %#v", k)
+	// 裸地址行：整段是**分类名**而不是地址（与 Legado 原版一致：
+	// `kindCfg.getOrNull(1)` 为空 → url 为空），保留为分组标题供 UI 分组，
+	// 但选默认地址时必须跳过它（FirstExploreURL / webbook.firstExploreUrl）。
+	if k := ParseExploreKinds("/only"); len(k) != 1 || !k[0].IsGroup() || k[0].Title != "/only" {
+		t.Fatalf("裸地址行应保留为分组标题, 得到 %#v", k)
 	}
 
-	// && 分隔与分组标题混排
+	// && 分隔与分组标题混排：分组标题（无地址）保留，其余照常解析
 	mixed := "{'title':'总榜','url':''}&&'总点击榜'::/rank/allvisit_{{page}}&&'最近更新'::/rank/lastupdate_{{page}}"
-	if k := ParseExploreKinds(mixed); len(k) != 2 {
+	if k := ParseExploreKinds(mixed); len(k) != 3 {
 		t.Fatalf("&& 分隔解析错误: %#v", k)
-	} else if k[1].Url != "/rank/lastupdate_{{page}}" {
-		t.Fatalf("第二段解析错误: %#v", k[1])
+	} else if !k[0].IsGroup() || k[2].Url != "/rank/lastupdate_{{page}}" {
+		t.Fatalf("分组标题/末段解析错误: %#v", k)
 	}
 
 	// 空

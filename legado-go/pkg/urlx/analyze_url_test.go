@@ -1,6 +1,10 @@
 package urlx
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 // 回归：exploreUrl 里常见的分页写法 `/allbook{{page === 1 ? ” : '_15155_' + page}}.html`
 // 在 page=1 时必须把整段 {{}} 去掉（狼人小说 exploreUrl）。
@@ -87,5 +91,33 @@ func TestPageListInUrl(t *testing.T) {
 		if au.URLNoQuery != c.want {
 			t.Errorf("page=%d: 期望 %q，实际 %q", c.page, c.want, au.URLNoQuery)
 		}
+	}
+}
+
+// 回归：URL 选项里的 type（音频/图片）应返回 hex 字符串，
+// 对齐 legado `StrResponse(url, HexUtil.encodeHexStr(getByteArrayAwait()))`。
+// 漏掉这条，漫画/音频源会拿到乱码或空。
+func TestUrlOptionTypeReturnsHex(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte{0x00, 0x01, 0xff})
+	}))
+	defer srv.Close()
+
+	au := New(Options{Url: srv.URL + `/a.bin,{"type":"audio"}`})
+	resp, err := au.GetStrResponse()
+	if err != nil {
+		t.Fatalf("GetStrResponse 出错: %v", err)
+	}
+	if resp.Body != "0001ff" {
+		t.Fatalf("type 非空时应返回 hex，实际 %q", resp.Body)
+	}
+	// 不带 type 时仍是原始文本
+	au2 := New(Options{Url: srv.URL + `/a.bin`})
+	resp2, err := au2.GetStrResponse()
+	if err != nil {
+		t.Fatalf("GetStrResponse 出错: %v", err)
+	}
+	if len(resp2.Bytes) != 3 {
+		t.Fatalf("原始字节数应为 3，实际 %d", len(resp2.Bytes))
 	}
 }

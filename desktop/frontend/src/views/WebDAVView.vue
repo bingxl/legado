@@ -6,6 +6,7 @@ import { webdavApi } from "@/api/webdav";
 import { systemApi } from "@/api/system";
 import { onWebDAVSyncProgress } from "@/api/events";
 import type { ProgressPayload } from "@/api/events";
+import WebDAVImportPanel from "@/components/WebDAVImportPanel.vue";
 import type { WebDAVConfigView, WebDAVEntryView } from "@/types";
 
 const config = ref<WebDAVConfigView>({
@@ -143,8 +144,7 @@ onMounted(() => {
         </el-form>
       </el-tab-pane>
 
-      <el-tab-pane label="备份文件" name="files">
-        <div class="toolbar">
+      <el-tab-pane label="备份文件" name="files">        <div class="toolbar">
           <el-button type="primary" @click="uploadBackup">上传备份</el-button>
           <el-button @click="list" :loading="loading">刷新</el-button>
           <div class="spacer" />
@@ -167,6 +167,10 @@ onMounted(() => {
             <el-empty description="还没有备份，先上传一个" />
           </template>
         </el-table>
+      </el-tab-pane>
+
+      <el-tab-pane label="导入书籍" name="import" lazy>
+        <WebDAVImportPanel :configured="config.configured" />
       </el-tab-pane>
     </el-tabs>
   </div>

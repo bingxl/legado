@@ -183,7 +183,7 @@ func getResultLast(nodes []*html.Node, lastRule string) []string {
 	switch kw {
 	case "text":
 		for _, n := range nodes {
-			if t := util.NodeText(n); t != "" {
+			if t := util.NodeTextNorm(n); t != "" {
 				out = append(out, t)
 			}
 		}
@@ -195,7 +195,7 @@ func getResultLast(nodes []*html.Node, lastRule string) []string {
 		}
 	case "ownText":
 		for _, n := range nodes {
-			if t := util.NodeOwnText(n); t != "" {
+			if t := util.NodeOwnTextNorm(n); t != "" {
 				out = append(out, t)
 			}
 		}
@@ -422,7 +422,7 @@ func byID(n *html.Node, id string) []*html.Node {
 func byOwnText(n *html.Node, text string) []*html.Node {
 	out := []*html.Node{}
 	for _, d := range util.Descendants(n) {
-		if strings.Contains(util.NodeOwnText(d), text) {
+		if strings.Contains(util.NodeOwnTextNorm(d), text) {
 			out = append(out, d)
 		}
 	}
@@ -557,10 +557,9 @@ func parseIndexItems(inner string) ([]indexItem, bool) {
 		}
 		items = append(items, indexItem{isRange: true, start: start, end: end, step: step})
 	}
-	// 反转还原书写顺序
-	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
-		items[i], items[j] = items[j], items[i]
-	}
+	// 这里**不能**再反转：本函数是按书写顺序（从左往右）收集的，
+	// elementsSingle 也是正向遍历。Kotlin 侧是「从右往左扫描 + 逆序压栈 +
+	// downTo 反向遍历」两次反转相互抵消，净效果同样是书写顺序。
 	return items, true
 }
 
@@ -578,19 +577,16 @@ func parseOptionalInt(s string) *int {
 
 // —— 组合结果 ——
 
+// mergeStringLists 合并多段结果。
+// `%%` 按**第 1 段**的长度为界（对齐 Kotlin `for (i in results[0].indices)`），
+// 后面更长的段会被截断，不会多出元素。
 func mergeStringLists(typ string, lists [][]string) []string {
 	out := []string{}
 	if len(lists) == 0 {
 		return out
 	}
 	if typ == "%%" {
-		maxLen := 0
-		for _, l := range lists {
-			if len(l) > maxLen {
-				maxLen = len(l)
-			}
-		}
-		for i := 0; i < maxLen; i++ {
+		for i := range lists[0] {
 			for _, l := range lists {
 				if i < len(l) {
 					out = append(out, l[i])
@@ -611,13 +607,7 @@ func mergeNodeLists(typ string, lists [][]*html.Node) []*html.Node {
 		return out
 	}
 	if typ == "%%" {
-		maxLen := 0
-		for _, l := range lists {
-			if len(l) > maxLen {
-				maxLen = len(l)
-			}
-		}
-		for i := 0; i < maxLen; i++ {
+		for i := range lists[0] {
 			for _, l := range lists {
 				if i < len(l) {
 					out = append(out, l[i])

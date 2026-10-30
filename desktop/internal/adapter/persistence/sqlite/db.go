@@ -11,6 +11,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"strings"
 
 	// 注册 "sqlite" database/sql 驱动（纯 Go）。
 	_ "modernc.org/sqlite"
@@ -23,7 +24,8 @@ var migrationsFS embed.FS
 
 // DB 封装 *sql.DB，并提供全部仓储实现。
 type DB struct {
-	db *sql.DB
+	db  *sql.DB
+	dsn string
 }
 
 // Open 打开（必要时创建）数据库文件，并完成迁移。
@@ -31,7 +33,7 @@ type DB struct {
 func Open(dsn string) (*DB, error) {
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("打开数据库失败: %w", err)
+		return nil, fmt.Errorf("打开数据库 %q 失败: %w", dsn, err)
 	}
 
 	// SQLite 是本地文件库，写入竞争靠忙等而非连接池解决：
@@ -39,12 +41,29 @@ func Open(dsn string) (*DB, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	d := &DB{db: db}
+	d := &DB{db: db, dsn: dsn}
 	if err := d.migrate(context.Background()); err != nil {
 		db.Close()
-		return nil, err
+		// 把路径带进错误里：否则只剩一句 "unable to open database file"，
+		// 无法判断到底卡在哪个目录。
+		return nil, fmt.Errorf("初始化数据库 %q 失败: %w%s", dsn, err, cantOpenHint(err))
 	}
 	return d, nil
+}
+
+// cantOpenHint 为 SQLite 的 CANTOPEN（错误码 14）补充排查方向。
+//
+// 该错误几乎总是"进程无权在数据目录里建文件"，而非数据库损坏：SQLite 打开主库
+// 后还要创建 -wal / -shm 伴随文件，目录不可写就会在这里炸。Windows 上最常见的
+// 原因是 Defender 的「受控文件夹访问」拦截了新构建（哈希变化）且未被信任的 exe，
+// 导致写入 %LOCALAPPDATA% 等受保护目录被拒。
+func cantOpenHint(err error) string {
+	if err == nil || !strings.Contains(err.Error(), "unable to open database file") {
+		return ""
+	}
+	return "（提示：进程无法在该目录创建/写入文件。Windows 多为 Defender「受控文件夹访问」" +
+		"拦截了新构建的 exe：把它加入受控文件夹访问的允许应用列表，或用环境变量 " +
+		"LEGADO_DESKTOP_HOME 指向不受保护的目录。）"
 }
 
 // Close 关闭底层连接。

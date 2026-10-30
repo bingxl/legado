@@ -8,10 +8,13 @@ package main
 import (
 	"embed"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/adrg/xdg"
 
@@ -67,6 +70,8 @@ func run() error {
 	readerAPI := api.NewReaderAPI(biz.Reader)
 	sourceAPI := api.NewSourceAPI(biz.Source)
 	webdavAPI := api.NewWebDAVAPI(biz.WebDAV)
+	cacheAPI := api.NewCacheAPI(biz.Cache)
+	sourceDebugAPI := api.NewSourceDebugAPI(biz.SourceDebug)
 
 	wailsApp := application.New(application.Options{
 		Name:        "legado-desktop",
@@ -77,10 +82,18 @@ func run() error {
 			application.NewService(readerAPI),
 			application.NewService(sourceAPI),
 			application.NewService(webdavAPI),
+			application.NewService(cacheAPI),
+			application.NewService(sourceDebugAPI),
 			application.NewService(systemAPI),
 		},
 		Assets: application.AssetOptions{
 			Handler: assetHandler(root),
+		},
+		Windows: application.WindowsOptions{
+			// 不指定时 WebView2 会把用户数据目录放在 %APPDATA%\<exe 名>；
+			// Roaming 属于 Defender 受控文件夹访问的保护范围，改指临时目录更稳。
+			WebviewUserDataPath:   filepath.Join(os.TempDir(), "legado-desktop-webview"),
+			AdditionalBrowserArgs: webviewBrowserArgs(),
 		},
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
@@ -107,6 +120,23 @@ func run() error {
 	return wailsApp.Run()
 }
 
+// webviewBrowserArgs 返回传给 WebView2 的附加启动参数。
+//
+// 默认带 --disable-gpu：WebView2 Runtime 155 起，部分机器（Intel 核显 + 独显混合、
+// 或装了虚拟显示驱动的环境）GPU 进程初始化失败，CreateCoreWebView2Controller 会返回
+// 0x8000ffff（Catastrophic failure），Wails 直接 os.Exit，留下一个纯白窗口——
+// 表现像前端挂了，实际是 WebView 根本没挂到窗口上。
+// 参考 MicrosoftEdge/WebView2Feedback#5759。
+//
+// 需要 GPU 加速（WebGL / canvas 加速）时用 LEGADO_WEBVIEW_ARGS 覆盖，
+// 逗号分隔，会整体替换默认值，例如 LEGADO_WEBVIEW_ARGS=--disable-gpu-compositing。
+func webviewBrowserArgs() []string {
+	if v := os.Getenv("LEGADO_WEBVIEW_ARGS"); v != "" {
+		return strings.Split(v, ",")
+	}
+	return []string{"--disable-gpu"}
+}
+
 // assetHandler 组合前端静态资源与本地资源路由。
 //
 // 路由：
@@ -118,12 +148,43 @@ func run() error {
 // 前端因此可以用普通 <img src> / <iframe src> 访问本地资源，无需 base64 内联。
 func assetHandler(root string) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/", application.AssetFileServerFS(assets))
+	mux.Handle("/", spaHandler())
 	// http.FileServer 会自行规整路径，天然防御目录穿越。
 	mux.Handle("/local/", http.StripPrefix("/local/", http.FileServer(http.Dir(root))))
 	mux.HandleFunc("/raw/", serveRawFile)
 	mux.HandleFunc("/img/", serveRemoteImage)
 	return mux
+}
+
+// spaHandler 提供前端构建产物，并为前端路由补上 index.html 回退。
+//
+// Wails 的 AssetFileServerFS 只是纯静态服务：路径在 dist 里不存在就直接 404。
+// 而前端用的是 history 模式路由（/book/2、/reader/2 这类地址没有对应文件），
+// 一旦发生整页加载（F5 / Ctrl+R / 窗口重建），用户会看到白屏 404 且无法返回。
+// 这里把「无扩展名的 GET/HEAD 路径」统一回退到 index.html，交给前端路由解析。
+func spaHandler() http.Handler {
+	files := application.AssetFileServerFS(assets)
+	serveIndex := func(w http.ResponseWriter, r *http.Request) {
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = "/"
+		files.ServeHTTP(w, r2)
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			files.ServeHTTP(w, r)
+			return
+		}
+		// 带扩展名的是真实静态资源（.js/.css/.png…），找不到就该 404。
+		if p := path.Clean(r.URL.Path); p == "/" || path.Ext(p) != "" {
+			files.ServeHTTP(w, r)
+			return
+		}
+		if _, err := fs.Stat(assets, "frontend/dist"+path.Clean(r.URL.Path)); err != nil {
+			serveIndex(w, r)
+			return
+		}
+		files.ServeHTTP(w, r)
+	})
 }
 
 // serveRawFile 按绝对路径提供本地文件，供 PDF 阅读与本地图片预览使用。
@@ -143,5 +204,3 @@ func serveRawFile(w http.ResponseWriter, r *http.Request) {
 	}
 	http.ServeFile(w, r, path)
 }
-
-// dataDir 是应用数据目录：默认遵循 XDG 规范，可通过环境变量覆盖。

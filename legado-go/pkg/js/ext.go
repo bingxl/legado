@@ -44,11 +44,17 @@ type ConnectResult struct {
 // Hooks 由上层（AnalyzeUrl）注册，实现完整的 URL 规则支持
 var Hooks struct {
 	Ajax      func(src *model.BookSource, u string) string
-	AjaxAll   func(src *model.BookSource, urls []string) []string
+	AjaxAll   func(src *model.BookSource, urls []string) []*ConnectResult
 	Connect   func(src *model.BookSource, u string, headers map[string]string) *ConnectResult
 	WebView   func(src *model.BookSource, htmlStr, urlStr, jsStr string) string
 	GetCookie func(u string) string
 	SetCookie func(u, cookie string)
+	// ReGetBook / RefreshTocUrl 供 preUpdateJs 里的 java.reGetBook /
+	// java.refreshTocUrl 回调（实现放在 webbook，避免 js ↔ webbook 循环依赖）
+	ReGetBook     func(src *model.BookSource, book *model.Book) error
+	RefreshTocUrl func(src *model.BookSource, book *model.Book) error
+	// URLType 取 URL 规则里的 type 选项（java.downloadFile(content, url) 用）
+	URLType func(src *model.BookSource, u string) string
 }
 
 func Md5(s string) string {
@@ -102,12 +108,12 @@ func (e *ElementWrap) Object(vm *goja.Runtime) *goja.Object {
 		case "html", "outerHtml":
 			return vm.ToValue(util.Render(e.node))
 		case "text":
-			return vm.ToValue(util.NodeText(e.node))
+			return vm.ToValue(util.NodeTextNorm(e.node))
 		}
 		return vm.ToValue(util.NodeAttr(e.node, name))
 	})
-	o.Set("text", func(goja.FunctionCall) goja.Value { return vm.ToValue(util.NodeText(e.node)) })
-	o.Set("ownText", func(goja.FunctionCall) goja.Value { return vm.ToValue(util.NodeOwnText(e.node)) })
+	o.Set("text", func(goja.FunctionCall) goja.Value { return vm.ToValue(util.NodeTextNorm(e.node)) })
+	o.Set("ownText", func(goja.FunctionCall) goja.Value { return vm.ToValue(util.NodeOwnTextNorm(e.node)) })
 	o.Set("html", func(goja.FunctionCall) goja.Value { return vm.ToValue(util.InnerHTML(e.node)) })
 	o.Set("outerHtml", func(goja.FunctionCall) goja.Value { return vm.ToValue(util.Render(e.node)) })
 	o.Set("toString", func(goja.FunctionCall) goja.Value { return vm.ToValue(util.Render(e.node)) })
@@ -246,7 +252,7 @@ func elementsObject(vm *goja.Runtime, list []*ElementWrap) *goja.Object {
 	texts := func() string {
 		parts := make([]string, 0, len(list))
 		for _, e := range list {
-			if t := util.NodeText(e.node); t != "" {
+			if t := util.NodeTextNorm(e.node); t != "" {
 				parts = append(parts, t)
 			}
 		}
@@ -409,15 +415,28 @@ func newJavaObject(vm *goja.Runtime, b *Bindings) *goja.Object {
 		case []string:
 			urls = t
 		}
+		// legado 返回 Array<StrResponse>，书源里常见 `.map(it => it.body)`，
+		// 因此这里必须给出带 url/body/code 的对象，不能是裸字符串数组。
 		out := make([]any, 0, len(urls))
+		var results []*ConnectResult
 		if Hooks.AjaxAll != nil {
-			for _, r := range Hooks.AjaxAll(src, urls) {
-				out = append(out, r)
-			}
+			results = Hooks.AjaxAll(src, urls)
 		} else {
+			results = make([]*ConnectResult, 0, len(urls))
 			for _, u := range urls {
-				out = append(out, simpleGet(src, u, nil))
+				results = append(results, &ConnectResult{URL: u, Body: simpleGet(src, u, nil)})
 			}
+		}
+		for _, r := range results {
+			if r == nil {
+				out = append(out, goja.Null())
+				continue
+			}
+			obj := vm.NewObject()
+			obj.Set("url", vm.ToValue(r.URL))
+			obj.Set("body", vm.ToValue(r.Body))
+			obj.Set("code", vm.ToValue(r.Code))
+			out = append(out, obj)
 		}
 		return vm.ToValue(out)
 	})
@@ -453,8 +472,19 @@ func newJavaObject(vm *goja.Runtime, b *Bindings) *goja.Object {
 		obj.Set("body", vm.ToValue(simpleGet(src, u, headers)))
 		return obj
 	})
+	// java.get 有两个重载：1 参取变量、2 参发 HTTP GET（对齐 legado）。
+	// goja 的对象属性只能有一个实现，所以按参数个数分派。
+	// 早期分开注册两次，后注册的取变量版本把 HTTP 版本覆盖掉了，
+	// `java.get(url, headers)` 恒返回空。
 	set("get", func(call goja.FunctionCall) goja.Value {
-		return vm.ToValue(simpleGet(src, argURL(call, 0), argHeaders(call, 1)))
+		if len(call.Arguments) > 1 {
+			return vm.ToValue(simpleGet(src, argURL(call, 0), argHeaders(call, 1)))
+		}
+		k := fmt.Sprint(exportValue(call.Argument(0)))
+		if b.Vars != nil {
+			return vm.ToValue(b.Vars.Get(k))
+		}
+		return vm.ToValue("")
 	})
 	set("post", func(call goja.FunctionCall) goja.Value {
 		u := argURL(call, 0)
@@ -492,13 +522,6 @@ func newJavaObject(vm *goja.Runtime, b *Bindings) *goja.Object {
 			v = b.Vars.Put(k, v)
 		}
 		return vm.ToValue(v)
-	})
-	set("get", func(call goja.FunctionCall) goja.Value {
-		k := fmt.Sprint(exportValue(call.Argument(0)))
-		if b.Vars != nil {
-			return vm.ToValue(b.Vars.Get(k))
-		}
-		return vm.ToValue("")
 	})
 	set("getString", func(call goja.FunctionCall) goja.Value {
 		k := fmt.Sprint(exportValue(call.Argument(0)))
@@ -779,9 +802,18 @@ func newJavaObject(vm *goja.Runtime, b *Bindings) *goja.Object {
 		}
 		return vm.ToValue(util.DecodeBytes(b, cs))
 	})
+	// downloadFile 两个重载：1 参下载 URL、2 参把 hex 内容落到缓存文件
+	// （对齐 legado：2 参版本要求 URL 规则里带 type，返回相对 cache 的路径）
 	set("downloadFile", func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) > 1 {
+			return vm.ToValue(saveHexFile(src, fmt.Sprint(exportValue(call.Argument(0))),
+				fmt.Sprint(exportValue(call.Argument(1)))))
+		}
 		u := fmt.Sprint(exportValue(call.Argument(0)))
 		return vm.ToValue(downloadFile(src, u))
+	})
+	set("getTxtInFolder", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(readTxtInFolder(fmt.Sprint(exportValue(call.Argument(0)))))
 	})
 	set("cacheFile", func(call goja.FunctionCall) goja.Value {
 		u := fmt.Sprint(exportValue(call.Argument(0)))
@@ -872,7 +904,41 @@ func newJavaObject(vm *goja.Runtime, b *Bindings) *goja.Object {
 	set("toNumChapter", func(call goja.FunctionCall) goja.Value {
 		return vm.ToValue(fmt.Sprint(exportValue(call.Argument(0))))
 	})
+	// ---------- preUpdateJs 专用 ----------
+	// 对齐 AnalyzeRule.reGetBook / refreshTocUrl：只允许在 preUpdateJs 里调用。
+	set("reGetBook", func(goja.FunctionCall) goja.Value {
+		if err := requirePreUpdateJs(b); err != nil {
+			panic(vm.ToValue(err.Error()))
+		}
+		if b.Book == nil || src == nil || Hooks.ReGetBook == nil {
+			return goja.Undefined()
+		}
+		if err := Hooks.ReGetBook(src, b.Book); err != nil {
+			panic(vm.ToValue("reGetBook 失败: " + err.Error()))
+		}
+		return goja.Undefined()
+	})
+	set("refreshTocUrl", func(goja.FunctionCall) goja.Value {
+		if err := requirePreUpdateJs(b); err != nil {
+			panic(vm.ToValue(err.Error()))
+		}
+		if b.Book == nil || src == nil || Hooks.RefreshTocUrl == nil {
+			return goja.Undefined()
+		}
+		if err := Hooks.RefreshTocUrl(src, b.Book); err != nil {
+			panic(vm.ToValue("refreshTocUrl 失败: " + err.Error()))
+		}
+		return goja.Undefined()
+	})
 	return o
+}
+
+// requirePreUpdateJs 校验调用阶段（对齐 Kotlin 的 `if (!preUpdateJs) throw`）
+func requirePreUpdateJs(b *Bindings) error {
+	if b == nil || !b.InPreUpdateJs {
+		return fmt.Errorf("只能在 preUpdateJs 中调用")
+	}
+	return nil
 }
 
 // —— cookie / cache / source / book / chapter 对象 ——
@@ -1113,6 +1179,56 @@ func downloadFile(src *model.BookSource, u string) string {
 		return ""
 	}
 	return name
+}
+
+// saveHexFile 对齐 legado 的 downloadFile(content, url)：把 hex 内容写到
+// `<md5(url)>.<type>`，返回相对 cache 的路径；URL 规则没有 type 时返回空。
+func saveHexFile(src *model.BookSource, content, u string) string {
+	if Hooks.URLType == nil {
+		return ""
+	}
+	typ := Hooks.URLType(src, u)
+	if typ == "" {
+		return ""
+	}
+	raw, err := hex.DecodeString(strings.TrimSpace(content))
+	if err != nil && len(raw) == 0 {
+		return ""
+	}
+	_ = os.MkdirAll(FileRoot, 0o755)
+	name := Md5(u) + "." + typ
+	if err := os.WriteFile(filepath.Join(FileRoot, name), raw, 0o644); err != nil {
+		return ""
+	}
+	return "/" + name
+}
+
+// readTxtInFolder 对齐 legado 的 getTxtInFolder：把目录下所有文件按各自编码
+// 读出并以换行拼接，读完删除该目录。
+func readTxtInFolder(p string) string {
+	if strings.TrimSpace(p) == "" {
+		return ""
+	}
+	dir := safePath(p)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		sb.WriteString(util.DecodeBytes(b, util.DetectCharset("", b)))
+		sb.WriteString("\n")
+	}
+	// 与 Kotlin 一致：读完即清理，避免下次重复拼入旧内容
+	_ = os.RemoveAll(dir)
+	return strings.TrimSuffix(sb.String(), "\n")
 }
 
 func safePath(p string) string {

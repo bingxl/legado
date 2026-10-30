@@ -15,6 +15,20 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 import * as dto$0 from "../internal/app/dto/models.js";
 
 /**
+ * BookImportStatus 返回当前（或最近一次）导入任务的状态。
+ */
+export function BookImportStatus(): $CancellablePromise<dto$0.WebDAVImportJob> {
+    return $Call.ByID(607093235);
+}
+
+/**
+ * CancelBookImport 取消正在进行的导入任务。
+ */
+export function CancelBookImport(): $CancellablePromise<void> {
+    return $Call.ByID(124970207);
+}
+
+/**
  * Delete 删除远端文件。
  */
 export function Delete(relPath: string): $CancellablePromise<void> {
@@ -47,6 +61,24 @@ export function List(relPath: string): $CancellablePromise<dto$0.WebDAVEntryView
  */
 export function SaveConfig(url: string, username: string, password: string, rootPath: string, autoSync: boolean): $CancellablePromise<dto$0.WebDAVConfigView> {
     return $Call.ByID(3020848026, url, username, password, rootPath, autoSync);
+}
+
+/**
+ * ScanBooks 递归扫描远端目录下的书籍文件（txt / epub / pdf / zip / cbz 等）。
+ * 
+ * relPath 为空表示工作根目录。返回的 Path 相对工作根目录，可直接回传给 StartBookImport。
+ */
+export function ScanBooks(relPath: string): $CancellablePromise<dto$0.RemoteBookView[] | null> {
+    return $Call.ByID(3813822014, relPath);
+}
+
+/**
+ * StartBookImport 后台下载并导入所选文件/目录，立即返回任务快照。
+ * 
+ * 进度经 webdav:import:progress 事件推送；也可用 BookImportStatus 轮询兜底。
+ */
+export function StartBookImport(relPaths: string[] | null, groupID: number): $CancellablePromise<dto$0.WebDAVImportJob> {
+    return $Call.ByID(170012171, relPaths, groupID);
 }
 
 /**
