@@ -461,6 +461,198 @@ tasks:
       - sh: '[ -x "{{.ADB}}" ] || command -v adb'
         msg: "adb not found. Install the Android SDK platform-tools (or set ANDROID_HOME)"
 
+  update:device:
+    summary: Build and reinstall on a device, keeping app data (adb install -r)
+    desc: |
+      与 run:device 只差一条：这里用 `adb install -r -d` 覆盖安装，应用数据目录
+      （书架、书源、缓存、登录态）保留；run:device 先 uninstall，装成全新状态。
+
+      迭代测试用这个，省得每次重建都重新导书。要干净重装仍用 run:device。
+
+      DEVICE_ID=<serial> 指定设备；不传则取第一台非模拟器的在线设备。
+    deps:
+      - task: build
+        vars:
+          ARCH: arm64
+    cmds:
+      - task: assemble:apk
+      - |
+        DEVICE="${DEVICE_ID:-}"
+        if [ -z "$DEVICE" ]; then
+          DEVICE=$("{{.ADB}}" devices | awk 'NR > 1 && $2 == "device" && $1 !~ /^emulator-/ { print $1; exit }')
+        fi
+        if [ -z "$DEVICE" ]; then
+          echo "Error: no connected physical Android device found."
+          echo "Pass DEVICE_ID=<serial> to target a device explicitly."
+          exit 1
+        fi
+        # 工作目录是 desktop/（included taskfile 的 cmds 不从 build/android 起跑），
+        # 所以这里不能再加 ../../ —— 那是 assemble:apk 里 cd build/android 之后的写法。
+        APK="{{.BIN_DIR}}/{{.APP_NAME}}.apk"
+        if [ ! -f "$APK" ]; then
+          echo "Error: $APK not found. Run: task android:assemble:apk"
+          exit 1
+        fi
+        echo "Reinstalling $APK on $DEVICE (app data kept)..."
+        "{{.ADB}}" -s "$DEVICE" install -r -d "$APK"
+
+  uninstall:device:
+    summary: Uninstall the app from a device (this deletes its data)
+    desc: |
+      卸载会连同 /data/data/<APP_ID> 一起删掉：书架、书源、缓存、书源登录态全没。
+      只想换包不丢数据的话用 update:device。
+    cmds:
+      - |
+        DEVICE="${DEVICE_ID:-}"
+        if [ -z "$DEVICE" ]; then
+          DEVICE=$("{{.ADB}}" devices | awk 'NR > 1 && $2 == "device" && $1 !~ /^emulator-/ { print $1; exit }')
+        fi
+        if [ -z "$DEVICE" ]; then
+          echo "Error: no connected physical Android device found."
+          exit 1
+        fi
+        "{{.ADB}}" -s "$DEVICE" uninstall {{.APP_ID}}
+        echo "Uninstalled {{.APP_ID}} from $DEVICE (data removed)."
+
+  vd:
+    summary: Run the installed app on an scrcpy virtual display (nothing appears on the phone)
+    desc: |
+      用 scrcpy 的 --new-display 在手机上新建一块**虚拟显示**，把应用启动到那块屏上，
+      画面只出现在电脑的 scrcpy 窗口里。手机主屏不受影响，用户还能继续用手机做别的
+      （实测：虚拟显示跑着应用时，主屏仍在正常显示其它 app）。
+
+      这是安卓端 UI 验收的主力手段 —— 不必碰手机、不必投屏整机、也不会打断在用的人。
+
+      VARS:
+        VD_SIZE   虚拟显示分辨率，默认 720x1280（竖屏手机比例）
+        VD_DPI    密度，默认 320；420 更接近 1080p 手机的实际观感
+        DEVICE_ID 指定设备；不传则取第一台非模拟器设备
+        SCRCPY    scrcpy 可执行文件路径；默认取 PATH 里的
+
+      要求 scrcpy >= 3.3.3：更早的版本在 Android 16+ 上创建虚拟显示会崩
+      （服务端 AbstractMethodError: onDisplayAnimationsDisabledChanged，3.3.3 才修）。
+    cmds:
+      - |
+        DEVICE="${DEVICE_ID:-}"
+        if [ -z "$DEVICE" ]; then
+          DEVICE=$("{{.ADB}}" devices | awk 'NR > 1 && $2 == "device" && $1 !~ /^emulator-/ { print $1; exit }')
+        fi
+        if [ -z "$DEVICE" ]; then
+          echo "Error: no connected physical Android device found."
+          echo "Connect by USB, or wirelessly: adb pair <ip:port> && adb connect <ip:port>"
+          exit 1
+        fi
+
+        SCRCPY_BIN='{{.SCRCPY}}'
+        if [ -z "$SCRCPY_BIN" ]; then
+          SCRCPY_BIN=$(command -v scrcpy || true)
+        fi
+        if [ -z "$SCRCPY_BIN" ]; then
+          echo "Error: scrcpy not found. Need >= 3.3.3 for virtual display on Android 16+."
+          echo "  winget install --id Genymobile.scrcpy     # Windows"
+          echo "  brew install scrcpy                       # macOS"
+          exit 1
+        fi
+
+        VER=$("$SCRCPY_BIN" --version 2>/dev/null | head -1 | sed -E 's/^scrcpy ([0-9]+\.[0-9]+(\.[0-9]+)?).*/\1/')
+        NUM=$(echo "$VER" | awk -F. '{printf "%d%03d%03d", $1, $2, $3}')
+        if [ -n "$NUM" ] && [ "$NUM" -lt 3003003 ]; then
+          echo "Error: scrcpy $VER is too old. Virtual display crashes on Android 16+"
+          echo "  (AbstractMethodError: onDisplayAnimationsDisabledChanged; fixed in 3.3.3)."
+          echo "  Upgrade: winget upgrade --id Genymobile.scrcpy"
+          exit 1
+        fi
+
+        SIZE='{{.VD_SIZE | default "720x1280"}}'
+        DPI='{{.VD_DPI | default "320"}}'
+        echo "scrcpy $VER -> virtual display ${SIZE}/${DPI} on $DEVICE (phone screen stays untouched)"
+        "$SCRCPY_BIN" -s "$DEVICE" \
+          --new-display="${SIZE}/${DPI}" \
+          --start-app={{.APP_ID}} \
+          --no-audio \
+          --no-vd-system-decorations \
+          --window-title="{{.APP_NAME}} ${SIZE} (virtual display)"
+
+  vd:shot:
+    summary: Capture one still frame from the virtual display, headless
+    desc: |
+      无窗口跑一次虚拟显示（默认 12 秒），把画面录下来再挑一帧，产物
+      bin/vd-shot.png。用于自动化验收「页面到底渲染出来没有」，不需要人看窗口。
+
+      为什么必须录而不是截图：虚拟显示是 scrcpy 建的，进程退出即销毁，adb screencap
+      抓的是主屏（display 0），拿不到这块屏。
+
+      两个实测过的坑：
+      1. scrcpy 只编码**变化**的帧，静止界面时视频很短 —— 按 -ss 5 取帧会越界报
+         "Output file is empty"，所以要用 -sseof（从末尾回退）。
+      2. 末尾的帧不可靠：录制收尾时可能取到黑帧（应用还没画完，或显示正在销毁）。
+         所以从最后 3 秒里取 4 个候选帧，选**文件体积最大**的那张 —— 纯黑 PNG 只有
+         十几 KB，正常界面在几十到上百 KB，这个判据比固定时间点稳。
+
+      依赖 ffmpeg（能出 png 的任意版本；不需要 ffprobe）。VARS 同 vd，另有 SEC（默认 12）。
+
+      渲染时长依分辨率/密度而变（实测 1080x1920/240 要 10 秒以上才出画面，8 秒抓到的是
+      纯黑），因此取不到内容时会自动把录制时长翻倍重试一次，避免把黑图当成「页面没渲染」。
+    cmds:
+      - |
+        DEVICE="${DEVICE_ID:-}"
+        if [ -z "$DEVICE" ]; then
+          DEVICE=$("{{.ADB}}" devices | awk 'NR > 1 && $2 == "device" && $1 !~ /^emulator-/ { print $1; exit }')
+        fi
+        if [ -z "$DEVICE" ]; then echo "Error: no connected physical Android device found."; exit 1; fi
+        SCRCPY_BIN='{{.SCRCPY}}'
+        if [ -z "$SCRCPY_BIN" ]; then SCRCPY_BIN=$(command -v scrcpy || true); fi
+        if [ -z "$SCRCPY_BIN" ]; then echo "Error: scrcpy not found (need >= 3.3.3)."; exit 1; fi
+        if ! command -v ffmpeg >/dev/null 2>&1; then
+          echo "Error: ffmpeg not found (needed to extract the frame)."
+          exit 1
+        fi
+
+        SIZE='{{.VD_SIZE | default "720x1280"}}'
+        DPI='{{.VD_DPI | default "320"}}'
+        SEC='{{.SEC | default "12"}}'
+        MP4="{{.BIN_DIR}}/_vd-shot.mp4"
+        PNG="{{.BIN_DIR}}/vd-shot.png"
+        rm -f "$MP4" "$PNG" "{{.BIN_DIR}}"/_vd-f*.png
+
+        ATTEMPT=1
+        while [ "$ATTEMPT" -le 2 ]; do
+          "$SCRCPY_BIN" -s "$DEVICE" --no-window --no-audio \
+            --new-display="${SIZE}/${DPI}" \
+            --start-app={{.APP_ID}} \
+            --no-vd-system-decorations \
+            --record="$MP4" --time-limit="$SEC"
+
+          if [ -f "$MP4" ]; then
+            # 从末尾回退取 4 个候选帧；超出视频长度的会报错，忽略。
+            for t in 3 2 1 0; do
+              ffmpeg -v quiet -sseof "-$t" -i "$MP4" -frames:v 1 -update 1 -y "{{.BIN_DIR}}/_vd-f$t.png" 2>/dev/null || true
+            done
+            BEST=$(ls -S "{{.BIN_DIR}}"/_vd-f*.png 2>/dev/null | head -1)
+            if [ -n "$BEST" ]; then
+              SZ=$(wc -c < "$BEST" | tr -d ' ')
+              # 纯黑/空白 PNG 只有十几 KB；正常界面几十 KB 以上。
+              if [ "$SZ" -gt 20000 ]; then
+                mv "$BEST" "$PNG"
+                break
+              fi
+            fi
+          fi
+
+          echo "No usable frame in ${SEC}s (recorded before the first paint?); retrying with $((SEC * 2))s..."
+          ATTEMPT=$((ATTEMPT + 1))
+          SEC=$((SEC * 2))
+          rm -f "$MP4" "{{.BIN_DIR}}"/_vd-f*.png
+        done
+
+        rm -f "$MP4" "{{.BIN_DIR}}"/_vd-f*.png
+        if [ ! -f "$PNG" ]; then
+          echo "Error: still no non-blank frame. The app may have failed to start — check:"
+          echo "  {{.ADB}} -s $DEVICE logcat -d | grep -iE 'legado|wails|fatal'"
+          exit 1
+        fi
+        echo "Captured: {{.BIN_DIR}}/vd-shot.png ($(wc -c < "$PNG" | tr -d ' ') bytes)"
+
   studio:
     summary: Open the generated Android project in Android Studio
     cmds:
