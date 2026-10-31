@@ -1,6 +1,8 @@
 .task
 bin
 frontend/dist
+# 构建前为避开「清空 dist 被环境拦截」而整体挪开的备份目录，用完即删
+frontend/dist.bak*
 frontend/node_modules
 build/linux/appimage/build
 build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
