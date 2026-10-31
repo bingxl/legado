@@ -18,8 +18,16 @@ includes:
   windows: ./build/windows/Taskfile.yml
   darwin: ./build/darwin/Taskfile.yml
   linux: ./build/linux/Taskfile.yml
-  # 模板默认还带 ios / android 两个 include，但本项目只做桌面端，
-  # 对应目录不存在会让 `wails3 build` 在解析阶段直接报错，故移除。
+  # 安卓端。APP_ID 与 build/android/app/build.gradle 的 applicationId 保持一致
+  # （cn.bingxl.legado，自有包名，不与官方 legado 的 io.legado.app 冲突）。
+  #
+  # 只覆盖 APP_ID：android/Taskfile.yml 里 SDK_ROOT / ADB / HOST_ARCH 等都用
+  # `sh:` 求值，在本机 Git Bash 下能正常展开（ADB 走 `command -v adb`，
+  # SDK_ROOT 走 $ANDROID_HOME），在 include 处再给默认值反而会把它们压成空串。
+  android:
+    taskfile: ./build/android/Taskfile.yml
+    vars:
+      APP_ID: "cn.bingxl.legado"
 
 tasks:
   build:
