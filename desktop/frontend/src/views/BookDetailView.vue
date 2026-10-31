@@ -8,7 +8,7 @@
  *
  * 「继续阅读」按后端记录的进度定位章节；点目录里的任意章节则从该章开始读。
  */
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 
@@ -35,6 +35,8 @@ const introOpen = ref(false);
 const coverBroken = ref(false);
 /** 目录一次最多渲染多少条：几千章的书全量挂 DOM 会明显卡顿。 */
 const chapterLimit = ref(300);
+/** 目录倒序开关：倒序看的是最新章节，长连载常用。 */
+const tocReversed = ref(false);
 
 /** 详情页的两个 Tab：目录与 AI 总结（移动端同样用这一对）。 */
 const activeTab = ref<"toc" | "ai">("toc");
@@ -49,7 +51,20 @@ const canCache = computed(() => !!book.value && book.value.kind !== "local");
 const cacheJob = computed(() => cache.jobOf(bookId.value));
 const cacheRunning = computed(() => cacheJob.value?.state === "running");
 
-const shownChapters = computed(() => chapters.value.slice(0, chapterLimit.value));
+/** 倒序只影响展示顺序，c.index 仍是真实章节号，跳转/高亮不受影响。 */
+const orderedChapters = computed(() =>
+  tocReversed.value ? [...chapters.value].reverse() : chapters.value,
+);
+const shownChapters = computed(() => orderedChapters.value.slice(0, chapterLimit.value));
+
+/** 切换排序后把当前进度章滚回可见区，避免用户找不到自己读到哪了。 */
+async function toggleTocOrder() {
+  tocReversed.value = !tocReversed.value;
+  await nextTick();
+  document
+    .querySelector<HTMLElement>(".toc-item.active")
+    ?.scrollIntoView({ block: "center" });
+}
 const hasMoreChapters = computed(() => chapters.value.length > chapterLimit.value);
 
 /** 后端记录的章节序号；-1 表示没读过。 */
@@ -260,7 +275,14 @@ onMounted(load);
 
               <p v-if="!chapters.length" class="empty">这本书还没有目录</p>
 
-              <ol v-else class="toc">
+              <template v-else>
+                <div class="toc-tools">
+                  <button class="link" @click="toggleTocOrder">
+                    {{ tocReversed ? "正序排列 ↑" : "倒序排列 ↓" }}
+                  </button>
+                </div>
+
+                <ol class="toc">
                 <li
                   v-for="c in shownChapters"
                   :key="c.index"
@@ -276,13 +298,14 @@ onMounted(load);
                     上次读到
                   </span>
                 </li>
-              </ol>
+                </ol>
 
-              <div v-if="hasMoreChapters" class="more">
-                <el-button size="small" @click="chapterLimit += 300">
-                  显示更多（还有 {{ chapters.length - chapterLimit }} 章）
-                </el-button>
-              </div>
+                <div v-if="hasMoreChapters" class="more">
+                  <el-button size="small" @click="chapterLimit += 300">
+                    显示更多（还有 {{ chapters.length - chapterLimit }} 章）
+                  </el-button>
+                </div>
+              </template>
             </el-tab-pane>
 
             <el-tab-pane name="ai" label="AI 总结">
@@ -571,6 +594,11 @@ onMounted(load);
 }
 
 /* ---- 目录 ---- */
+.toc-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
 .toc {
   list-style: none;
   margin: 0;

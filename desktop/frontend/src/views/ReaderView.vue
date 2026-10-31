@@ -3,7 +3,7 @@
  * 阅读器。
  *
  * 按书籍格式选择渲染方式：
- *   - pdf   ：交给 WebView 内置的 PDF 能力（<iframe src="/raw/?p=...">）
+ *   - pdf   ：交给 WebView 内置的 PDF 能力（<iframe src="/raw/<base64url>[.pdf]">）
  *   - comic ：图片流（后端已把压缩包解压到缓存目录）
  *   - 其它  ：正文 HTML
  */
@@ -24,6 +24,7 @@ import { copyText } from "@/utils/clipboard";
 import { comicImageURL } from "@/utils/media";
 import { loadReaderPrefs, saveReaderPrefs } from "@/utils/readerPrefs";
 import { wrapPlainTextAsParagraphs } from "@/utils/plainText";
+import { usePlatformStore } from "@/stores/platform";
 import AskAIDrawer from "@/components/AskAIDrawer.vue";
 import type { BookDetail, ChapterContent, ChapterItem } from "@/types";
 
@@ -31,6 +32,7 @@ const route = useRoute();
 const router = useRouter();
 const tts = useTtsStore();
 const cache = useCacheStore();
+const platform = usePlatformStore();
 
 const bookId = computed(() => Number(route.params.id || 0));
 const book = ref<BookDetail | null>(null);
@@ -39,6 +41,14 @@ const content = ref<ChapterContent | null>(null);
 const index = ref(0);
 const loading = ref(false);
 const tocVisible = ref(false);
+/** 目录倒序开关：连载追更时看最新章常用倒序。 */
+const tocReversed = ref(false);
+/**
+ * 移动端沉浸模式：顶栏/底栏可隐藏。
+ * 桌面端恒显（chromeVisible 不参与判定），移动端点屏幕中间切换。
+ */
+const chromeVisible = ref(true);
+const chromeShown = computed(() => !platform.isMobile || chromeVisible.value);
 const stageRef = ref<HTMLElement | null>(null);
 /** 「问 AI」抽屉开关。 */
 const askOpen = ref(false);
@@ -254,6 +264,27 @@ watch(
   },
 );
 
+/** 倒序只影响展示顺序，c.index 仍是真实章节号，跳转/高亮/缓存标记不受影响。 */
+const displayChapters = computed(() =>
+  tocReversed.value ? [...chapters.value].reverse() : chapters.value,
+);
+
+/** 切换排序后把当前章滚回可见区。 */
+async function toggleTocOrder() {
+  tocReversed.value = !tocReversed.value;
+  await nextTick();
+  stageRef.value
+    ?.querySelector<HTMLElement>(".toc-item.active")
+    ?.scrollIntoView({ block: "center" });
+}
+
+/** 底栏避让安卓手势条：Tab 栏已隐藏，安全区要自己补。 */
+const footerStyle = computed(() =>
+  platform.isMobile && platform.safeArea.bottom
+    ? { paddingBottom: `calc(8px + ${platform.safeArea.bottom}px)` }
+    : undefined,
+);
+
 /** 返回上一页（详情页或书架）；直接打开阅读器时退回书架。 */
 function goBack() {
   if (window.history.length > 1) router.back();
@@ -288,6 +319,15 @@ async function userLoadChapter(i: number) {
   const ok = await loadChapter(i);
   if (!ok || !readingThisBook.value) return;
   await tts.start(session, { chapter: i, segIndex: 0 });
+}
+
+/**
+ * 从目录选章：先收起抽屉再换章。
+ * 不收的话移动端 62% 宽的抽屉会一直挡着正文，用户得再点一次「目录」。
+ */
+async function pickChapter(i: number) {
+  tocVisible.value = false;
+  await userLoadChapter(i);
 }
 
 function prev() {
@@ -329,6 +369,8 @@ function onStageClick(e: MouseEvent) {
   const ratio = (e.clientX - rect.left) / rect.width;
   if (ratio < 1 / 3) prev();
   else if (ratio > 2 / 3) next();
+  // 移动端：中间 1/3 切换顶栏/底栏，让正文占满整屏（桌面端中间留给选词）。
+  else if (platform.isMobile) chromeVisible.value = !chromeVisible.value;
 }
 
 /** 左右方向键翻章；输入框或带修饰键的按键不接管。 */
@@ -512,7 +554,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="reader" v-loading="loading">
-    <header class="bar">
+    <header v-show="chromeShown" class="bar">
       <el-button link @click="goBack">← 返回</el-button>
       <span class="title">{{ book?.name }}</span>
       <span class="chapter">{{ content?.title }}</span>
@@ -548,12 +590,18 @@ onBeforeUnmount(() => {
     <div class="stage" ref="stageRef" @click="onStageClick">
       <!-- 目录抽屉 -->
       <aside v-show="tocVisible" class="toc">
+        <div class="toc-head">
+          <span>目录</span>
+          <button class="toc-order" @click="toggleTocOrder">
+            {{ tocReversed ? "正序 ↑" : "倒序 ↓" }}
+          </button>
+        </div>
         <div
-          v-for="c in chapters"
+          v-for="c in displayChapters"
           :key="c.index"
           class="toc-item"
           :class="{ active: c.index === index }"
-          @click="userLoadChapter(c.index)"
+          @click="pickChapter(c.index)"
         >
           <span class="toc-title">{{ c.title }}</span>
           <span
@@ -594,7 +642,7 @@ onBeforeUnmount(() => {
       </article>
     </div>
 
-    <footer class="nav">
+    <footer v-show="chromeShown" class="nav" :style="footerStyle">
       <el-button :disabled="index <= 0" @click="prev">上一章</el-button>
       <span class="pos">
         {{ index + 1 }} / {{ content?.totalChapters || chapters.length }}
@@ -640,10 +688,19 @@ onBeforeUnmount(() => {
 }
 .title {
   font-weight: 600;
+  /* 窄屏下书名/章节名必须能收缩加省略号：否则逐字折行会把顶栏撑成竖排大块。 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chapter {
   font-size: 12px;
   color: #6b7280;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .spacer {
   flex: 1;
@@ -689,6 +746,28 @@ onBeforeUnmount(() => {
   background: #fff;
   border-right: 1px solid #e5e7eb;
   padding: 8px 0;
+}
+.toc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 14px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  border-bottom: 1px solid #f3f4f6;
+}
+.toc-order {
+  border: none;
+  background: transparent;
+  padding: 2px 4px;
+  font-size: 12px;
+  font-weight: 400;
+  color: #4f46e5;
+  cursor: pointer;
+}
+.toc-order:hover {
+  text-decoration: underline;
 }
 .toc-item {
   display: flex;
@@ -788,5 +867,27 @@ onBeforeUnmount(() => {
   color: inherit;
   padding: 0 1px;
   border-radius: 2px;
+}
+
+/* 移动端：顶栏去掉章节名（正文里已有 h1），压缩内边距，抽屉加宽好点按 */
+@media (max-width: 640px) {
+  .bar {
+    gap: 8px;
+    padding: 6px 10px;
+  }
+  .chapter {
+    display: none;
+  }
+  /* 复制书籍地址在手机上几乎不用，让位给书名 */
+  .icon-btn {
+    display: none;
+  }
+  .nav {
+    gap: 8px;
+    padding: 6px 10px;
+  }
+  .toc {
+    width: 62%;
+  }
 }
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import { useBookshelfStore } from "@/stores/bookshelf";
@@ -19,6 +19,14 @@ const tts = useTtsStore();
 const cache = useCacheStore();
 const platform = usePlatformStore();
 const progress = ref<ProgressPayload | null>(null);
+
+/**
+ * 阅读页是沉浸式页面，不属于五个 Tab：底部 Tab 栏不渲染。
+ * 不然真机上阅读器顶栏 + 底栏 + Tab 栏三层导航要吃掉近半屏。
+ */
+const readerImmersive = computed(
+  () => router.currentRoute.value.path.startsWith("/reader/"),
+);
 
 /**
  * 菜单分为两档：桌面侧边栏放全量，移动端底部 Tab 只放 5 个主入口。
@@ -202,7 +210,7 @@ onMounted(async () => {
         padding-bottom 用后端给的安全区高度，避免被系统手势条压住。
       -->
       <nav
-        v-if="platform.isMobile"
+        v-if="platform.isMobile && !readerImmersive"
         class="tabbar"
         :style="{ paddingBottom: `${platform.safeArea.bottom}px` }"
       >
