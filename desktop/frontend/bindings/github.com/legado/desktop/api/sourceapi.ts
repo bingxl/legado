@@ -86,6 +86,16 @@ export function Import(payload: string, overwrite: boolean): $CancellablePromise
 }
 
 /**
+ * ImportFromURL 从远程 URL 导入书源。
+ * 
+ * url 指向一份书源 JSON 文件（可含多个书源）。与订阅的区别是只导入一次，
+ * 不建立长期跟随关系；需要随远程持续更新请用订阅。
+ */
+export function ImportFromURL(url: string, overwrite: boolean): $CancellablePromise<dto$0.SourceImportResult | null> {
+    return $Call.ByID(2213892065, url, overwrite);
+}
+
+/**
  * List 列出书源；group 为空表示全部。
  */
 export function List(group: string): $CancellablePromise<dto$0.SourceView[] | null> {

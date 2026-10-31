@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -203,6 +204,43 @@ func (s *SourceService) Import(ctx context.Context, data []byte, overwrite bool)
 			result.Imported++
 			result.Sources = append(result.Sources, dto.NewSourceView(src))
 		}
+	}
+	return result, nil
+}
+
+// ImportFromURL 从远程 URL 导入书源。
+//
+// URL 指向一份书源 JSON 文件，内容形态与 Import 完全一致（书源数组、单个
+// 书源对象、或 Legado 备份文件都支持），因此这里只是「取回正文 → 交给 Import」。
+//
+// 与订阅（Subscription）的区别：这里导入一次就结束，不建立长期跟随关系，
+// 也不会在「刷新全部订阅」时被再次拉取。需要持续同步请用订阅。
+func (s *SourceService) ImportFromURL(ctx context.Context, rawURL string, overwrite bool) (*dto.SourceImportResult, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return nil, fmt.Errorf("%w: 书源地址不能为空", domain.ErrInvalidArgument)
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("%w: 书源地址不合法: %v", domain.ErrInvalidArgument, err)
+	}
+	// 只放行 http/https。file:// 之类会让后端读本机任意文件，
+	// 而这个入口的语义是「从网络上取一份书源列表」，没有必要放开。
+	switch u.Scheme {
+	case "http", "https":
+	default:
+		return nil, fmt.Errorf("%w: 只支持 http/https 地址", domain.ErrInvalidArgument)
+	}
+
+	data, err := httpGet(ctx, rawURL, "书源文件")
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.Import(ctx, data, overwrite)
+	if err != nil {
+		// 正文拉下来了但不是书源：把地址带上，否则用户只看到「未解析到任何书源」，
+		// 分不清是地址给错了还是文件内容不对。
+		return nil, fmt.Errorf("%w: %s 的内容不是有效的书源 JSON: %v", domain.ErrParseFailed, rawURL, err)
 	}
 	return result, nil
 }

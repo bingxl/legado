@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"strings"
 
 	"github.com/legado/desktop/internal/app/dto"
 	"github.com/legado/desktop/internal/port"
@@ -20,6 +21,7 @@ type sourceService interface {
 	Delete(ctx context.Context, id int64) error
 	SetEnabled(ctx context.Context, id int64, enabled bool) error
 	Import(ctx context.Context, data []byte, overwrite bool) (*dto.SourceImportResult, error)
+	ImportFromURL(ctx context.Context, url string, overwrite bool) (*dto.SourceImportResult, error)
 	Export(ctx context.Context, ids []int64) ([]byte, error)
 	Validate(ctx context.Context, ids []int64, items port.CheckItems) ([]dto.SourceCheckResult, error)
 	Search(ctx context.Context, sourceID int64, keyword string, page int) ([]dto.SearchResultView, error)
@@ -85,6 +87,17 @@ func (a *SourceAPI) Import(payload string, overwrite bool) (*dto.SourceImportRes
 		return nil, errBadRequest("导入内容为空")
 	}
 	return a.svc.Import(newCtx(), []byte(payload), overwrite)
+}
+
+// ImportFromURL 从远程 URL 导入书源。
+//
+// url 指向一份书源 JSON 文件（可含多个书源）。与订阅的区别是只导入一次，
+// 不建立长期跟随关系；需要随远程持续更新请用订阅。
+func (a *SourceAPI) ImportFromURL(url string, overwrite bool) (*dto.SourceImportResult, error) {
+	if strings.TrimSpace(url) == "" {
+		return nil, errBadRequest("书源地址不能为空")
+	}
+	return a.svc.ImportFromURL(newCtx(), url, overwrite)
 }
 
 // Export 导出书源为 JSON 字符串；ids 为空表示全部。

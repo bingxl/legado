@@ -12,7 +12,7 @@ import (
 	"github.com/legado/desktop/internal/domain"
 )
 
-// 订阅同步是一次普通的 HTTP GET，与书源引擎无关，
+// 订阅同步 / 从 URL 导入都是一次普通的 HTTP GET，与书源引擎无关，
 // 因此这里直接用标准库，不往 SourceFetcher 上再加一个「随便抓个 URL」的方法。
 const (
 	subscriptionTimeout = 30 * time.Second
@@ -100,7 +100,7 @@ func (s *SourceService) SyncSubscription(ctx context.Context, id int64) (*dto.So
 	if err != nil {
 		return nil, err
 	}
-	data, err := httpGet(ctx, sub.URL)
+	data, err := httpGet(ctx, sub.URL, "订阅")
 	if err != nil {
 		return nil, err
 	}
@@ -149,34 +149,37 @@ func (s *SourceService) SyncAllSubscriptions(ctx context.Context) ([]dto.Subscri
 	return out, nil
 }
 
-// httpGet 取回 URL 内容。超时是硬性的：订阅地址失效时，
+// httpGet 取回 URL 内容。超时是硬性的：地址失效时，
 // 没有超时会让 UI 一直转圈到 TCP 层放弃（默认可能几十秒）。
-func httpGet(ctx context.Context, url string) ([]byte, error) {
+//
+// label 是给用户看的对象名（「订阅」/「书源文件」），只用于拼错误信息——
+// 同一个函数被订阅刷新和「从 URL 导入」共用，错误里说错对象会误导排查。
+func httpGet(ctx context.Context, url, label string) ([]byte, error) {
 	if url == "" {
-		return nil, fmt.Errorf("%w: 订阅地址为空", domain.ErrInvalidArgument)
+		return nil, fmt.Errorf("%w: %s 地址为空", domain.ErrInvalidArgument, label)
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, subscriptionTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("%w: 订阅地址不合法: %v", domain.ErrInvalidArgument, err)
+		return nil, fmt.Errorf("%w: %s 地址不合法: %v", domain.ErrInvalidArgument, label, err)
 	}
 	req.Header.Set("User-Agent", subscriptionUA)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: 拉取订阅失败: %v", domain.ErrRemoteFailed, err)
+		return nil, fmt.Errorf("%w: 拉取%s失败: %v", domain.ErrRemoteFailed, label, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("%w: 订阅返回 HTTP %d", domain.ErrRemoteFailed, resp.StatusCode)
+		return nil, fmt.Errorf("%w: %s返回 HTTP %d", domain.ErrRemoteFailed, label, resp.StatusCode)
 	}
-	// 订阅文件通常几十 KB，但恶意地址可能返回巨大响应，限制在 32MB 以内。
+	// 书源文件通常几十 KB，但恶意地址可能返回巨大响应，限制在 32MB 以内。
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
-		return nil, fmt.Errorf("%w: 读取订阅内容失败: %v", domain.ErrRemoteFailed, err)
+		return nil, fmt.Errorf("%w: 读取%s内容失败: %v", domain.ErrRemoteFailed, label, err)
 	}
 	return data, nil
 }

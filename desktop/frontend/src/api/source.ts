@@ -29,6 +29,13 @@ export const sourceApi = {
   import: (payload: string, overwrite: boolean) =>
     call(binding.Import(payload, overwrite)),
 
+  /**
+   * 从 URL 导入书源：地址指向一份书源 JSON 文件，可包含多个书源。
+   * 只导入一次，不建立跟随关系（要持续同步请用订阅）。
+   */
+  importFromUrl: (url: string, overwrite: boolean) =>
+    call(binding.ImportFromURL(url, overwrite)),
+
   /** 导出书源 JSON 字符串。 */
   export: (ids: number[] = []) => call(binding.Export(ids)),
 

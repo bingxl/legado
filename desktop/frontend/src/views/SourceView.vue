@@ -65,6 +65,14 @@ async function toggle(s: SourceView, enabled: boolean) {
 }
 
 // ── 导入导出 ────────────────────────────────────────────────
+function onImportCommand(cmd: string) {
+  if (cmd === "file") {
+    void importSources();
+  } else if (cmd === "url") {
+    urlDialog.value = true;
+  }
+}
+
 async function importSources() {
   const paths = await systemApi.openSourceFile();
   if (!paths || paths.length === 0) return;
@@ -79,6 +87,37 @@ async function importSources() {
     await load();
   } catch (e) {
     ElMessage.error((e as Error).message);
+  }
+}
+
+// ── 从 URL 导入 ────────────────────────────────────────────
+// 与「订阅」的分工：这里导入一次就结束，不随远程变化；想长期跟随远程更新
+// 应该去订阅页加一条。地址允许指向任意含多书源的 JSON（也兼容 Legado 备份文件）。
+const urlDialog = ref(false);
+const urlInput = ref("");
+const urlOverwrite = ref(true);
+const urlLoading = ref(false);
+
+async function importFromUrl() {
+  const url = urlInput.value.trim();
+  if (!url) {
+    ElMessage.warning("请填写书源地址");
+    return;
+  }
+  urlLoading.value = true;
+  try {
+    const res = await sourceApi.importFromUrl(url, urlOverwrite.value);
+    if (!res) return;
+    ElMessage.success(
+      `导入完成：新增 ${res.imported}，更新 ${res.updated}，失败 ${(res.failures ?? []).length}`,
+    );
+    urlDialog.value = false;
+    urlInput.value = "";
+    await load();
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  } finally {
+    urlLoading.value = false;
   }
 }
 
@@ -158,7 +197,15 @@ onMounted(() => {
       <div class="spacer" />
       <el-button @click="validate">校验</el-button>
       <el-button @click="exportSources">导出</el-button>
-      <el-button @click="importSources">导入</el-button>
+      <el-dropdown trigger="click" @command="onImportCommand">
+        <el-button>导入</el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="file">从文件导入</el-dropdown-item>
+            <el-dropdown-item command="url">从 URL 导入</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
       <el-button type="primary" @click="openCreate">新建</el-button>
     </header>
 
@@ -200,6 +247,31 @@ onMounted(() => {
       :source-name="loginTarget?.name"
       @changed="load"
     />
+
+    <!-- 从 URL 导入 -->
+    <el-dialog v-model="urlDialog" title="从 URL 导入书源" width="560">
+      <el-input
+        v-model="urlInput"
+        placeholder="https://example.com/bookSources.json"
+        clearable
+        @keyup.enter="importFromUrl"
+      />
+      <p class="hint">
+        地址指向一份书源 JSON 文件，可包含多个书源；也兼容 Legado 备份文件（含 data 字段）。
+      </p>
+      <el-checkbox v-model="urlOverwrite">
+        覆盖相同 bookSourceUrl 的书源
+      </el-checkbox>
+      <p class="hint">
+        只导入这一次，之后不跟随远程变化。想让书源随远程更新，请到「订阅」里加一条。
+      </p>
+      <template #footer>
+        <el-button @click="urlDialog = false">取消</el-button>
+        <el-button type="primary" :loading="urlLoading" @click="importFromUrl">
+          导入
+        </el-button>
+      </template>
+    </el-dialog>
 
     <!-- 校验结果 -->
     <el-dialog v-model="checkDialog" title="书源校验结果" width="680">
@@ -266,5 +338,14 @@ onMounted(() => {
 .checking {
   color: #6b7280;
   font-size: 13px;
+}
+.hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #6b7280;
+}
+.hint + .el-checkbox {
+  margin-top: 12px;
 }
 </style>
