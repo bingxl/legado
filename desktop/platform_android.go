@@ -3,6 +3,9 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -18,8 +21,39 @@ const platformName = "android"
 // 调用时机是安全的：Java 侧 onCreate 先 `new WailsBridge(this)` 再
 // `bridge.initialize()`，后者经 JNI 调 nativeInit —— 该函数先把 bridge
 // 全局引用存下来，才 `go mainFunc()`，因此此处拿 Activity 一定非空。
+//
+// 顺带在这里把 SQLite 的临时目录设好（见下方 setSQLiteTempDir）：
+// run() 里 dataDir() 是第一个调用，一定赶在 bootstrap 打开数据库之前。
 func dataDir() string {
-	return application.Android.StoragePath()
+	dir := application.Android.StoragePath()
+	setSQLiteTempDir(dir)
+	return dir
+}
+
+// setSQLiteTempDir 给 SQLite 补一个可写的临时目录。
+//
+// 为什么必须做：modernc sqlite 在排序/临时表溢出内存时要写临时文件，找目录的
+// 顺序是 SQLITE_TMPDIR → TMPDIR → /var/tmp → /usr/tmp → /tmp → "."（android
+// 下等价实现见 modernc sqlite lib 的 _unixTempFileDir）。安卓进程的 TMPDIR
+// 环境变量是空的（Android 不会为 app 进程设置它），那几个目录也不存在，
+// 于是所有候选全灭，凡是查询结果大到排序溢出磁盘（如导入上千个书源后的
+// ORDER BY 列表）就报 disk I/O error (6410)，即 SQLITE_IOERR_GETTEMPPATH。
+//
+// 为什么用环境变量而不是 PRAGMA：modernc libc 的 environ 是**第一次 getenv
+// 时**才从 os.Environ() 拍的快照（libc.go 的 Environ() 惰性初始化），而全进程
+// 只有 sqlite 会调 getenv，且数据库在 bootstrap.New 里才打开 —— 这里提前
+// os.Setenv 正好赶在快照之前。PRAGMA temp_store_directory 虽然也能设，但
+// 已被上游标记废弃，且需要把目录一路传进 bootstrap 签名，得不偿失。
+//
+// 目录用 getFilesDir 的兄弟目录 cache（即 Context.getCacheDir()）：app 私有、
+// 系统可在空间不足时清理、且不进入 auto-backup，正适合放临时文件。
+func setSQLiteTempDir(filesDir string) {
+	tmp := filepath.Join(filepath.Dir(filesDir), "cache")
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
+		return
+	}
+	os.Setenv("SQLITE_TMPDIR", tmp) //nolint:errcheck // 环境变量设置失败无副作用
+	os.Setenv("TMPDIR", tmp)        //nolint:errcheck
 }
 
 // windowsOptions 安卓端没有"窗口宿主"这一层，WebView 由 Activity 直接持有，
