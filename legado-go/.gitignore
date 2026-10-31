@@ -10,3 +10,7 @@ testdata/*
 # 书源与录制快照必须入库，否则 clone 之后离线测试全部因缺快照而失败
 !testdata/sources/
 !testdata/fixtures/
+
+# CLI 下载输出（纯抓取的正文样本，本地调试产物），不入库
+# 注意 gitignore 不支持 `./` 前缀，必须是 `/out/`
+/out/
