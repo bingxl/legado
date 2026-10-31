@@ -107,8 +107,11 @@ func run() error {
 // 路由：
 //   - "/"          前端构建产物（嵌入的 frontend/dist）
 //   - "/local/..." 应用数据目录，用于封面与漫画图片缓存
-//   - "/raw/"      任意本地文件（?p=绝对路径），用于 PDF 与本地图片直读
-//   - "/img/"      网络图片代理（?u=图片地址&src=书源地址），用于绕开图床防盗链
+//   - "/raw/<arg>[.ext]" 任意本地文件（arg = base64url(绝对路径)），用于 PDF 与本地图片直读
+//   - "/img/<arg>[.ext]" 网络图片代理（arg = base64url(图片地址 + "\n" + 书源地址)），绕开图床防盗链
+//
+// 参数编进路径段而不是查询串，是安卓端能读到文件的必要条件，见 asset_url.go。
+// 旧写法 "?p=" / "?u=&src=" 仍然兼容（桌面端早期链接与测试用）。
 //
 // 前端因此可以用普通 <img src> / <iframe src> 访问本地资源，无需 base64 内联。
 func assetHandler(root string) http.Handler {
@@ -152,20 +155,20 @@ func spaHandler() http.Handler {
 	})
 }
 
-// serveRawFile 按绝对路径提供本地文件，供 PDF 阅读与本地图片预览使用。
+// serveRawFile 按绝对路径提供本地文件，供文本导入、PDF 阅读与本地图片预览使用。
 //
 // 安全说明：这是单用户桌面应用，读取本地文件属于正常需求；
 // http.ServeFile 会规整路径，不会因 "../" 而越界。
 // 若将来开放为多用户服务，必须改为白名单校验。
 func serveRawFile(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Query().Get("p")
-	if path == "" {
-		http.Error(w, "缺少参数 p", http.StatusBadRequest)
+	filePath, ok := decodeAssetArg(r, rawPrefix, "p")
+	if !ok {
+		http.Error(w, "缺少文件路径", http.StatusBadRequest)
 		return
 	}
-	if _, err := os.Stat(path); err != nil {
+	if _, err := os.Stat(filePath); err != nil {
 		http.Error(w, "文件不可访问", http.StatusNotFound)
 		return
 	}
-	http.ServeFile(w, r, path)
+	http.ServeFile(w, r, filePath)
 }

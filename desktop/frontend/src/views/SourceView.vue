@@ -4,7 +4,7 @@ import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 import { sourceApi } from "@/api/source";
-import { systemApi } from "@/api/system";
+import { systemApi, rawFileURL } from "@/api/system";
 import { onSourceCheckProgress } from "@/api/events";
 import type { ProgressPayload } from "@/api/events";
 import type { SourceView, SourceCheckResult } from "@/types";
@@ -135,8 +135,7 @@ async function exportSources() {
 
 /** 通过后端 /raw/ 路由读取本地文本文件内容。 */
 async function readTextFile(absPath: string): Promise<string> {
-  const url = "/raw/?p=" + encodeURIComponent(absPath);
-  const resp = await fetch(url);
+  const resp = await fetch(rawFileURL(absPath));
   if (!resp.ok) throw new Error("无法读取文件");
   return resp.text();
 }

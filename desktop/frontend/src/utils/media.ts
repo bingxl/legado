@@ -4,7 +4,7 @@
  * 书籍封面既可能是网络 URL，也可能是本地绝对路径。
  * 后者无法直接塞进 <img src>，需要经后端的 /raw/ 路由转换。
  */
-import { rawFileURL } from "@/api/system";
+import { rawFileURL, rawImageURL } from "./assetUrl";
 
 /** 把封面地址转换为 WebView 可加载的 URL。 */
 export function coverURL(cover: string): string {
@@ -31,5 +31,5 @@ export function isRemote(url: string): boolean {
 export function comicImageURL(url: string, origin = ""): string {
   if (!url) return "";
   if (!isRemote(url)) return coverURL(url);
-  return `/img/?u=${encodeURIComponent(url)}&src=${encodeURIComponent(origin)}`;
+  return rawImageURL(url, origin);
 }

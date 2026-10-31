@@ -27,13 +27,26 @@ const imageProxyUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.
 // 会被直接 403（实测 manwame 的图床：无 Referer 403、带站点 Referer 200）。
 // 原版 legado 也是带着书源域名去取图的，这里做同样的事：
 //
-//	/img/?u=<图片地址>&src=<书源地址>
+//	/img/<base64url(图片地址 + "\n" + 书源地址)>[.ext]
+//
+// 参数编进路径段是安卓端的硬要求（查询串到不了后端，见 asset_url.go）；
+// 桌面端/旧链接的 "?u=<图片地址>&src=<书源地址>" 仍然兼容。
 //
 // 只允许 http/https，避免被构造成 file:// 之类的本地读取。
 func serveRemoteImage(w http.ResponseWriter, r *http.Request) {
-	raw := strings.TrimSpace(r.URL.Query().Get("u"))
+	payload, ok := decodeAssetArg(r, imgPrefix, "u")
+	if !ok {
+		http.Error(w, "缺少图片地址", http.StatusBadRequest)
+		return
+	}
+	// 路径段里是 "地址\n书源"；查询串形式下书源仍是独立的 src 参数。
+	raw, src := payload, strings.TrimSpace(r.URL.Query().Get("src"))
+	if i := strings.IndexByte(payload, '\n'); i >= 0 {
+		raw, src = payload[:i], payload[i+1:]
+	}
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		http.Error(w, "缺少参数 u", http.StatusBadRequest)
+		http.Error(w, "缺少图片地址", http.StatusBadRequest)
 		return
 	}
 	target, err := url.Parse(raw)
@@ -49,7 +62,7 @@ func serveRemoteImage(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Header.Set("User-Agent", imageProxyUA)
 	req.Header.Set("Accept", "image/avif,image/webp,image/*,*/*;q=0.8")
-	if ref := refererFor(r.URL.Query().Get("src")); ref != "" {
+	if ref := refererFor(src); ref != "" {
 		req.Header.Set("Referer", ref)
 	}
 	// 登录态与书源请求共用一份 CookieStore：需要登录的漫画源，图片同样要带 Cookie。

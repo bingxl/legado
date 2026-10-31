@@ -67,7 +67,6 @@ export const systemApi = {
   },
 };
 
-/** 本地文件访问：把磁盘绝对路径转为 WebView 可加载的 URL。 */
-export function rawFileURL(absPath: string): string {
-  return "/raw/?p=" + encodeURIComponent(absPath);
-}
+// 资源地址的构造在 utils/assetUrl.ts（不依赖绑定，可单测）；这里转出，
+// 让视图层只从一个地方拿 systemApi 相关的工具。
+export { rawFileURL, rawImageURL } from "@/utils/assetUrl";
