@@ -28,3 +28,20 @@ export function formatDateTime(iso: string | null | undefined): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+/**
+ * 从 AI 引用摘录里取一段「能在正文里定位」的片段。
+ *
+ * 为什么要单独处理：摘录是切片的开头若干字，可能含换行。阅读器把正文按段
+ * 渲染成多个节点，`indexOf` 无法跨节点匹配，带换行的片段永远高亮不上。
+ * 取第一行、去空白、限长，落到单个段落里才能命中。
+ */
+export function citeFragment(excerpt: string, limit = 24): string {
+  if (!excerpt) return "";
+  const firstLine = excerpt
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .find((s) => s.length > 0);
+  if (!firstLine) return "";
+  return Array.from(firstLine).slice(0, limit).join("");
+}

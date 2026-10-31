@@ -3,8 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/appicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Legado 桌面版</title>
+    <!--
+      viewport-fit=cover：让内容延伸到刘海/圆角区域，配合后端 SafeArea()
+      返回的 inset 做避让；不设的话 WebView 会自行留白，与我们的 padding 叠加。
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <title>Legado</title>
   </head>
   <body>
     <div id="app"></div>

@@ -16,6 +16,7 @@ import { bookshelfApi } from "@/api/bookshelf";
 import { readerApi } from "@/api/reader";
 import { CacheScope, cacheApi } from "@/api/cache";
 import { jobPercent, useCacheStore } from "@/stores/cache";
+import AIPanel from "@/components/AIPanel.vue";
 import { copyText } from "@/utils/clipboard";
 import { formatBytes } from "@/utils/format";
 import { coverURL } from "@/utils/media";
@@ -34,6 +35,9 @@ const introOpen = ref(false);
 const coverBroken = ref(false);
 /** 目录一次最多渲染多少条：几千章的书全量挂 DOM 会明显卡顿。 */
 const chapterLimit = ref(300);
+
+/** 详情页的两个 Tab：目录与 AI 总结（移动端同样用这一对）。 */
+const activeTab = ref<"toc" | "ai">("toc");
 
 /** 缓存状态与对话框。 */
 const cacheDialog = ref(false);
@@ -247,36 +251,50 @@ onMounted(load);
         </section>
 
         <section class="block">
-          <h2 class="block-title">
-            目录
-            <span class="muted">{{ chapters.length }} 章</span>
-          </h2>
+          <el-tabs v-model="activeTab" class="detail-tabs">
+            <el-tab-pane name="toc">
+              <template #label>
+                目录
+                <span class="muted">{{ chapters.length }} 章</span>
+              </template>
 
-          <p v-if="!chapters.length" class="empty">这本书还没有目录</p>
+              <p v-if="!chapters.length" class="empty">这本书还没有目录</p>
 
-          <ol v-else class="toc">
-            <li
-              v-for="c in shownChapters"
-              :key="c.index"
-              class="toc-item"
-              :class="{
-                active: hasProgress && c.index === progressIndex,
-                volume: c.isVolume,
-              }"
-              @click="openReader(c.index)"
-            >
-              <span class="toc-title">{{ c.title || `第 ${c.index + 1} 章` }}</span>
-              <span v-if="hasProgress && c.index === progressIndex" class="toc-tag">
-                上次读到
-              </span>
-            </li>
-          </ol>
+              <ol v-else class="toc">
+                <li
+                  v-for="c in shownChapters"
+                  :key="c.index"
+                  class="toc-item"
+                  :class="{
+                    active: hasProgress && c.index === progressIndex,
+                    volume: c.isVolume,
+                  }"
+                  @click="openReader(c.index)"
+                >
+                  <span class="toc-title">{{ c.title || `第 ${c.index + 1} 章` }}</span>
+                  <span v-if="hasProgress && c.index === progressIndex" class="toc-tag">
+                    上次读到
+                  </span>
+                </li>
+              </ol>
 
-          <div v-if="hasMoreChapters" class="more">
-            <el-button size="small" @click="chapterLimit += 300">
-              显示更多（还有 {{ chapters.length - chapterLimit }} 章）
-            </el-button>
-          </div>
+              <div v-if="hasMoreChapters" class="more">
+                <el-button size="small" @click="chapterLimit += 300">
+                  显示更多（还有 {{ chapters.length - chapterLimit }} 章）
+                </el-button>
+              </div>
+            </el-tab-pane>
+
+            <el-tab-pane name="ai" label="AI 总结">
+              <AIPanel
+                :book-id="bookId"
+                :chapters="chapters"
+                :read-index="progressIndex"
+                :started="hasProgress"
+                :active="activeTab === 'ai'"
+              />
+            </el-tab-pane>
+          </el-tabs>
         </section>
       </div>
     </div>

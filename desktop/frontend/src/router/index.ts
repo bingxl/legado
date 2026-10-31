@@ -47,10 +47,36 @@ const routes = [
     meta: { title: "缓存" },
   },
   {
+    path: "/replace",
+    name: "replace",
+    component: () => import("@/views/ReplaceRuleView.vue"),
+    meta: { title: "替换规则" },
+  },
+  {
+    path: "/subscriptions",
+    name: "subscriptions",
+    component: () => import("@/views/SubscriptionView.vue"),
+    meta: { title: "书源订阅" },
+  },
+  {
+    // 设置页在移动端兼作「我的」，是替换/订阅/缓存/WebDAV 的入口。
+    path: "/settings",
+    name: "settings",
+    component: () => import("@/views/SettingsView.vue"),
+    meta: { title: "设置" },
+  },
+  {
     path: "/webdav",
     name: "webdav",
     component: () => import("@/views/WebDAVView.vue"),
     meta: { title: "WebDAV" },
+  },
+  {
+    // AI 问答：`?book=<id>` 指定书籍，不指定时由页面内选择。
+    path: "/ai",
+    name: "ai",
+    component: () => import("@/views/AIView.vue"),
+    meta: { title: "AI 问答" },
   },
   {
     path: "/book/:id",

@@ -73,4 +73,33 @@ export const sourceApi = {
     call(
       binding.AddToShelf(sourceId, bookUrl, name, author, variable, groupId),
     ),
+
+  // ── 书源订阅 ──────────────────────────────────────────────
+  /** 订阅列表。 */
+  listSubscriptions: () => callList(binding.ListSubscriptions()),
+
+  getSubscription: (id: number) => call(binding.GetSubscription(id)),
+
+  /** 新增或更新订阅；id 为 0 表示新增。 */
+  saveSubscription: (
+    id: number,
+    name: string,
+    url: string,
+    enabled: boolean,
+    order = 0,
+  ) => call(binding.SaveSubscription(id, name, url, enabled, order)),
+
+  deleteSubscription: (id: number) => call(binding.DeleteSubscription(id)),
+
+  setSubscriptionEnabled: (id: number, enabled: boolean) =>
+    call(binding.SetSubscriptionEnabled(id, enabled)),
+
+  /** 刷新单个订阅：拉取远程书源并覆盖入库。 */
+  syncSubscription: (id: number) => call(binding.SyncSubscription(id)),
+
+  /**
+   * 刷新全部启用的订阅。
+   * 每个订阅一次网络往返，可能耗时几十秒，调用前应先给出等待提示。
+   */
+  syncAllSubscriptions: () => callList(binding.SyncAllSubscriptions()),
 };

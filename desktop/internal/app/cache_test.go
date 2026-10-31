@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -127,7 +128,14 @@ func (f *fakeCacheRepo) List(_ context.Context, bookID int64) ([]*domain.CachedC
 	for _, c := range f.data[bookID] {
 		out = append(out, c)
 	}
+	// 与真实仓储的 ORDER BY idx ASC 对齐：不排序会让依赖顺序的断言随机失败。
+	sort.Slice(out, func(i, j int) bool { return out[i].Index < out[j].Index })
 	return out, nil
+}
+
+func (f *fakeCacheRepo) ListWithContent(_ context.Context, bookID int64) ([]*domain.CachedChapter, error) {
+	// 测试替身里 List 本就带正文，直接复用。
+	return f.List(context.Background(), bookID)
 }
 
 func (f *fakeCacheRepo) Indexes(_ context.Context, bookID int64) ([]int, error) {

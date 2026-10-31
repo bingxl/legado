@@ -92,6 +92,21 @@ type SubscriptionRepository interface {
 	List(ctx context.Context) ([]*domain.SourceSubscription, error)
 }
 
+// SourceLoginRepository 提供书源登录信息的持久化能力。
+//
+// 主键是书源地址（bookSourceUrl）：登录态跟着站点走，书源换个 id
+// 或重新导入同一份 JSON 都不应该丢登录；换了域名则自然失效。
+type SourceLoginRepository interface {
+	// Get 读取登录信息，不存在时返回 domain.ErrNotFound。
+	Get(ctx context.Context, sourceURL string) (domain.SourceLogin, error)
+	// Save 写入或覆盖登录信息。
+	Save(ctx context.Context, login domain.SourceLogin) error
+	// Delete 删除登录信息；不存在不算错误（清除登录要幂等）。
+	Delete(ctx context.Context, sourceURL string) error
+	// ListSourceURLs 列出所有已保存登录信息的书源地址（清理孤儿记录用）。
+	ListSourceURLs(ctx context.Context) ([]string, error)
+}
+
 // UnitOfWork 界定一个事务边界，使跨仓储的写入保持原子性。
 //
 // fn 返回 error 时整个事务回滚。

@@ -29,4 +29,10 @@ const (
 	EventWebDAVSyncProgress = "webdav:sync:progress"
 	// EventWebDAVImportProgress 从 WebDAV 导入书籍的进度，payload 为 dto.WebDAVImportProgress。
 	EventWebDAVImportProgress = "webdav:import:progress"
+	// EventAIIndexProgress AI 索引进度，payload 为 dto.AIIndexProgress。
+	EventAIIndexProgress = "ai:index:progress"
+	// EventAIAnswerChunk 流式回答的分片，payload 为 dto.AIAnswerChunk。
+	EventAIAnswerChunk = "ai:answer:chunk"
+	// EventAIAnswerDone 流式回答结束，payload 为 dto.AIAnswerDone。
+	EventAIAnswerDone = "ai:answer:done"
 )

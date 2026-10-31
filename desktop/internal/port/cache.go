@@ -16,6 +16,11 @@ type ChapterCacheRepository interface {
 	Get(ctx context.Context, bookID int64, index int) (*domain.CachedChapter, error)
 	// List 返回某本书的全部缓存章节，按序号升序（不含正文，正文用 Get 取）。
 	List(ctx context.Context, bookID int64) ([]*domain.CachedChapter, error)
+	// ListWithContent 返回某本书的全部缓存章节**含正文**，供 AI 索引一次性读入。
+	//
+	// 与 List 分开而不是加个开关：List 的调用方（缓存管理列表）明确不需要正文，
+	// 一次读出整本书的文本会让那个页面白白多传几十 MB。
+	ListWithContent(ctx context.Context, bookID int64) ([]*domain.CachedChapter, error)
 	// Indexes 返回某本书已缓存的章节序号，供阅读器目录打标记。
 	Indexes(ctx context.Context, bookID int64) ([]int, error)
 	// BookStats 按书聚合缓存统计（章节数、总字节、更新时间）。

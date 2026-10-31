@@ -35,6 +35,13 @@ export function Delete(id: number): $CancellablePromise<void> {
 }
 
 /**
+ * DeleteSubscription 删除订阅。已导入的书源保留。
+ */
+export function DeleteSubscription(id: number): $CancellablePromise<void> {
+    return $Call.ByID(3688027763, id);
+}
+
+/**
  * Explore 拉取某个分类下的书单；url 为空表示用书源的首个分类。
  */
 export function Explore(sourceID: number, url: string, page: number): $CancellablePromise<dto$0.SearchResultView[] | null> {
@@ -60,6 +67,13 @@ export function Export(ids: number[] | null): $CancellablePromise<string> {
  */
 export function Get(id: number): $CancellablePromise<dto$0.SourceView> {
     return $Call.ByID(360996475, id);
+}
+
+/**
+ * GetSubscription 获取单个订阅。
+ */
+export function GetSubscription(id: number): $CancellablePromise<dto$0.SubscriptionView> {
+    return $Call.ByID(4287431518, id);
 }
 
 /**
@@ -89,10 +103,24 @@ export function ListExploreSources(): $CancellablePromise<dto$0.ExploreSourceBri
 }
 
 /**
+ * ListSubscriptions 列出全部书源订阅。
+ */
+export function ListSubscriptions(): $CancellablePromise<dto$0.SubscriptionView[] | null> {
+    return $Call.ByID(2072325317);
+}
+
+/**
  * Save 新增或更新书源；id 为 0 表示新增。
  */
 export function Save(id: number, name: string, group: string, url: string, comment: string, raw: string, enabled: boolean, order: number): $CancellablePromise<dto$0.SourceView> {
     return $Call.ByID(2320903436, id, name, group, url, comment, raw, enabled, order);
+}
+
+/**
+ * SaveSubscription 新增或更新订阅；id 为 0 表示新增。
+ */
+export function SaveSubscription(id: number, name: string, url: string, enabled: boolean, order: number): $CancellablePromise<dto$0.SubscriptionView> {
+    return $Call.ByID(3143703317, id, name, url, enabled, order);
 }
 
 /**
@@ -114,6 +142,30 @@ export function SearchAll(keyword: string, page: number): $CancellablePromise<dt
  */
 export function SetEnabled(id: number, enabled: boolean): $CancellablePromise<void> {
     return $Call.ByID(3602915700, id, enabled);
+}
+
+/**
+ * SetSubscriptionEnabled 启停订阅；停用的订阅不参与全部刷新。
+ */
+export function SetSubscriptionEnabled(id: number, enabled: boolean): $CancellablePromise<void> {
+    return $Call.ByID(1831637599, id, enabled);
+}
+
+/**
+ * SyncAllSubscriptions 刷新全部启用的订阅。
+ * 
+ * 可能耗时几十秒（每个订阅一次网络往返），前端要把它当后台任务处理，
+ * 不要同步等待——这里保持同步签名，由前端自己先弹进度再调用。
+ */
+export function SyncAllSubscriptions(): $CancellablePromise<dto$0.SubscriptionSyncResult[] | null> {
+    return $Call.ByID(2550843541);
+}
+
+/**
+ * SyncSubscription 刷新单个订阅：拉取远程地址并把书源覆盖入库。
+ */
+export function SyncSubscription(id: number): $CancellablePromise<dto$0.SourceImportResult | null> {
+    return $Call.ByID(1372179627, id);
 }
 
 /**

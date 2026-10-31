@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatBytes, formatDateTime } from "./format";
+import { citeFragment, formatBytes, formatDateTime } from "./format";
 
 describe("formatBytes", () => {
   it("按常见的容量单位换算", () => {
@@ -29,5 +29,21 @@ describe("formatDateTime", () => {
     expect(formatDateTime(null)).toBe("");
     expect(formatDateTime(undefined)).toBe("");
     expect(formatDateTime("not-a-date")).toBe("");
+  });
+});
+
+describe("citeFragment", () => {
+  it("取第一行并限长", () => {
+    expect(citeFragment("刀具前角影响切削力\n下一段内容")).toBe("刀具前角影响切削力");
+    expect(citeFragment("一二三四五六", 3)).toBe("一二三");
+  });
+
+  it("跳过空行后再取", () => {
+    expect(citeFragment("\n\n  有内容的行  \n")).toBe("有内容的行");
+  });
+
+  it("空摘录返回空串", () => {
+    expect(citeFragment("")).toBe("");
+    expect(citeFragment("   \n  ")).toBe("");
   });
 });

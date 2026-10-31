@@ -28,6 +28,14 @@ type sourceService interface {
 	ExploreKinds(ctx context.Context, sourceID int64) ([]dto.ExploreKindView, error)
 	Explore(ctx context.Context, sourceID int64, url string, page int) ([]dto.SearchResultView, error)
 	AddToShelf(ctx context.Context, sourceID int64, bookURL string, name string, author string, variable string, groupID int64) (dto.BookBrief, error)
+	// ── 书源订阅 ────────────────────────────────────────────
+	ListSubscriptions(ctx context.Context) ([]dto.SubscriptionView, error)
+	GetSubscription(ctx context.Context, id int64) (dto.SubscriptionView, error)
+	SaveSubscription(ctx context.Context, id int64, name, url string, enabled bool, order int) (dto.SubscriptionView, error)
+	DeleteSubscription(ctx context.Context, id int64) error
+	SetSubscriptionEnabled(ctx context.Context, id int64, enabled bool) error
+	SyncSubscription(ctx context.Context, id int64) (*dto.SourceImportResult, error)
+	SyncAllSubscriptions(ctx context.Context) ([]dto.SubscriptionSyncResult, error)
 }
 
 // NewSourceAPI 创建书源绑定服务。
@@ -154,4 +162,56 @@ func (a *SourceAPI) AddToShelf(sourceID int64, bookURL string, name string, auth
 		return dto.BookBrief{}, errBadRequest("缺少书籍链接")
 	}
 	return a.svc.AddToShelf(newCtx(), sourceID, bookURL, name, author, variable, groupID)
+}
+
+// ── 书源订阅 ────────────────────────────────────────────────
+
+// ListSubscriptions 列出全部书源订阅。
+func (a *SourceAPI) ListSubscriptions() ([]dto.SubscriptionView, error) {
+	return a.svc.ListSubscriptions(newCtx())
+}
+
+// GetSubscription 获取单个订阅。
+func (a *SourceAPI) GetSubscription(id int64) (dto.SubscriptionView, error) {
+	if id == 0 {
+		return dto.SubscriptionView{}, errBadRequest("缺少订阅 ID")
+	}
+	return a.svc.GetSubscription(newCtx(), id)
+}
+
+// SaveSubscription 新增或更新订阅；id 为 0 表示新增。
+func (a *SourceAPI) SaveSubscription(id int64, name string, url string, enabled bool, order int) (dto.SubscriptionView, error) {
+	return a.svc.SaveSubscription(newCtx(), id, name, url, enabled, order)
+}
+
+// DeleteSubscription 删除订阅。已导入的书源保留。
+func (a *SourceAPI) DeleteSubscription(id int64) error {
+	if id == 0 {
+		return errBadRequest("缺少订阅 ID")
+	}
+	return a.svc.DeleteSubscription(newCtx(), id)
+}
+
+// SetSubscriptionEnabled 启停订阅；停用的订阅不参与全部刷新。
+func (a *SourceAPI) SetSubscriptionEnabled(id int64, enabled bool) error {
+	if id == 0 {
+		return errBadRequest("缺少订阅 ID")
+	}
+	return a.svc.SetSubscriptionEnabled(newCtx(), id, enabled)
+}
+
+// SyncSubscription 刷新单个订阅：拉取远程地址并把书源覆盖入库。
+func (a *SourceAPI) SyncSubscription(id int64) (*dto.SourceImportResult, error) {
+	if id == 0 {
+		return nil, errBadRequest("缺少订阅 ID")
+	}
+	return a.svc.SyncSubscription(newCtx(), id)
+}
+
+// SyncAllSubscriptions 刷新全部启用的订阅。
+//
+// 可能耗时几十秒（每个订阅一次网络往返），前端要把它当后台任务处理，
+// 不要同步等待——这里保持同步签名，由前端自己先弹进度再调用。
+func (a *SourceAPI) SyncAllSubscriptions() ([]dto.SubscriptionSyncResult, error) {
+	return a.svc.SyncAllSubscriptions(newCtx())
 }

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/legado/desktop/internal/adapter/aihttp"
 	"github.com/legado/desktop/internal/adapter/bookparser"
 	"github.com/legado/desktop/internal/adapter/exporter"
 	"github.com/legado/desktop/internal/adapter/filesystem"
@@ -22,6 +23,7 @@ import (
 	"github.com/legado/desktop/internal/app"
 	"github.com/legado/desktop/internal/domain"
 	"github.com/legado/desktop/internal/port"
+	"github.com/legado/legado-go/pkg/store"
 )
 
 // App 是装配产物：一组可直接使用的应用服务与共享基础设施。
@@ -42,11 +44,17 @@ type App struct {
 	WebDAV    *app.WebDAVService
 	// Cache 负责章节的手动缓存与缓存管理。
 	Cache *app.CacheService
+	// ReplaceRule 管理全局正文替换/净化规则。
+	ReplaceRule *app.ReplaceRuleService
 	// SourceDebug 负责书源调试（真跑规则，把每一步打点推给前端）。
 	SourceDebug *app.SourceDebugService
+	// SourceLogin 负责书源（含漫画源）的登录：脚本登录、Cookie 管理与登录态探测。
+	SourceLogin *app.SourceLoginService
 	// Content 供给章节正文（本地解析或走书源抓取）。
 	// 需要按章节粒度取内容的场景（例如只导出前若干章）直接使用它。
 	Content *app.ContentProvider
+	// AI 提供书籍总结与基于书籍内容的问答。
+	AI *app.AIService
 }
 
 // New 在 root 下装配全部业务依赖。
@@ -77,6 +85,7 @@ func New(root string, events port.EventBus) (*App, error) {
 	progress := sqlite.NewProgressRepo(db)
 	sources := sqlite.NewBookSourceRepo(db)
 	subs := sqlite.NewSubscriptionRepo(db)
+	rules := sqlite.NewReplaceRuleRepo(db)
 	settings := sqlite.NewSettingsStore(db)
 	chapterCache := sqlite.NewChapterCacheRepo(db)
 
@@ -91,6 +100,10 @@ func New(root string, events port.EventBus) (*App, error) {
 	epubExporter := exporter.NewEPUBExporter()
 
 	// ── 书源引擎 ────────────────────────────────────────────
+	//
+	// Cookie 必须落盘：登录态就存在引擎的 CookieStore 里，不指定文件的话
+	// 每次重启应用都要重新登录一遍（书源的 Set-Cookie 也会随之丢失）。
+	store.Default().SetCookieFile(filepath.Join(root, "cookies.json"))
 	fetcher := legado.NewFetcher(DefaultUserAgent())
 
 	// ── 应用服务 ────────────────────────────────────────────
@@ -135,10 +148,28 @@ func New(root string, events port.EventBus) (*App, error) {
 	// 导入能力用链式注入，因为下载落点与导入器只有在 library 构造之后才就绪。
 	webdav := app.NewWebDAVService(settings, legadowebdav.NewFactory(), events, dbPath).
 		WithBookImport(root, library)
+	sourceLogin := app.NewSourceLoginService(app.SourceLoginDeps{
+		Sources: sources,
+		Logins:  sqlite.NewSourceLoginRepo(db),
+		Engine:  legado.NewLoginer(DefaultUserAgent()),
+	})
 	sourceDebug := app.NewSourceDebugService(app.SourceDebugDeps{
 		Sources:  source,
 		Debugger: legado.NewDebugger(DefaultUserAgent()),
 		Events:   events,
+	})
+	// AI：配置、索引与问答。用它自己的 http 客户端——书源抓取那套不适用：
+	// 需要 SSE 流式读取与长超时，而 ImageDownloader 的 60s 上限会截断长回答。
+	ai := app.NewAIService(app.AIDeps{
+		Settings:  settings,
+		LLM:       aihttp.New(aihttp.Options{UserAgent: DefaultUserAgent()}),
+		Bus:       events,
+		Content:   content,
+		Cache:     chapterCache,
+		Chunks:    sqlite.NewAIChunkRepo(db),
+		Summaries: sqlite.NewAISummaryRepo(db),
+		States:    sqlite.NewAIIndexStateRepo(db),
+		Chats:     sqlite.NewAIChatRepo(db),
 	})
 
 	return &App{
@@ -152,8 +183,11 @@ func New(root string, events port.EventBus) (*App, error) {
 		Library:     library,
 		WebDAV:      webdav,
 		Cache:       cache,
+		ReplaceRule: app.NewReplaceRuleService(rules),
 		Content:     content,
 		SourceDebug: sourceDebug,
+		SourceLogin: sourceLogin,
+		AI:          ai,
 	}, nil
 }
 

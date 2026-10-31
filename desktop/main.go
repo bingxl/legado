@@ -13,10 +13,6 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"path/filepath"
-	"strings"
-
-	"github.com/adrg/xdg"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -28,13 +24,9 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-// dataDir 是应用数据目录：默认遵循 XDG 规范，可通过环境变量覆盖。
-func dataDir() string {
-	if v := os.Getenv("LEGADO_DESKTOP_HOME"); v != "" {
-		return v
-	}
-	return filepath.Join(xdg.DataHome, "legado-desktop")
-}
+// dataDir / windowOptions / windowsOptions / safeAreaJSON 等平台相关实现
+// 分别在 platform_desktop.go（!android）与 platform_android.go（android）中。
+// 本文件只做装配，不含任何 GOOS/GOARCH 分支。
 
 func main() {
 	if err := run(); err != nil {
@@ -64,14 +56,17 @@ func run() error {
 	defer biz.Close()
 
 	// ── Wails 绑定层 ────────────────────────────────────────────
-	systemAPI := api.NewSystemAPI()
+	systemAPI := api.NewSystemAPI(platformName, safeAreaJSON)
 	bookshelfAPI := api.NewBookshelfAPI(biz.Bookshelf)
 	libraryAPI := api.NewLibraryAPI(biz.Library)
 	readerAPI := api.NewReaderAPI(biz.Reader)
 	sourceAPI := api.NewSourceAPI(biz.Source)
 	webdavAPI := api.NewWebDAVAPI(biz.WebDAV)
 	cacheAPI := api.NewCacheAPI(biz.Cache)
+	aiAPI := api.NewAIAPI(biz.AI)
+	replaceRuleAPI := api.NewReplaceRuleAPI(biz.ReplaceRule)
 	sourceDebugAPI := api.NewSourceDebugAPI(biz.SourceDebug)
+	sourceLoginAPI := api.NewSourceLoginAPI(biz.SourceLogin)
 
 	wailsApp := application.New(application.Options{
 		Name:        "legado-desktop",
@@ -83,18 +78,16 @@ func run() error {
 			application.NewService(sourceAPI),
 			application.NewService(webdavAPI),
 			application.NewService(cacheAPI),
+			application.NewService(replaceRuleAPI),
 			application.NewService(sourceDebugAPI),
+			application.NewService(sourceLoginAPI),
+			application.NewService(aiAPI),
 			application.NewService(systemAPI),
 		},
 		Assets: application.AssetOptions{
 			Handler: assetHandler(root),
 		},
-		Windows: application.WindowsOptions{
-			// 不指定时 WebView2 会把用户数据目录放在 %APPDATA%\<exe 名>；
-			// Roaming 属于 Defender 受控文件夹访问的保护范围，改指临时目录更稳。
-			WebviewUserDataPath:   filepath.Join(os.TempDir(), "legado-desktop-webview"),
-			AdditionalBrowserArgs: webviewBrowserArgs(),
-		},
+		Windows: windowsOptions(),
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
@@ -104,37 +97,9 @@ func run() error {
 	bus.Attach(wailsApp)
 	systemAPI.Attach(wailsApp)
 
-	wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:  "Legado",
-		Width:  1200,
-		Height: 780,
-		Mac: application.MacWindow{
-			InvisibleTitleBarHeight: 50,
-			Backdrop:                application.MacBackdropTranslucent,
-			TitleBar:                application.MacTitleBarHiddenInset,
-		},
-		BackgroundColour: application.NewRGB(255, 255, 255),
-		URL:              "/",
-	})
+	wailsApp.Window.NewWithOptions(windowOptions())
 
 	return wailsApp.Run()
-}
-
-// webviewBrowserArgs 返回传给 WebView2 的附加启动参数。
-//
-// 默认带 --disable-gpu：WebView2 Runtime 155 起，部分机器（Intel 核显 + 独显混合、
-// 或装了虚拟显示驱动的环境）GPU 进程初始化失败，CreateCoreWebView2Controller 会返回
-// 0x8000ffff（Catastrophic failure），Wails 直接 os.Exit，留下一个纯白窗口——
-// 表现像前端挂了，实际是 WebView 根本没挂到窗口上。
-// 参考 MicrosoftEdge/WebView2Feedback#5759。
-//
-// 需要 GPU 加速（WebGL / canvas 加速）时用 LEGADO_WEBVIEW_ARGS 覆盖，
-// 逗号分隔，会整体替换默认值，例如 LEGADO_WEBVIEW_ARGS=--disable-gpu-compositing。
-func webviewBrowserArgs() []string {
-	if v := os.Getenv("LEGADO_WEBVIEW_ARGS"); v != "" {
-		return strings.Split(v, ",")
-	}
-	return []string{"--disable-gpu"}
 }
 
 // assetHandler 组合前端静态资源与本地资源路由。

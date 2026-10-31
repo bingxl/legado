@@ -9,23 +9,47 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// SystemAPI 提供与操作系统交互的能力（文件对话框等）。
+// safeAreaFunc 返回当前平台的安全区 JSON。由 main 注入，避免本层出现平台分支。
+type safeAreaFunc func() string
+
+// SystemAPI 提供与操作系统交互的能力（文件对话框、平台信息等）。
 //
 // 之所以把这些放在绑定层而非 app 层：它们本质上是 UI 交互，
 // 依赖 Wails 运行时，放进来才能保持 app 层的纯粹。
 type SystemAPI struct {
 	mu  sync.RWMutex
 	app *application.App
+	// platform 是运行平台标识（"desktop" / "android"），前端据此切换布局。
+	platform string
+	// safeArea 返回刘海屏/系统手势区尺寸，桌面端恒为空串。
+	safeArea safeAreaFunc
 }
 
 // NewSystemAPI 创建系统服务。使用前需调用 Attach 绑定应用实例。
-func NewSystemAPI() *SystemAPI { return &SystemAPI{} }
+func NewSystemAPI(platform string, safeArea safeAreaFunc) *SystemAPI {
+	return &SystemAPI{platform: platform, safeArea: safeArea}
+}
 
 // Attach 绑定 Wails 应用实例。
 func (a *SystemAPI) Attach(app *application.App) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.app = app
+}
+
+// Platform 返回运行平台标识："desktop" 或 "android"。
+//
+// 前端据此在桌面侧边栏布局与移动端底部 Tab 布局之间切换——
+// 两套布局共用同一批视图组件，只有外壳与导航形态不同。
+func (a *SystemAPI) Platform() string { return a.platform }
+
+// SafeArea 返回安全区 JSON（上/下/左/右避让尺寸），用于刘海屏与系统手势条。
+// 桌面端返回空串，前端按 0 处理。
+func (a *SystemAPI) SafeArea() string {
+	if a.safeArea == nil {
+		return ""
+	}
+	return a.safeArea()
 }
 
 // OpenFiles 打开选择文件对话框，返回选中的文件路径列表。

@@ -8,6 +8,7 @@ import { systemApi } from "@/api/system";
 import { onSourceCheckProgress } from "@/api/events";
 import type { ProgressPayload } from "@/api/events";
 import type { SourceView, SourceCheckResult } from "@/types";
+import SourceLoginDialog from "@/components/SourceLoginDialog.vue";
 
 const sources = ref<SourceView[]>([]);
 const loading = ref(false);
@@ -29,6 +30,18 @@ function openEdit(s: SourceView) {
 /** 直接跳到编辑页的调试标签，省去「先进编辑、再点调试」两步。 */
 function openDebug(s: SourceView) {
   router.push(`/sources/${s.id}/edit?tab=debug`);
+}
+
+// ── 登录 ────────────────────────────────────────────────────
+// 登录做成独立对话框而不是编辑页里的一个 Tab：登录是「一次性动作」，
+// 跑完要立刻看到结果（Cookie 掩码、脚本日志、检测结论），
+// 埋在 70 个字段的表单里既难找也没法当场验证。
+const loginDialog = ref(false);
+const loginTarget = ref<SourceView | null>(null);
+
+function openLogin(s: SourceView) {
+  loginTarget.value = s;
+  loginDialog.value = true;
 }
 
 async function load() {
@@ -166,8 +179,11 @@ onMounted(() => {
           />
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="178" fixed="right">
+      <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
+          <el-button link type="primary" data-login-row="login" @click="openLogin(row)">
+            登录
+          </el-button>
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button link type="primary" @click="openDebug(row)">调试</el-button>
           <el-button link type="danger" @click="remove(row)">删除</el-button>
@@ -177,6 +193,13 @@ onMounted(() => {
         <el-empty description="还没有书源，导入一份试试" />
       </template>
     </el-table>
+
+    <SourceLoginDialog
+      v-model="loginDialog"
+      :source-id="loginTarget?.id ?? 0"
+      :source-name="loginTarget?.name"
+      @changed="load"
+    />
 
     <!-- 校验结果 -->
     <el-dialog v-model="checkDialog" title="书源校验结果" width="680">

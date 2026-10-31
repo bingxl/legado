@@ -83,6 +83,29 @@ func (r *ChapterCacheRepo) List(ctx context.Context, bookID int64) ([]*domain.Ca
 	return out, rows.Err()
 }
 
+// ListWithContent 返回某本书的全部缓存章节（含正文）。
+//
+// 供 AI 索引使用：那里需要整本书的文本，逐个 Get 会产生上千次查询。
+func (r *ChapterCacheRepo) ListWithContent(ctx context.Context, bookID int64) ([]*domain.CachedChapter, error) {
+	rows, err := r.db.q(ctx).QueryContext(ctx,
+		`SELECT book_id, idx, title, url, html, images, size, created_at
+		 FROM chapter_cache WHERE book_id = ? ORDER BY idx ASC`, bookID)
+	if err != nil {
+		return nil, fmt.Errorf("查询章节缓存失败: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]*domain.CachedChapter, 0)
+	for rows.Next() {
+		c, err := scanCachedChapter(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // Indexes 返回某本书已缓存的章节序号。
 func (r *ChapterCacheRepo) Indexes(ctx context.Context, bookID int64) ([]int, error) {
 	rows, err := r.db.q(ctx).QueryContext(ctx,

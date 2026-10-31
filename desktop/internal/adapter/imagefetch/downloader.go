@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/legado/legado-go/pkg/store"
+
 	"github.com/legado/desktop/internal/port"
 )
 
@@ -62,6 +64,11 @@ func (d *Downloader) Download(ctx context.Context, rawURL, referer string) ([]by
 	req.Header.Set("Accept", "image/avif,image/webp,image/*,*/*;q=0.8")
 	if ref := refererOf(referer); ref != "" {
 		req.Header.Set("Referer", ref)
+	}
+	// 需要登录才能看的漫画，图床上同样要带 Cookie——书源登录后图片却 403，
+	// 十次有九次是这里漏了。按域名取，登录态与书源请求共用同一份。
+	if c := store.Default().GetCookie(target.String()); c != "" {
+		req.Header.Set("Cookie", c)
 	}
 
 	resp, err := d.client.Do(req)

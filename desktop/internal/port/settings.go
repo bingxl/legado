@@ -25,4 +25,6 @@ const (
 	SettingLastImportDir = "import.lastDir"
 	// SettingLastExportDir 记录最近一次导出目录。
 	SettingLastExportDir = "export.lastDir"
+	// SettingAI 保存 AI 总结与问答功能的配置 JSON。
+	SettingAI = "ai.config"
 )

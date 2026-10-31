@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/legado/legado-go/pkg/store"
 )
 
 // imageProxyClient 用于转发章节图片请求。
@@ -49,6 +51,10 @@ func serveRemoteImage(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("Accept", "image/avif,image/webp,image/*,*/*;q=0.8")
 	if ref := refererFor(r.URL.Query().Get("src")); ref != "" {
 		req.Header.Set("Referer", ref)
+	}
+	// 登录态与书源请求共用一份 CookieStore：需要登录的漫画源，图片同样要带 Cookie。
+	if c := store.Default().GetCookie(target.String()); c != "" {
+		req.Header.Set("Cookie", c)
 	}
 
 	resp, err := imageProxyClient.Do(req)

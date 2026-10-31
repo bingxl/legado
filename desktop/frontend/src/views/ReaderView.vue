@@ -24,6 +24,7 @@ import { copyText } from "@/utils/clipboard";
 import { comicImageURL } from "@/utils/media";
 import { loadReaderPrefs, saveReaderPrefs } from "@/utils/readerPrefs";
 import { wrapPlainTextAsParagraphs } from "@/utils/plainText";
+import AskAIDrawer from "@/components/AskAIDrawer.vue";
 import type { BookDetail, ChapterContent, ChapterItem } from "@/types";
 
 const route = useRoute();
@@ -39,6 +40,8 @@ const index = ref(0);
 const loading = ref(false);
 const tocVisible = ref(false);
 const stageRef = ref<HTMLElement | null>(null);
+/** 「问 AI」抽屉开关。 */
+const askOpen = ref(false);
 /** 已缓存的章节序号，用于目录里打标记。 */
 const cachedIndexes = ref<Set<number>>(new Set());
 
@@ -108,6 +111,74 @@ async function copyBookURL() {
  */
 const displayHTML = computed(() =>
   wrapPlainTextAsParagraphs(content.value?.html ?? ""),
+);
+
+/**
+ * 高亮 AI 引用跳转带来的片段（`?hl=<片段开头>`）。
+ *
+ * 为什么不动 displayHTML：往 v-html 里插 `<mark>` 会与净化规则、TTS 切段
+ * 相互干扰。这里在渲染完成后直接操作 DOM，只影响视觉，不改内容来源。
+ * 切换章节时 DOM 会被整体替换，高亮自然消失，无需清理状态。
+ *
+ * 匹配时忽略空白：切片文本经过空白归一化（全角空格→普通空格、连续空白折叠），
+ * 而正文渲染的是原始 HTML，同一句话两边的空白字符往往不同。
+ * 直接 indexOf 会「明明有这段却高亮不上」，所以两边都去掉空白再比，
+ * 再用下标映射还原真实位置。
+ */
+function highlightQuery() {
+  // 复用朗读模块的 contentEl()：正文容器只有一个，别维护第二份选择器。
+  const root = contentEl();
+  if (!root) return;
+  const needle = compactSpace(String(route.query.hl || ""));
+  if (!needle) return;
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    const text = node.nodeValue ?? "";
+    if (compactSpace(text).includes(needle)) {
+      const hit = locate(text, needle);
+      if (hit) {
+        const range = document.createRange();
+        range.setStart(node, hit.start);
+        range.setEnd(node, hit.end);
+        const mark = document.createElement("mark");
+        mark.className = "ai-hit";
+        range.surroundContents(mark);
+        // 即时滚动：平滑滚动在长章节里要滚好几秒，用户会以为没跳成功。
+        mark.scrollIntoView({ block: "center" });
+        return;
+      }
+    }
+    node = walker.nextNode();
+  }
+}
+
+/** 去掉全部空白字符（含全角空格、换行）。 */
+function compactSpace(s: string): string {
+  return s.replace(/\s+/g, "");
+}
+
+/** 在原始文本里定位「去空白后」的片段，返回原串下标区间。 */
+function locate(text: string, compactNeedle: string): { start: number; end: number } | null {
+  const map: number[] = [];
+  const chars: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (/\s/.test(text[i])) continue;
+    chars.push(text[i]);
+    map.push(i);
+  }
+  const at = chars.join("").indexOf(compactNeedle);
+  if (at < 0) return null;
+  return { start: map[at], end: map[at + compactNeedle.length - 1] + 1 };
+}
+
+watch(
+  () => content.value?.html,
+  async () => {
+    await nextTick();
+    highlightQuery();
+  },
 );
 
 /** 当前书的缓存任务（运行中时 toolbar 显示进度）。 */
@@ -470,6 +541,7 @@ onBeforeUnmount(() => {
           </el-dropdown-menu>
         </template>
       </el-dropdown>
+      <el-button link data-ai="ask-ai" @click="askOpen = true">问 AI</el-button>
       <el-button link @click="tocVisible = !tocVisible">目录</el-button>
     </header>
 
@@ -542,6 +614,13 @@ onBeforeUnmount(() => {
         style="width: 120px"
       />
     </footer>
+
+    <!-- 问 AI 抽屉：读到一半有疑问时不必离开正文 -->
+    <AskAIDrawer
+      v-model="askOpen"
+      :book-id="boundBookId"
+      :book-name="book?.name || ''"
+    />
   </div>
 </template>
 
@@ -701,5 +780,13 @@ onBeforeUnmount(() => {
 .setting {
   font-size: 13px;
   color: #6b7280;
+}
+
+/* AI 引用跳转的高亮：淡黄底而非高饱和色，避免打断阅读节奏 */
+:deep(mark.ai-hit) {
+  background: #fff3c4;
+  color: inherit;
+  padding: 0 1px;
+  border-radius: 2px;
 }
 </style>
