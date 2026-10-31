@@ -33,12 +33,7 @@ wails3 build            # 或 task build
 
 ### Windows 产物签名（可选，仅开发机）
 
-未签名的 exe 在 Windows 上会被当成「未知应用」：SmartScreen 弹「无法识别的应用」，
-Defender 的**受控文件夹访问**还会拦它写 `Documents` 等受保护目录
-（事件日志 `Microsoft-Windows-Windows Defender/Operational` 里的事件 1123）。
-而且 `wails3 build` 每次都会重新链接、哈希全变，所以**不签名的话每重建一次就会重现一次**。
-
-`wails3 build` 现在会自动调用 `build/windows/sign-dev.ps1` 用本机自签名证书签名。
+`wails3 build` / `task build` 会自动调用 `build/windows/sign-dev.ps1`，用本机自签名证书签名。
 首次需要以管理员身份配置一次（导入受信任根 + 把产物路径加入 CFA 允许列表）：
 
 ```powershell
@@ -46,11 +41,45 @@ Defender 的**受控文件夹访问**还会拦它写 `Documents` 等受保护目
 pwsh -File build/windows/setup-dev-cert.ps1
 ```
 
-- 证书在 `Cert:\CurrentUser\My`（主题 `CN=Legado Desktop Dev`，有效期 5 年）。
+- 证书在 `Cert:\CurrentUser\My`（主题 `CN=Legado Desktop Dev`，有效期 5 年），公钥导出为
+  `build/windows/legado-dev-codesign.cer`。
 - 指纹存在 `%USERPROFILE%\.legado-codesign-thumbprint`；也可用环境变量 `LEGADO_CODESIGN_THUMBPRINT` 覆盖。
 - 没配置证书的机器（CI、他人）签名步骤会自行跳过，**不影响构建**。
-- CFA 允许列表按**文件路径**生效，所以重建后仍然有效；SmartScreen 侧则依赖签名证书保持不变。
-- 局限：自签名只对装了这张证书的机器有效。要分发给他人在无警告下运行，需要买 OV/EV 代码签名证书。
+
+**签名能解决什么、不能解决什么**（这块很容易误判成「签名没生效」）：
+
+| 现象 | 签名 + 装根证书后 |
+| --- | --- |
+| `Get-AuthenticodeSignature` 显示 `UnknownError`/无法验证 | ✅ 变成 `Valid` |
+| UAC 提示「未知发布者」 | ✅ 显示 `CN=Legado Desktop Dev` |
+| Defender 受控文件夹访问拦写盘（事件 1123） | ✅ 不再拦（CFA 按发布者认人） |
+| **SmartScreen「无法识别的应用」** | ❌ **照旧拦** |
+
+SmartScreen 的应用信誉是**微软云端判定**：拿文件哈希 + 签名证书去查 app reputation，
+查不到就判「无法识别」。它**完全不参考本机 `LocalMachine\Root` / `TrustedPublisher`**。
+自签名证书在微软侧永远没有信誉记录，所以签多少次都一样。`wails3 build` 每次都重链接、
+哈希全变，每次都算一个全新的未知文件。
+
+要让本机双击直接跑，只有三条路：
+
+1. **关掉本机「检查应用和文件」**（开发机最省事，代价是不再对下载的 exe 做信誉预警）：
+   ```powershell
+   # 管理员 PowerShell；-On 可恢复 Warn
+   pwsh -File build/windows/smartscreen-dev.ps1 -Off
+   ```
+2. **每次点「更多信息 → 仍要运行」**：不动系统设置，但每次重建都得点一遍。
+3. **买 OV/EV 代码签名证书**：分发给他人的唯一正解（EV 即时获得 SmartScreen 信誉，
+   OV 需要累积下载量）。
+
+把产物拷到别的机器时，先在那边导入公钥，否则会退化成「未知发布者」、MSIX 旁加载也会报
+`0x800B0109`：
+
+```powershell
+# 那台机器的管理员 PowerShell
+pwsh -File build/windows/trust-dev-cert.ps1 -CerPath .\legado-dev-codesign.cer
+```
+
+它同样不影响 SmartScreen。
 
 修改 `api/` 下服务签名后，**必须**重新生成前端绑定（`frontend/bindings/` 为生成物，禁止手改）：
 

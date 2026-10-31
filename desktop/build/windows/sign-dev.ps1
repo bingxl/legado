@@ -1,8 +1,17 @@
 # 用本机自签名证书给 Windows 产物签名。
 #
-# 为什么需要：exe 未签名时，Defender / SmartScreen 归其为「未知应用」——
-# 每次重建哈希都变，CDA（受控文件夹访问）会拦它写受保护目录，SmartScreen 也会弹
-# 「无法识别的应用」。签名给文件一个稳定的发布者身份，配合本机受信任根证书即可消除。
+# 这个脚本能解决的问题（且只解决这些）：
+#   * 让「受控文件夹访问 (CFA)」按发布者而不是哈希认人，重建后不再被拦写受保护目录；
+#   * 让文件属性里显示真实发行者，而不是「未知发布者」；
+#   * 让本机签名链验证为 Valid（前提：根证书已装进 LocalMachine\Root）。
+#
+# 这个脚本**不能**解决的问题：SmartScreen。
+#   SmartScreen 的应用信誉判定走微软云端（针对文件哈希 + 签名证书），
+#   **完全不看本地受信任根**。自签名证书在微软侧永远没有信誉记录，所以不管签多少次、
+#   装得多干净，Warn 档的「检查应用和文件」依旧会拦，文案就是
+#   「Microsoft Defender SmartScreen 阻止了无法识别的应用启动」。
+#   这不是签名坏了——用 Get-AuthenticodeSignature 会看到 Status=Valid。
+#   真正能让它不弹的办法见 build/windows/smartscreen-dev.ps1 和 README 的说明。
 #
 # 证书指纹来源优先级：
 #   1. -Thumbprint 参数
@@ -17,6 +26,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# task (go-task) 用管道捕获本脚本输出，Git Bash 侧按 UTF-8 解析。
+# 不显式设成 UTF-8 时 PowerShell 按系统 ANSI 代码页(936)写管道，中文会变成乱码。
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 if (-not (Test-Path $Exe)) {
     Write-Host "[sign] target not found: $Exe"
@@ -59,20 +72,34 @@ try {
     exit 1
 }
 
-# UnknownError 表示签名已写入、但根证书还没进本机受信任根。
-# 这是初次配置时的正常状态，装上根证书后同一签名会变成 Valid。
+# 清掉 Mark-of-the-Web。产物若落在 OneDrive / 下载目录 / 被同步盘加过 Zone.Identifier，
+# 双击时 SmartScreen 一定会来检查；本地构建本来就不该带这个流。
+try {
+    Unblock-File -Path $Exe -ErrorAction SilentlyContinue
+} catch { }
+
 switch ($r.Status) {
     "Valid" {
         Write-Host "[sign] OK (chain trusted)"
-        exit 0
     }
     "UnknownError" {
         Write-Host "[sign] signature written, but the self-signed root is not trusted on this machine"
         Write-Host "[sign] run build/windows/setup-dev-cert.ps1 as administrator once to trust it"
-        exit 0
     }
     default {
         Write-Host "[sign] FAILED: $($r.Status) - $($r.StatusMessage)"
         exit 1
     }
 }
+
+# SmartScreen 是独立的一层，和上面的签名链结果无关。这里把状态摊开说清楚，
+# 免得下次又误判成「签名没生效」。
+$ss = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" -Name SmartScreenEnabled -ErrorAction SilentlyContinue).SmartScreenEnabled
+if (-not $ss) { $ss = "unset" }
+Write-Host "[sign] note: SmartScreen 档位 = $ss"
+if ($ss -ne "Off") {
+    Write-Host "[sign] SmartScreen 不信任自签名证书（云端信誉，与本地根证书无关），双击仍会弹"
+    Write-Host "[sign] 「无法识别的应用」。本机开发想直接双击跑：build/windows/smartscreen-dev.ps1 -Off"
+}
+
+exit 0
