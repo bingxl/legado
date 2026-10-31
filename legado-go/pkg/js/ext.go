@@ -852,20 +852,20 @@ func newJavaObject(vm *goja.Runtime, b *Bindings) *goja.Object {
 	// ---------- 交互 / 调试 ----------
 	set("log", func(call goja.FunctionCall) goja.Value {
 		msg := fmt.Sprint(exportValue(call.Argument(0)))
-		OnLog("[js.log] " + msg)
+		b.log("[js.log] " + msg)
 		return vm.ToValue(msg)
 	})
 	set("logType", func(call goja.FunctionCall) goja.Value {
 		v := exportValue(call.Argument(0))
-		OnLog(fmt.Sprintf("[js.logType] %T", v))
+		b.log(fmt.Sprintf("[js.logType] %T", v))
 		return goja.Undefined()
 	})
 	set("toast", func(call goja.FunctionCall) goja.Value {
-		OnLog("[js.toast] " + fmt.Sprint(exportValue(call.Argument(0))))
+		b.log("[js.toast] " + fmt.Sprint(exportValue(call.Argument(0))))
 		return goja.Undefined()
 	})
 	set("longToast", func(call goja.FunctionCall) goja.Value {
-		OnLog("[js.longToast] " + fmt.Sprint(exportValue(call.Argument(0))))
+		b.log("[js.longToast] " + fmt.Sprint(exportValue(call.Argument(0))))
 		return goja.Undefined()
 	})
 	set("randomUUID", func(goja.FunctionCall) goja.Value { return vm.ToValue(newUUID()) })
@@ -884,15 +884,15 @@ func newJavaObject(vm *goja.Runtime, b *Bindings) *goja.Object {
 			}
 			return vm.ToValue(Hooks.WebView(src, h, u, jsStr))
 		}
-		OnLog("[js.webView] 本环境不支持 WebView，已降级")
+		b.log("[js.webView] 本环境不支持 WebView，已降级")
 		return vm.ToValue("")
 	})
 	set("startBrowser", func(call goja.FunctionCall) goja.Value {
-		OnLog("[js.startBrowser] " + fmt.Sprint(exportValue(call.Argument(0))))
+		b.log("[js.startBrowser] " + fmt.Sprint(exportValue(call.Argument(0))))
 		return goja.Undefined()
 	})
 	set("openUrl", func(call goja.FunctionCall) goja.Value {
-		OnLog("[js.openUrl] " + fmt.Sprint(exportValue(call.Argument(0))))
+		b.log("[js.openUrl] " + fmt.Sprint(exportValue(call.Argument(0))))
 		return goja.Undefined()
 	})
 	set("getSource", func(goja.FunctionCall) goja.Value {
@@ -999,6 +999,14 @@ func newCacheObject(vm *goja.Runtime) *goja.Object {
 }
 
 func newSourceObject(vm *goja.Runtime, s *model.BookSource) *goja.Object {
+	return newSourceObjectWith(vm, s, nil)
+}
+
+// newSourceObjectWith 构造 JS 里的 source 对象。
+//
+// b 用于取登录信息（getLoginInfoMap）与登录头落盘（putLoginHeader）：
+// 这两个是登录脚本专用能力，普通规则求值时 b 里没有回调，调用会拿到空值。
+func newSourceObjectWith(vm *goja.Runtime, s *model.BookSource, b *Bindings) *goja.Object {
 	o := vm.NewObject()
 	o.Set("bookSourceUrl", vm.ToValue(s.BookSourceUrl))
 	o.Set("bookSourceName", vm.ToValue(s.BookSourceName))
@@ -1022,6 +1030,25 @@ func newSourceObject(vm *goja.Runtime, s *model.BookSource) *goja.Object {
 	o.Set("setVariable", func(call goja.FunctionCall) goja.Value {
 		s.SetVariable(fmt.Sprint(exportValue(call.Argument(0))))
 		return goja.Undefined()
+	})
+	// getLoginInfoMap：登录框里用户填的账号密码（键名就是 loginUi 里的 name）。
+	// 原版这里直接暴露 Kotlin 对象的方法，书源脚本按 `source.getLoginInfoMap().账号` 取值。
+	o.Set("getLoginInfoMap", func(goja.FunctionCall) goja.Value {
+		out := vm.NewObject()
+		if b != nil && b.LoginInfo != nil {
+			for k, v := range b.LoginInfo() {
+				out.Set(k, vm.ToValue(v))
+			}
+		}
+		return out
+	})
+	// putLoginHeader：登录成功后保存整段请求头（含 Cookie），下次请求自动带上。
+	o.Set("putLoginHeader", func(call goja.FunctionCall) goja.Value {
+		if b == nil || b.SetLoginHeader == nil {
+			return vm.ToValue(false)
+		}
+		err := b.SetLoginHeader(fmt.Sprint(exportValue(call.Argument(0))))
+		return vm.ToValue(err == nil)
 	})
 	o.Set("toString", func(goja.FunctionCall) goja.Value { return vm.ToValue(s.BookSourceUrl) })
 	return o

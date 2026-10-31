@@ -33,6 +33,29 @@ type Bindings struct {
 	// GInt 跨调用累加的全局计数（formatJs 的 `gInt++` 依赖它）。
 	// 调用后会把脚本改写的值写回指针。
 	GInt *int
+
+	// —— 书源登录相关的可选绑定 ——
+	//
+	// 登录脚本（loginUrl 为 @js:/<js>）按 Kotlin 原版的写法会调用
+	// `source.getLoginInfoMap()` 取用户在登录框里填的账号密码，
+	// 成功后可能调 `source.putLoginHeader(...)` 保存整段登录头。
+	// 这两个能力只有登录场景需要，用回调形式注入，避免 js 包反向依赖上层。
+	LoginInfo func() map[string]string
+	// SetLoginHeader 保存一段登录请求头（JSON），由上层解析出 Cookie 并落地。
+	SetLoginHeader func(headerJSON string) error
+	// LogHook 覆盖日志输出（java.log / java.toast …）。
+	// 为 nil 时走包级 OnLog；登录时注入收集器就能把脚本日志回显给用户，
+	// 而不用临时替换全局 OnLog（那是并发不安全的）。
+	LogHook func(string)
+}
+
+// log 输出一条脚本日志，优先用本次执行的钩子。
+func (b *Bindings) log(msg string) {
+	if b != nil && b.LogHook != nil {
+		b.LogHook(msg)
+		return
+	}
+	OnLog(msg)
 }
 
 // Engine JS 引擎：按书源隔离运行时 + 脚本编译缓存
@@ -237,7 +260,7 @@ func inject(vm *goja.Runtime, b *Bindings) {
 	g.Set("cache", newCacheObject(vm))
 
 	if b.Source != nil {
-		g.Set("source", newSourceObject(vm, b.Source))
+		g.Set("source", newSourceObjectWith(vm, b.Source, b))
 	} else {
 		g.Set("source", goja.Null())
 	}

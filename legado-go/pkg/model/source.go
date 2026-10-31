@@ -242,9 +242,14 @@ func (s *BookSource) GetTag() string { return s.BookSourceName }
 func (s *BookSource) GetBookType() int { return s.BookSourceType }
 
 // EnabledCookieJarOn 是否启用 cookieJar 自动保存
+//
+// 字段缺省时**默认为开**，与 Kotlin 原版一致：BookSource.kt 里
+// `override var enabledCookieJar: Boolean? = true`，而且绝大多数书源
+// 根本不写这个字段。早先这里把 nil 当 false，导致「登录脚本 java.post
+// 拿到了 Set-Cookie 却没存下来」，登录完刷新页面就掉登录态。
 func (s *BookSource) EnabledCookieJarOn() bool {
 	if s.EnabledCookieJar == nil {
-		return false
+		return true
 	}
 	return *s.EnabledCookieJar
 }

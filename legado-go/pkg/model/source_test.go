@@ -57,3 +57,21 @@ func TestDefaultUserAgentOverride(t *testing.T) {
 		t.Fatalf("书源 header 的 UA 应优先，得到 %q", got)
 	}
 }
+
+// enabledCookieJar 缺省时按 Kotlin 原版的默认值 true 处理。
+//
+// 这条一旦回退成 false，登录脚本里 java.post 拿到的 Set-Cookie 就不会落盘，
+// 表现为「登录成功但一刷新就掉登录态」，排查成本极高。
+func TestEnabledCookieJarDefault(t *testing.T) {
+	on, off := true, false
+
+	if !(&BookSource{}).EnabledCookieJarOn() {
+		t.Fatal("字段缺省时应视为开启")
+	}
+	if !(&BookSource{EnabledCookieJar: &on}).EnabledCookieJarOn() {
+		t.Fatal("显式 true 时应为开启")
+	}
+	if (&BookSource{EnabledCookieJar: &off}).EnabledCookieJarOn() {
+		t.Fatal("显式 false 时应为关闭")
+	}
+}
