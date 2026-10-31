@@ -8,6 +8,7 @@ import { useAIIndexStore } from "@/stores/aiIndex";
 import { useCacheStore, jobPercent } from "@/stores/cache";
 import { usePlatformStore } from "@/stores/platform";
 import { useSourceDebugStore } from "@/stores/sourceDebug";
+import { useSourcesStore } from "@/stores/sources";
 import { useTtsStore } from "@/stores/tts";
 import { onImportProgress } from "@/api/events";
 import type { ProgressPayload } from "@/api/events";
@@ -85,6 +86,9 @@ onMounted(async () => {
   // 平台判定要最先做：布局分支依赖它，晚一步会先闪一帧桌面侧边栏。
   await platform.init();
   shelf.refresh();
+  // 书源列表启动预载：进书源 tab 时直接命中缓存，不再白等。
+  // 异步进行不阻塞首屏；失败不打断启动（进 tab 时 ensureLoaded 会再试）。
+  void useSourcesStore().ensureLoaded().catch(() => {});
   // 缓存进度是后台任务：订阅放在外壳里，页面切换不会丢进度。
   // 订阅失败（运行时还没注入）不能影响其它初始化，因此单独兜住。
   try {
@@ -192,11 +196,12 @@ onMounted(async () => {
           <button class="cache-link" @click="cache.cancel(job.bookId)">取消</button>
         </div>
         <!--
-          发现页缓存起来：进详情/阅读器再返回时，展开的书源、分类书单与滚动位置都还在。
-          其它页面不缓存，避免书架、书源列表显示过期数据。
+          发现页、书源页缓存起来：进详情/编辑器再返回时，展开的书源、分类书单、
+          滚动位置与筛选词都还在。书源数据变更（编辑/导入/删除）都走 sources
+          store 就地更新，缓存不会过期。其它页面不缓存，避免显示过期数据。
         -->
         <router-view v-slot="{ Component }">
-          <keep-alive :include="['ExploreView']">
+          <keep-alive :include="['ExploreView', 'SourceView']">
             <component :is="Component" />
           </keep-alive>
         </router-view>

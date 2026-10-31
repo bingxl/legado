@@ -7,11 +7,13 @@ import { sourceApi } from "@/api/source";
 import { systemApi, rawFileURL } from "@/api/system";
 import { onSourceCheckProgress } from "@/api/events";
 import type { ProgressPayload } from "@/api/events";
+import { useSourcesStore } from "@/stores/sources";
 import type { SourceView, SourceCheckResult } from "@/types";
 import SourceLoginDialog from "@/components/SourceLoginDialog.vue";
 
-const sources = ref<SourceView[]>([]);
-const loading = ref(false);
+// 列表数据与加载态都住在 sources store 里：启动时已预载，进 tab 不再重拉；
+// 编辑/导入/删除后就地更新，只有手动刷新才整表重拉。
+const store = useSourcesStore();
 const keyword = ref("");
 const checkProgress = ref<ProgressPayload | null>(null);
 const router = useRouter();
@@ -44,24 +46,16 @@ function openLogin(s: SourceView) {
   loginDialog.value = true;
 }
 
-async function load() {
-  loading.value = true;
-  try {
-    sources.value = await sourceApi.list("");
-  } finally {
-    loading.value = false;
-  }
-}
-
 async function remove(s: SourceView) {
   await sourceApi.delete(s.id);
-  await load();
+  store.removeLocal(s.id);
   ElMessage.success("已删除");
 }
 
 async function toggle(s: SourceView, enabled: boolean) {
   await sourceApi.setEnabled(s.id, enabled);
-  await load();
+  // 启用状态是本地就能算出的字段，就地更新避免整表重拉。
+  store.upsert({ ...s, enabled });
 }
 
 // ── 导入导出 ────────────────────────────────────────────────
@@ -84,7 +78,7 @@ async function importSources() {
     ElMessage.success(
       `导入完成：新增 ${res.imported}，更新 ${res.updated}，失败 ${(res.failures ?? []).length}`,
     );
-    await load();
+    await store.refresh();
   } catch (e) {
     ElMessage.error((e as Error).message);
   }
@@ -113,7 +107,7 @@ async function importFromUrl() {
     );
     urlDialog.value = false;
     urlInput.value = "";
-    await load();
+    await store.refresh();
   } catch (e) {
     ElMessage.error((e as Error).message);
   } finally {
@@ -149,7 +143,7 @@ async function validate() {
   // 不给确认就直接开跑，用户会以为卡死了。
   try {
     await ElMessageBox.confirm(
-      `将校验全部 ${sources.value.length} 个书源，耗时可能较长，期间可以关闭进度条继续用其他功能。是否开始？`,
+      `将校验全部 ${store.sources.length} 个书源，耗时可能较长，期间可以关闭进度条继续用其他功能。是否开始？`,
       "校验书源",
       { confirmButtonText: "开始校验", cancelButtonText: "取消", type: "warning" },
     );
@@ -167,8 +161,8 @@ async function validate() {
 
 const filtered = () => {
   const k = keyword.value.trim().toLowerCase();
-  if (!k) return sources.value;
-  return sources.value.filter(
+  if (!k) return store.sources;
+  return store.sources.filter(
     (s) =>
       s.name.toLowerCase().includes(k) ||
       s.group.toLowerCase().includes(k) ||
@@ -177,7 +171,8 @@ const filtered = () => {
 };
 
 onMounted(() => {
-  load();
+  // store 启动时已预载过：这里只在真没数据时拉一次，进 tab 不再白等。
+  void store.ensureLoaded();
   onSourceCheckProgress((data) => {
     checkProgress.value = data;
   });
@@ -196,6 +191,7 @@ onMounted(() => {
       <div class="spacer" />
       <el-button @click="validate">校验</el-button>
       <el-button @click="exportSources">导出</el-button>
+      <el-button :loading="store.loading" @click="store.refresh()">刷新</el-button>
       <el-dropdown trigger="click" @command="onImportCommand">
         <el-button>导入</el-button>
         <template #dropdown>
@@ -213,7 +209,7 @@ onMounted(() => {
       {{ checkProgress.current }}
     </div>
 
-    <el-table :data="filtered()" v-loading="loading" size="small" height="100%">
+    <el-table :data="filtered()" v-loading="store.loading" size="small" height="100%">
       <el-table-column prop="name" label="名称" min-width="160" />
       <el-table-column prop="group" label="分组" width="120" />
       <el-table-column prop="url" label="地址" min-width="220" show-overflow-tooltip />
@@ -244,7 +240,7 @@ onMounted(() => {
       v-model="loginDialog"
       :source-id="loginTarget?.id ?? 0"
       :source-name="loginTarget?.name"
-      @changed="load"
+      @changed="store.refresh()"
     />
 
     <!-- 从 URL 导入 -->

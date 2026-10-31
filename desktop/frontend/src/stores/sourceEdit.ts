@@ -7,6 +7,7 @@ import { defineStore } from "pinia";
 import { computed, ref, shallowRef } from "vue";
 
 import { sourceApi } from "@/api/source";
+import { useSourcesStore } from "@/stores/sources";
 import type { SourceView } from "@/types";
 import { BOOK_SOURCE_GROUPS, BOOK_SOURCE_FIELDS } from "@/config/sourceFields";
 
@@ -239,6 +240,9 @@ export const useSourceEditStore = defineStore("sourceEdit", () => {
       id.value = view.id;
       baseline.value = serialize();
       snapshot();
+      // 保存在书源列表里的全局缓存（SourceView 的 store）：就地更新，
+      // 回到书源页不用重拉整表也能看到刚才的修改。
+      useSourcesStore().upsert(view);
       return view;
     } finally {
       saving.value = false;
