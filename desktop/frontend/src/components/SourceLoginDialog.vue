@@ -44,10 +44,10 @@ const savedHeader = ref("");
 
 /** 表单里真正要填的字段（按钮单独渲染）。 */
 const formFields = computed<LoginFieldView[]>(
-  () => profile.value?.fields.filter((f) => f.type !== "button") ?? [],
+  () => profile.value?.fields?.filter((f) => f.type !== "button") ?? [],
 );
 const actionButtons = computed<LoginFieldView[]>(
-  () => profile.value?.fields.filter((f) => f.type === "button") ?? [],
+  () => profile.value?.fields?.filter((f) => f.type === "button") ?? [],
 );
 const isComic = computed(() => profile.value?.sourceType === SOURCE_TYPE.image);
 const loggedIn = computed(() => !!profile.value?.hasCookie);
