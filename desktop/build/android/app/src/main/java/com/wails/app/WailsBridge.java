@@ -101,6 +101,11 @@ public class WailsBridge {
     private boolean proximityWanted = false;
     private boolean torchOn = false;
     private boolean pendingLocationRequest = false;
+    // 相机权限弹窗期间记住「用户本来要开手电筒」，授权回来后自动补上。
+    private boolean pendingTorch = false;
+    private boolean pendingTorchSet = false;
+    /** 权限状态与申请的统一出口，由 MainActivity 在 initialize() 之前注入。 */
+    private AndroidPermissions permissions;
 
     // Native methods - implemented in Go
     private static native void nativeInit(WailsBridge bridge);
@@ -124,6 +129,40 @@ public class WailsBridge {
 
     public WailsBridge(Activity activity) {
         this.activity = activity;
+    }
+
+    /**
+     * 注入权限出口。必须在 initialize() 之前调用：Go 侧一旦启动，页面就可能
+     * 立刻通过 JS 接口查权限状态。
+     */
+    public void setPermissions(AndroidPermissions permissions) {
+        this.permissions = permissions;
+    }
+
+    /** 权限状态快照（JSON），供 JS 的 wails.permissionStatus() 调用。 */
+    public String permissionStatusJson() {
+        return permissions == null ? "{}" : permissions.statusJson();
+    }
+
+    /** 申请权限；返回 true 表示已受理（对话框/设置页在主线程弹出）。 */
+    public boolean requestPermission(final String kind) {
+        if (permissions == null) return false;
+        // JS 接口调用发生在 WebView 的 JavaBridge 线程，requestPermissions
+        // 必须在主线程执行，所以这里只做状态判定，真正的申请 post 到主线程。
+        String state = permissions.state(kind);
+        if (AndroidPermissions.STATE_GRANTED.equals(state)
+                || AndroidPermissions.STATE_UNAVAILABLE.equals(state)) {
+            return false;
+        }
+        mainHandler.post(() -> permissions.request(kind));
+        return true;
+    }
+
+    /** 跳系统设置页（被永久拒绝后的唯一出路）。 */
+    public boolean openPermissionSettings(final String kind) {
+        if (permissions == null) return false;
+        mainHandler.post(() -> permissions.openSettings(kind));
+        return true;
     }
 
     /**
@@ -484,6 +523,18 @@ public class WailsBridge {
      */
     public void setTorch(final int enabled) {
         mainHandler.post(() -> {
+            // CameraManager.setTorchMode 需要 CAMERA 权限，没有就直接抛
+            // SecurityException（此前会被 catch 成「设备不支持闪光灯」，
+            // 用户看到的是「不可用」而不是「请授权」，属于误导）。
+            if (permissions != null && !permissions.isCameraGranted()) {
+                pendingTorch = enabled != 0;
+                pendingTorchSet = true;
+                boolean started = permissions.request(AndroidPermissions.KIND_CAMERA);
+                emitEvent("common:torch", started
+                        ? "{\"on\":false,\"available\":true,\"pending\":true}"
+                        : "{\"on\":false,\"available\":false,\"error\":\"camera permission denied\"}");
+                return;
+            }
             try {
                 CameraManager cm = (CameraManager) activity.getSystemService(Context.CAMERA_SERVICE);
                 String flashId = null;
@@ -508,6 +559,24 @@ public class WailsBridge {
                 Log.e(TAG, "setTorch failed", e);
                 emitEvent("common:torch", "{\"on\":false,\"available\":false}");
             }
+        });
+    }
+
+    /**
+     * 相机权限结果回来后，把之前被权限挡住的手电筒请求补上。
+     * 由 MainActivity.onCameraPermissionAnswered 调用。
+     */
+    public void resumePendingTorch(final boolean granted) {
+        mainHandler.post(() -> {
+            if (!pendingTorchSet) return;
+            boolean wanted = pendingTorch;
+            pendingTorchSet = false;
+            if (!granted) {
+                emitEvent("common:torch",
+                        "{\"on\":false,\"available\":false,\"error\":\"camera permission denied\"}");
+                return;
+            }
+            setTorch(wanted ? 1 : 0);
         });
     }
 

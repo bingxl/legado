@@ -116,6 +116,42 @@ public class WailsJSBridge {
     }
 
     /**
+     * 权限状态快照。Called from JavaScript: wails.permissionStatus()
+     *
+     * 权限必须由 Activity 发起，Go 业务层没有这条通道（application.Android 只
+     * 暴露固定的若干方法），因此这里直接挂到注入对象上，前端用
+     * frontend/src/api/permissions.ts 包一层。桌面端不存在该方法，前端据此判定
+     * 「无需权限」。
+     *
+     * @return {"sdk":35,"storage":"granted","camera":"denied","allFiles":true}
+     */
+    @JavascriptInterface
+    public String permissionStatus() {
+        return bridge.permissionStatusJson();
+    }
+
+    /**
+     * 申请权限（"storage" / "camera"）。结果异步回来，经 "android:permission"
+     * 事件通知，前端可立刻再查一次 permissionStatus()。
+     *
+     * @return true 表示已发起系统交互（对话框或设置页）
+     */
+    @JavascriptInterface
+    public boolean requestPermission(String kind) {
+        return bridge.requestPermission(kind);
+    }
+
+    /**
+     * 打开系统设置页：被永久拒绝后唯一的自救路径。
+     *
+     * @param kind "storage" 打开「所有文件访问」页；"camera" 打开应用详情页
+     */
+    @JavascriptInterface
+    public boolean openPermissionSettings(String kind) {
+        return bridge.openPermissionSettings(kind);
+    }
+
+    /**
      * Send a callback response to JavaScript
      */
     private void sendCallback(String callbackId, String result, String error) {

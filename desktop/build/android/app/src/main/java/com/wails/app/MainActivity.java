@@ -23,6 +23,7 @@ import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.util.Log;
 import android.webkit.ConsoleMessage;
+import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebChromeClient.FileChooserParams;
@@ -71,7 +72,6 @@ public class MainActivity extends AppCompatActivity {
     private int pendingFilePickerCallbackID = -1;
     private static final int PHOTO_CAPTURE_REQUEST = 7002;
     private static final int VIDEO_CAPTURE_REQUEST = 7003;
-    private static final int CAMERA_PERMISSION_REQUEST = 7010;
 
     // In-flight callback for an HTML <input type="file"> chooser opened by the
     // WebView's WebChromeClient (null when idle).
@@ -79,6 +79,21 @@ public class MainActivity extends AppCompatActivity {
     private ValueCallback<Uri[]> webViewFileChooserCallback;
     private File pendingCaptureFile;
     private boolean pendingCaptureIsVideo;
+    /** 相机权限回来之后是否要接着拍照（避免用户点完授权就没反应）。 */
+    private boolean pendingCaptureAfterPermission;
+
+    /**
+     * 权限统一出口：存储 / 相机的状态判定与申请都在里面。
+     * 相机、手电筒、网页 getUserMedia 三条链路共用同一份判定，状态才不会互相矛盾。
+     */
+    private AndroidPermissions permissions;
+    /**
+     * 网页调用 getUserMedia 时挂起的 WebView 授权请求。
+     * WebView 的回调是同步的，但安卓侧权限要先弹系统对话框，只能存下来等结果。
+     */
+    private PermissionRequest pendingWebPermissionRequest;
+    /** 首次页面加载完成后只做一次存储权限引导，避免每次 onPageFinished 都弹。 */
+    private boolean storagePromptDone;
 
     // System-event sources (battery/power, screen lock, network). Registered in
     // onCreate, torn down in onDestroy. Each forwards a "system:*" event to JS
@@ -96,6 +111,22 @@ public class MainActivity extends AppCompatActivity {
 
         // Initialize the native Go library
         bridge = new WailsBridge(this);
+
+        // 权限状态变化统一转成 "android:permission" 事件推给前端：
+        // 从「所有文件访问」设置页返回没有任何回调，只有 onResume 复查后
+        // 由这里发出的事件才能让界面（我的 → 权限）跟着刷新。
+        permissions = new AndroidPermissions(this, (kind, state) -> {
+            if (bridge == null) return;
+            try {
+                JSONObject payload = new JSONObject();
+                payload.put("kind", kind);
+                payload.put("state", state);
+                bridge.emitEvent("android:permission", payload.toString());
+            } catch (Exception e) {
+                Log.w(TAG, "emit permission event failed", e);
+            }
+        });
+        bridge.setPermissions(permissions);
         bridge.initialize();
 
         // Set up WebView
@@ -215,6 +246,8 @@ public class MainActivity extends AppCompatActivity {
                 // Now that JS listeners are mounted, push a snapshot of the
                 // current battery / network / theme so the UI starts populated.
                 emitSystemSnapshot();
+                // 首次进入时引导一次存储授权：此刻前端已就绪，弹窗不会盖在白屏上。
+                maybePromptStorageOnce();
             }
         });
 
@@ -224,10 +257,9 @@ public class MainActivity extends AppCompatActivity {
         // A WebChromeClient is required for HTML <input type="file"> elements to
         // work; without onShowFileChooser the WebView silently ignores clicks on
         // file inputs. It also forwards JS console messages to logcat for
-        // debugging. Note: in-page permission prompts (geolocation, getUserMedia)
-        // require an onPermissionRequest override which is not provided here;
-        // those requests will be denied by the default implementation until a
-        // scoped permissions handler is added.
+        // debugging, and answers in-page getUserMedia requests (camera) — those
+        // are denied by the default implementation, so a page that scans with the
+        // webcam would fail with NotAllowedError without the override below.
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(ConsoleMessage msg) {
@@ -236,6 +268,46 @@ public class MainActivity extends AppCompatActivity {
                             + " (" + msg.sourceId() + ":" + msg.lineNumber() + ")");
                 }
                 return true;
+            }
+
+            /**
+             * 网页 getUserMedia({video:true}) 的授权入口。
+             *
+             * 这里只放行视频：清单里没有声明 RECORD_AUDIO（阅读器不录音），
+             * 音频资源一律不授予。若页面同时要音频，按 granted 子集授权即可，
+             * 前端拿到的是仅有视频轨的流，不会整个请求被拒。
+             *
+             * 安卓侧 CAMERA 权限是前置条件，没授权就先弹系统对话框，
+             * 把 WebView 的请求挂起，等 onRequestPermissionsResult 回来再答复。
+             */
+            @Override
+            public void onPermissionRequest(final PermissionRequest request) {
+                boolean wantsVideo = false;
+                for (String resource : request.getResources()) {
+                    if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) {
+                        wantsVideo = true;
+                    }
+                }
+                if (!wantsVideo) {
+                    request.deny();
+                    return;
+                }
+                if (permissions != null && permissions.isCameraGranted()) {
+                    request.grant(new String[]{
+                            PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+                    return;
+                }
+                // 同一时刻只允许一个挂起的网页请求：后来的先拒掉，避免悬挂。
+                if (pendingWebPermissionRequest != null) {
+                    pendingWebPermissionRequest.deny();
+                }
+                pendingWebPermissionRequest = request;
+                if (permissions != null) {
+                    permissions.request(AndroidPermissions.KIND_CAMERA);
+                } else {
+                    pendingWebPermissionRequest = null;
+                    request.deny();
+                }
             }
 
             @Override
@@ -273,9 +345,28 @@ public class MainActivity extends AppCompatActivity {
      * the result is delivered to JS as a "common:capture" event.
      */
     public void launchCameraCapture(boolean video) {
-        if (checkSelfPermission("android.permission.CAMERA") != PackageManager.PERMISSION_GRANTED) {
+        String cameraState = permissions == null
+                ? AndroidPermissions.STATE_GRANTED : permissions.cameraState();
+        if (!AndroidPermissions.STATE_GRANTED.equals(cameraState)) {
             pendingCaptureIsVideo = video;
-            requestPermissions(new String[]{"android.permission.CAMERA"}, CAMERA_PERMISSION_REQUEST);
+            pendingCaptureAfterPermission = true;
+            if (AndroidPermissions.STATE_UNAVAILABLE.equals(cameraState)) {
+                pendingCaptureAfterPermission = false;
+                bridge.emitEvent("common:capture", "{\"error\":\"no camera available\"}");
+                return;
+            }
+            if (AndroidPermissions.STATE_BLOCKED.equals(cameraState)) {
+                // 已永久拒绝，系统不会再弹对话框，只能引导去应用设置页。
+                pendingCaptureAfterPermission = false;
+                permissions.openSettings(AndroidPermissions.KIND_CAMERA);
+                bridge.emitEvent("common:capture",
+                        "{\"error\":\"camera permission blocked\",\"needsSettings\":true}");
+                return;
+            }
+            if (!permissions.request(AndroidPermissions.KIND_CAMERA)) {
+                pendingCaptureAfterPermission = false;
+                bridge.emitEvent("common:capture", "{\"error\":\"camera permission unavailable\"}");
+            }
             return;
         }
         try {
@@ -302,16 +393,84 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == CAMERA_PERMISSION_REQUEST) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                launchCameraCapture(pendingCaptureIsVideo);
-            } else {
-                bridge.emitEvent("common:capture", "{\"error\":\"camera permission denied\"}");
+        if (this.permissions != null && this.permissions.onRequestPermissionsResult(requestCode, grantResults)) {
+            // 相机相关的三条链路在权限回来后各自续跑：拍照、手电筒、网页 getUserMedia。
+            if (requestCode == AndroidPermissions.REQ_CAMERA) {
+                onCameraPermissionAnswered();
             }
             return;
         }
         if (bridge != null) {
             bridge.onRequestPermissionsResult(requestCode, grantResults);
+        }
+    }
+
+    /** 相机权限结果回来：把挂起的拍照 / getUserMedia / 手电筒请求续上。 */
+    private void onCameraPermissionAnswered() {
+        boolean granted = permissions != null && permissions.isCameraGranted();
+
+        if (pendingCaptureAfterPermission) {
+            pendingCaptureAfterPermission = false;
+            if (granted) {
+                launchCameraCapture(pendingCaptureIsVideo);
+            } else {
+                bridge.emitEvent("common:capture", "{\"error\":\"camera permission denied\"}");
+            }
+        }
+
+        if (pendingWebPermissionRequest != null) {
+            PermissionRequest request = pendingWebPermissionRequest;
+            pendingWebPermissionRequest = null;
+            if (granted) {
+                request.grant(new String[]{
+                        PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+            } else {
+                request.deny();
+            }
+        }
+
+        if (bridge != null) {
+            bridge.resumePendingTorch(granted);
+        }
+    }
+
+    /**
+     * 首次进入时引导存储权限。
+     *
+     * 只弹一次（AndroidPermissions 里用 SharedPreferences 记标记）：用户拒绝后
+     * 每次启动都拦一道就成了骚扰，入口留在「我的 → 权限」里足矣。
+     */
+    private void maybePromptStorageOnce() {
+        if (permissions == null || storagePromptDone) return;
+        storagePromptDone = true;
+        if (!permissions.shouldPromptStorageOnce()) return;
+        permissions.markStoragePrompted();
+
+        String message = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                ? "导入手机里的书籍、备份或漫画目录需要读取存储。\n\n"
+                  + "安卓 11 及以上不再是普通弹窗，需要你在接下来的系统页面里打开"
+                  + "「所有文件访问」开关。\n\n"
+                  + "暂不开启也能用：导入时会走系统文件选择器，选中的文件会复制到应用内。"
+                : "导入手机里的书籍、备份或漫画目录需要读取存储。";
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("允许访问手机存储")
+                .setMessage(message)
+                .setPositiveButton("去授权", (d, w) ->
+                        permissions.request(AndroidPermissions.KIND_STORAGE))
+                .setNegativeButton("暂不", null)
+                .show();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 从「所有文件访问」设置页返回没有任何回调，只能回前台时重读状态；
+        // 状态真有变化时 AndroidPermissions 会经 listener 发 "android:permission"。
+        if (permissions != null) {
+            permissions.refresh();
+        }
+        if (bridge != null) {
+            bridge.onResume();
         }
     }
 
@@ -873,14 +1032,6 @@ public class MainActivity extends AppCompatActivity {
         }
         if (bridge != null) {
             bridge.onStart();
-        }
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        if (bridge != null) {
-            bridge.onResume();
         }
     }
 

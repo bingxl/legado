@@ -1,11 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 
 import { aiApi } from "@/api/ai";
 import { toMessage } from "@/api/client";
 import type { AIConfigView, AITestResult } from "@/api/ai";
+import {
+  onPermissionChanged,
+  openPermissionSettings,
+  permissionAvailable,
+  permissionStateLabel,
+  permissionStatus,
+  requestPermission,
+} from "@/api/permissions";
+import type { PermissionKind, PermissionState } from "@/api/permissions";
 import { usePlatformStore } from "@/stores/platform";
 import { useTtsStore } from "@/stores/tts";
 import { loadReaderPrefs, saveReaderPrefs } from "@/utils/readerPrefs";
@@ -134,6 +143,41 @@ function clearAIKey() {
   aiKeyHint.value = "";
 }
 
+// ── 权限（仅安卓端有） ──────────────────────────────────────
+// 存储 / 相机的授权状态来自 Java 侧（见 api/permissions.ts）：桌面端这些
+// 方法不存在，permAvailable 为 false，整张卡片不渲染。
+const permAvailable = ref(false);
+const permStorage = ref<PermissionState>("denied");
+const permCamera = ref<PermissionState>("denied");
+const permSdk = ref(0);
+let permOff: (() => void) | null = null;
+
+function refreshPermissions() {
+  permAvailable.value = permissionAvailable();
+  if (!permAvailable.value) return;
+  const st = permissionStatus();
+  if (!st) return;
+  permStorage.value = st.storage;
+  permCamera.value = st.camera;
+  permSdk.value = st.sdk;
+}
+
+/**
+ * 授权按钮。
+ *
+ * 「被永久拒绝」和「需去系统设置」这两种状态下再调 requestPermission 是白费
+ * 力气——系统不会再弹框，必须跳设置页；其余状态才走正常申请。
+ */
+function fixPermission(kind: PermissionKind, state: PermissionState) {
+  const needSettings = state === "blocked" || state === "settings_required";
+  const ok = needSettings
+    ? openPermissionSettings(kind)
+    : requestPermission(kind);
+  if (!ok) {
+    ElMessage.warning("系统没有响应授权请求，请到系统设置里手动开启");
+  }
+}
+
 onMounted(() => {
   const prefs = loadReaderPrefs();
   fontSize.value = prefs.fontSize;
@@ -142,6 +186,15 @@ onMounted(() => {
   voiceId.value = tts.voiceId;
   autoNext.value = tts.autoNext;
   loadAIConfig();
+  // 权限卡片只在安卓端出现；从系统设置页返回时 onResume 会重读状态并发事件，
+  // 这里订阅后界面就能自动从「未开启」翻成「已授权」，不用手动刷新。
+  refreshPermissions();
+  permOff = onPermissionChanged(refreshPermissions);
+});
+
+onUnmounted(() => {
+  permOff?.();
+  permOff = null;
 });
 
 function onFontChange() {
@@ -421,6 +474,62 @@ function resetReader() {
       </button>
     </div>
 
+    <template v-if="permAvailable">
+      <h2 class="section-title">权限</h2>
+      <div class="card">
+        <div class="row">
+          <div class="row-label">存储</div>
+          <div class="row-control perm-control">
+            <span :class="['perm-state', permStorage]">{{
+              permissionStateLabel(permStorage)
+            }}</span>
+            <el-button
+              v-if="permStorage !== 'granted' && permStorage !== 'unavailable'"
+              data-perm="storage"
+              size="small"
+              type="primary"
+              plain
+              @click="fixPermission('storage', permStorage)"
+            >
+              {{
+                permStorage === "blocked" || permStorage === "settings_required"
+                  ? "去设置"
+                  : "去授权"
+              }}
+            </el-button>
+          </div>
+        </div>
+        <div class="row">
+          <div class="row-label">相机</div>
+          <div class="row-control perm-control">
+            <span :class="['perm-state', permCamera]">{{
+              permissionStateLabel(permCamera)
+            }}</span>
+            <el-button
+              v-if="permCamera !== 'granted' && permCamera !== 'unavailable'"
+              data-perm="camera"
+              size="small"
+              type="primary"
+              plain
+              @click="fixPermission('camera', permCamera)"
+            >
+              {{
+                permCamera === "blocked" ? "去设置" : "去授权"
+              }}
+            </el-button>
+          </div>
+        </div>
+        <div class="hint">
+          <template v-if="permStorage === 'settings_required'">
+            安卓 11 及以上读取手机里的书籍文件需要「所有文件访问」，
+            请在系统设置页打开开关后返回。
+          </template>
+          <template v-else>存储权限用于导入手机里的书籍、备份与漫画目录。</template>
+          未授权时仍可用系统文件选择器导入，选中的文件会复制到应用内。
+        </div>
+      </div>
+    </template>
+
     <h2 class="section-title">关于</h2>
     <div class="card">
       <div class="row">
@@ -500,6 +609,23 @@ function resetReader() {
   padding: 8px 0 0;
   font-size: 12px;
   color: #9ca3af;
+}
+/* 权限状态文案 + 授权按钮：窄屏下按钮不能被挤掉 */
+.perm-control {
+  align-items: center;
+  gap: 10px;
+}
+.perm-state {
+  font-size: 13px;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+.perm-state.granted {
+  color: #16a34a;
+}
+.perm-state.blocked,
+.perm-state.settings_required {
+  color: #d97706;
 }
 .entries {
   padding: 0;

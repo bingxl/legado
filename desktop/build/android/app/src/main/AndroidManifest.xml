@@ -15,6 +15,25 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <!-- 存储：安卓 10 及以下用传统读写权限；安卓 11 起分区存储，读任意位置的
+         书籍文件只能靠「所有文件访问」（MANAGE_EXTERNAL_STORAGE）特殊权限，
+         由 AndroidPermissions 引导用户去系统设置页开启。两种都拿不到时，
+         系统文件选择器（SAF）仍可导入，只是选中的文件会被复制到应用私有目录。 -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
+    <!-- 相机不是必需硬件：没有摄像头的设备也要能装（阅读器主流程不需要拍照）。 -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
     <queries>
         <intent>
             <action android:name="android.media.action.IMAGE_CAPTURE" />
