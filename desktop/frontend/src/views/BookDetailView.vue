@@ -20,6 +20,7 @@ import AIPanel from "@/components/AIPanel.vue";
 import { copyText } from "@/utils/clipboard";
 import { formatBytes } from "@/utils/format";
 import { coverURL } from "@/utils/media";
+import { smartBack } from "@/utils/nav";
 import type { BookDetail, CacheBookStatus, ChapterItem } from "@/types";
 import type { CacheScopeValue } from "@/api/cache";
 
@@ -150,9 +151,10 @@ function openReader(index: number) {
 }
 
 function back() {
-  // 从发现/搜索直接进来时历史里有上一页；刷新后直接打开则退回书架。
-  if (window.history.length > 1) router.back();
-  else router.push("/");
+  // 上一页是站内历史（搜索/发现/书架）就真的回去；刷新后直接打开、
+  // 或从外链进来的（history.state.back 为空）退回书架。
+  // 排除 /reader/：从阅读器返回到详情后再按返回，不该又退回阅读器。
+  smartBack(router, "/", { exclude: "/reader/" });
 }
 
 /** 复制书籍地址。网络书是详情页 URL，本地书是文件路径。 */

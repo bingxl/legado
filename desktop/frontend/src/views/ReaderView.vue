@@ -25,6 +25,7 @@ import { comicImageURL } from "@/utils/media";
 import { loadReaderPrefs, saveReaderPrefs } from "@/utils/readerPrefs";
 import { wrapPlainTextAsParagraphs } from "@/utils/plainText";
 import { usePlatformStore } from "@/stores/platform";
+import { smartBack } from "@/utils/nav";
 import AskAIDrawer from "@/components/AskAIDrawer.vue";
 import type { BookDetail, ChapterContent, ChapterItem } from "@/types";
 
@@ -285,10 +286,12 @@ const footerStyle = computed(() =>
     : undefined,
 );
 
-/** 返回上一页（详情页或书架）；直接打开阅读器时退回书架。 */
+/** 返回书籍详情页：阅读器的上一级恒为详情页，不能靠 history.back()
+ * （一路切着 tab 进来时会退回上一个 tab）。 */
 function goBack() {
-  if (window.history.length > 1) router.back();
-  else router.push("/");
+  smartBack(router, `/book/${bookId.value}`, {
+    mustMatch: `/book/${bookId.value}`,
+  });
 }
 
 /** 载入某章。返回是否成功——朗读自动翻章要靠它判断能不能继续。 */
