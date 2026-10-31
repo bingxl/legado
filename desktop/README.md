@@ -158,8 +158,16 @@ PDF 大纲由前端解析后经 `ReaderAPI.SyncOutline` 回写。
 
 **漫画图片必须走 `/img/` 代理。** 漫画图床普遍校验 Referer，`<img src="https://cdn...">`
 发出的 Referer 是应用自身（`wails://`），会被判盗链直接 403（实测漫蛙的图床：无 Referer 403、
-带站点域名 200）。因此后端提供 `/img/?u=<图片>&src=<书源>`，用书源的 `scheme://host` 作 Referer 转发，
-只放行 http/https，并把图片内容交给 WebView 缓存一天。
+带站点域名 200）。因此后端提供 `/img/<base64url(图片地址 + "\n" + 书源地址)>[.ext]`，
+用书源的 `scheme://host` 作 Referer 转发，只放行 http/https，并把图片内容交给 WebView 缓存一天。
+
+**本地资源与图片代理的参数一律走路径段，不要用查询串。** 安卓宿主的资源拦截器
+（`WebViewAssetLoader.PathHandler`）只把路径交给 Go，查询串在到达后端前就丢了：
+`/raw/?p=<路径>` 到后端时 `p` 为空 → 400 → 安卓侧把非 200 当成「找不到资源」返回 `null`
+→ WebView 回落到真实网络 → 域名不存在，前端只能看到 `Failed to fetch`
+（曾导致安卓端「从文件导入书源」失败）。现统一为 `/raw/<base64url(绝对路径)>[.ext]`，
+末尾保留扩展名是因为安卓侧按路径扩展名定 Content-Type（PDF 靠它才能内嵌预览）。
+旧 `?p=` / `?u=&src=` 写法仍兼容，仅桌面端可用。
 
 **书源 JS 扩展按「实际会用到」补齐。** 引擎用 goja 模拟 Rhino：`java.*` 是显式实现的扩展对象，
 没有 Java 运行时。漫画源（如漫蛙）会把章节图片清单用 AES 加密后塞进页面，
@@ -224,6 +232,25 @@ LEGADO_EPUB_SAMPLE_DIR=~/Downloads go test ./internal/adapter/bookparser -run Te
 
 它校验解析不报错、章节均有标题与定位、首末章正文非空。
 构造样本发现不了的问题（畸形文件引发 panic、封面被声明为损坏文件等）都靠它兜住。
+
+## 安卓端测试（adb + scrcpy 虚拟显示）
+
+安卓 UI 的验收不碰手机主屏：scrcpy 用 `--new-display` 在手机上开一块**虚拟显示**，
+应用跑在那块屏上，画面只出现在电脑的窗口里 —— 手机屏幕照旧，用手机的人不受打扰。
+
+```bash
+cd desktop
+task android:update:device   # 构建 + 打包 + adb install -r（保留应用数据）
+task android:vd              # 电脑上开窗口跑，手机不显示（Ctrl+C 结束）
+task android:vd:shot         # 无窗口跑一遍，抓帧到 bin/vd-shot.png
+```
+
+- `update:device` 用 `install -r` 覆盖安装、**保留数据**；`run:device` 会先卸载，数据清空。
+- 需要 scrcpy **>= 3.3.3**：更早的版本在 Android 16+ 上创建虚拟显示会崩
+  （`AbstractMethodError: onDisplayAnimationsDisabledChanged`），任务里已做版本校验。
+- `VD_SIZE` / `VD_DPI` 调尺寸（默认 `720x1280` / `320`）；`DEVICE_ID` 指定设备。
+- 局限：虚拟显示上的 Activity 生命周期与主屏不同，验证通知、后台保活、返回键仍需真机主屏。
+  细节与踩坑记录见根 `AGENTS.md` 的「Android Testing」。
 
 ## 已知限制
 

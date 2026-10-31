@@ -47,6 +47,19 @@ Wails **v3.0.0** — Go backend + Vue 3/Vite frontend (pnpm), business logic in 
 - 平台差异只写在 `platform_desktop.go`（`!android`）与 `platform_android.go`（`android`），`main.go` 不得出现 GOOS 分支
 - `main_android.go` 由 `wails3 android overlay:gen` 自动生成，**不要手写**；`build/android/main_android.go` 这份模板副本必须删除，否则 `go build ./...` 报 `undefined: main`
 - 业务层须始终满足 `GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build ./internal/... ./api/...` 通过
+- **安卓端 WebView 的资源请求带不上查询串**：宿主用 `WebViewAssetLoader.PathHandler` 拦截
+  `https://wails.localhost`，它只把路径交给 Go，`?p=` / `?u=&src=` 在到达 `assetHandler` 前就丢了。
+  所以 `/raw/` 与 `/img/` 的参数一律编进路径段（`base64url`，见 `desktop/asset_url.go` 与
+  `frontend/src/utils/assetUrl.ts`），末尾保留扩展名给安卓侧定 Content-Type。
+  写错的表现很有迷惑性：安卓端返回 400/404 会被 Wails 转成 `null`，WebView 回落到真实网络，
+  前端只看到 `Failed to fetch`（「从文件导入书源」失败就是这么来的）。
+- **安卓端 SQLite 没有临时目录可用（disk I/O error 6410）**：modernc sqlite 在大结果集
+  `ORDER BY` 溢出内存时要写临时文件，找目录依次试 `SQLITE_TMPDIR`/`TMPDIR`/`/var/tmp`/
+  `/usr/tmp`/`/tmp`，安卓进程里全都不存在也不可写 → `SQLITE_IOERR_GETTEMPPATH (6410)`。
+  `platform_android.go` 的 `dataDir()` 已在打开数据库前 `os.Setenv` 补上
+  `<getFilesDir>/../cache`。关键在于 modernc libc 的 environ 是**首次 getenv 时**才从
+  `os.Environ()` 拍快照，而全进程只有 sqlite 会 getenv——所以任何新的环境变量读取
+  （新依赖 modernc libc 的库）都可能让快照提前固化，改动时留意这一点。
 - Windows 下 NDK/Gradle 有四个已知坑（gosh 的 `ls` 行为、`uname` 分支、clang 要用 `.cmd`、`gradlew.bat` 路径），修法见 `desktop/ARCHITECTURE.md` §11.5
 
 ### Web Module (modules/web)
@@ -177,6 +190,77 @@ the window may be reloading, busy or showing a native dialog
 - `CreateCoreWebView2Controller` 返回 `0x8000ffff` 多半是 WebView2 Runtime 155+ 在部分
   Intel 核显上的 GPU 回归；`main.go` 已默认带 `--disable-gpu`
   （可用 `LEGADO_WEBVIEW_ARGS` 覆盖）。
+
+## Android Testing — adb 安装 + scrcpy 虚拟显示
+
+安卓端的 UI 验收**不碰手机主屏**：用 scrcpy 的 `--new-display` 在手机上新建一块虚拟显示，
+把应用启动到那块屏上，画面只出现在电脑的 scrcpy 窗口里。手机这边屏幕内容不变、在用的人不受打扰
+（实测：虚拟显示上跑着 legado 时，主屏仍可正常显示微信等其它应用）。
+
+这是安卓端唯一推荐的 UI 验收方式 —— 比投屏整机更干净（不影响用户），比模拟器更真实（真机 WebView、
+真机 GPU、真机字体渲染）。
+
+### 命令
+
+```bash
+cd desktop
+task android:update:device     # 构建 .so + 打 APK + adb install -r（保留应用数据）
+task android:vd                # 起虚拟显示窗口，应用在其中启动（阻塞，Ctrl+C 结束）
+task android:vd:shot           # 无窗口跑一遍，抓一帧到 bin/vd-shot.png（自动化验收用）
+task android:uninstall:device  # 卸载，连数据一起删掉
+```
+
+- 三者都可传 `DEVICE_ID=<serial>` 指定设备；不传则取第一台非模拟器设备。
+  无线调试的 serial 长这样，**每次重连都可能变**，别写死：
+  `adb-3e7de6d6-vSyHwu._adb-tls-connect._tcp`
+- `VD_SIZE`（默认 `720x1280`）/ `VD_DPI`（默认 `320`）调虚拟显示尺寸；
+  `VD_DPI=420` 更接近 1080p 手机的实际观感，`240` 相当于 720dp 宽（平板/分屏）.
+- `vd:shot` 另有 `SEC`（默认 12 秒）。
+
+### 安装 / 卸载 / 更新的分工
+
+| 场景 | 命令 | 数据 |
+| --- | --- | --- |
+| 迭代验证（改了代码，书架要留着） | `task android:update:device` = `adb install -r -d` | **保留** `/data/data/<APP_ID>` |
+| 干净重装（复现首次安装问题） | `task android:run:device` = 先 `uninstall` 再 `install` | **清空** |
+| 只卸载 | `task android:uninstall:device` | **清空** |
+
+`run:device` 会先 `uninstall` —— 这是它和 `update:device` 唯一的区别，也是最容易踩的坑：
+以为只是换包，结果书源和书架全没了。想保留数据一律用 `update:device`。
+
+### scrcpy 版本是硬门槛：>= 3.3.3
+
+scrcpy **≤ 3.3.2 在 Android 16+ 上创建虚拟显示会直接崩**，服务端报
+`AbstractMethodError: onDisplayAnimationsDisabledChanged`（Android 16 给
+`IDisplayWindowListener` 加了方法，老版本 scrcpy-server 的实现没跟上），3.3.3 才修。
+本机曾装 3.2，表现就是 `--new-display` 一跑服务端就挂、只有主屏被投出来。
+
+`task android:vd*` 会读 `scrcpy --version` 做数值比较，低于 3.3.3 直接拒绝执行并给升级命令
+（`winget upgrade --id Genymobile.scrcpy` / `brew install scrcpy`）。可用 `SCRCPY=<路径>` 覆盖。
+
+### 实测踩过的坑（都会让结论反过来）
+
+1. **`--record` 的相对路径以 go-task 的工作目录为准**。included taskfile 的 cmds 从 `desktop/`
+   起跑（不是 `build/android/`，那个目录是 `assemble:apk` 里自己 `cd` 进去的）。写
+   `../../bin/x.mp4` 会报 `Failed to open output file`。用 `bin/x.mp4`。
+2. **`adb screencap` 抓不到虚拟显示**。它抓的是主屏（display 0），而虚拟显示是 scrcpy 建的、
+   进程退出即销毁。要留证据只能用 `--record` 录下来再抽帧。
+3. **不要按固定时间点抽帧**。scrcpy 只编码**变化**的帧，静止界面时视频很短，`-ss 5` 会因越界报
+   `Output file is empty`；而末尾的帧又可能是黑屏（还没首帧渲染 / 显示正在销毁）。
+   `vd:shot` 的做法是 `-sseof` 从末尾回退取 4 个候选帧，选**文件体积最大**的那张
+   （纯黑 PNG 只有十几 KB，正常界面几十 KB 以上）。
+4. **渲染时长依密度而变**：1080x1920/240 实测要 10 秒以上才出画面，8 秒录到的全是黑帧。
+   所以 `vd:shot` 取不到内容时会自动把时长翻倍重试一次 —— 否则很容易把黑图误判成「页面没渲染」。
+5. **虚拟显示退出后紧接着再建，偶发失败**（`Recording failed` / 起不来）。重跑一次即可，
+   别去改代码。
+
+### 什么时候**不要**用虚拟显示
+
+- 需要验证真机的传感器、通知、后台保活、返回键行为 —— 虚拟显示上的 Activity 生命周期与主屏不同，
+  这类结论不可信，必须真机主屏验证（`task android:run:device` 后手动操作）。
+- 需要看多窗口/分屏/画中画 —— scrcpy 的虚拟显示是独立 display，不参与主屏的分屏。
+- 需要跑 Wails MCP 探针（`task ui:mcp`）—— 那是**桌面端** WebView 的能力，安卓端没有对应实现。
+  安卓侧能自动断言的只有 adb 侧证据（`dumpsys` / `logcat` / `vd:shot` 出的 PNG），没有 DOM 探针。
 
 ## Architecture
 
