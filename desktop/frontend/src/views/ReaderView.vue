@@ -12,9 +12,9 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 
 import { readerApi } from "@/api/reader";
-import { bookshelfApi } from "@/api/bookshelf";
 import { CacheScope, cacheApi } from "@/api/cache";
 import { rawFileURL } from "@/api/system";
+import { useBookDataStore } from "@/stores/bookData";
 import { jobPercent, useCacheStore } from "@/stores/cache";
 import { useTtsStore } from "@/stores/tts";
 import { domSegment } from "@/tts/domSegment";
@@ -33,6 +33,7 @@ const route = useRoute();
 const router = useRouter();
 const tts = useTtsStore();
 const cache = useCacheStore();
+const bookData = useBookDataStore();
 const platform = usePlatformStore();
 
 const bookId = computed(() => Number(route.params.id || 0));
@@ -204,8 +205,9 @@ const pdfURL = computed(() =>
 
 async function loadMeta() {
   boundBookId.value = bookId.value;
-  book.value = await bookshelfApi.getBook(bookId.value);
-  chapters.value = await readerApi.getChapters(bookId.value);
+  // 详情/目录走全局缓存：详情页刚拉过就直接复用，来回切换不重拉。
+  book.value = await bookData.getBook(bookId.value);
+  chapters.value = await bookData.getChapters(bookId.value);
   await refreshCachedIndexes();
   const p = await readerApi.getProgress(bookId.value);
   // 详情页点某一章进来时带 ?index=N，优先于上次阅读进度。
@@ -298,7 +300,7 @@ function goBack() {
 async function loadChapter(i: number): Promise<boolean> {
   loading.value = true;
   try {
-    content.value = await readerApi.getContent(boundBookId.value, i);
+    content.value = await bookData.getContent(boundBookId.value, i);
     index.value = i;
     // 换章后必须回到顶部，否则新章节会继承上一章的滚动位置。
     await nextTick();
@@ -401,6 +403,8 @@ function onKeydown(e: KeyboardEvent) {
 async function persistProgress(scrollPercent: number) {
   const title = content.value?.title ?? chapters.value[index.value]?.title ?? "";
   await readerApi.saveProgress(boundBookId.value, index.value, title, 0, scrollPercent);
+  // 进度变了，详情页展示的进度字段失效，下次进详情重新拉。
+  bookData.invalidateBook(boundBookId.value);
 }
 
 /** 滚动时记录百分比（节流由浏览器 rAF 自然合并）。 */
@@ -459,13 +463,15 @@ const session: TtsSession = {
   },
   save: (ch, _segIndex, ratio) => {
     const title = chapters.value[ch]?.title ?? "";
-    void readerApi.saveProgress(
-      boundBookId.value,
-      ch,
-      title,
-      0,
-      Math.round(ratio * 100),
-    );
+    void readerApi
+      .saveProgress(
+        boundBookId.value,
+        ch,
+        title,
+        0,
+        Math.round(ratio * 100),
+      )
+      .then(() => bookData.invalidateBook(boundBookId.value));
   },
 };
 

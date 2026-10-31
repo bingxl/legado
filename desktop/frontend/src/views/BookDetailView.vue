@@ -3,8 +3,10 @@
  * 书籍详情页。
  *
  * 入口有两个：发现/搜索列表点击书籍行（后端会先把它加入书架，再带着 id 进来），
- * 以及书架里已有的书。整页只依赖 `bookshelfApi.getBook` + `readerApi.getChapters`，
- * 不直接访问绑定层（ARCHITECTURE.md R4）。
+ * 以及书架里已有的书。数据全部走 `stores/bookData.ts` 的按书缓存
+ * （详情/目录/正文，思路同书源缓存），来回切换不重拉；
+ * 工具栏的刷新按钮绕过缓存强制重拉。
+ * 页面不直接访问绑定层（ARCHITECTURE.md R4）。
  *
  * 「继续阅读」按后端记录的进度定位章节；点目录里的任意章节则从该章开始读。
  */
@@ -12,9 +14,8 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 
-import { bookshelfApi } from "@/api/bookshelf";
-import { readerApi } from "@/api/reader";
 import { CacheScope, cacheApi } from "@/api/cache";
+import { useBookDataStore } from "@/stores/bookData";
 import { jobPercent, useCacheStore } from "@/stores/cache";
 import AIPanel from "@/components/AIPanel.vue";
 import { copyText } from "@/utils/clipboard";
@@ -27,6 +28,7 @@ import type { CacheScopeValue } from "@/api/cache";
 const route = useRoute();
 const router = useRouter();
 const cache = useCacheStore();
+const bookData = useBookDataStore();
 
 const bookId = computed(() => Number(route.params.id || 0));
 const book = ref<BookDetail | null>(null);
@@ -82,9 +84,27 @@ async function load() {
   loading.value = true;
   coverBroken.value = false;
   try {
-    book.value = await bookshelfApi.getBook(bookId.value);
-    chapters.value = (await readerApi.getChapters(bookId.value)) ?? [];
+    book.value = await bookData.getBook(bookId.value);
+    chapters.value = await bookData.getChapters(bookId.value);
     await loadCacheStatus();
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  } finally {
+    loading.value = false;
+  }
+}
+
+/** 手动刷新：绕过缓存重拉详情与目录（书源可能有更新）。 */
+async function refresh() {
+  if (!bookId.value) return;
+  loading.value = true;
+  coverBroken.value = false;
+  try {
+    const r = await bookData.refresh(bookId.value);
+    book.value = r.book;
+    chapters.value = r.chapters;
+    await loadCacheStatus();
+    ElMessage.success("已刷新");
   } catch (e) {
     ElMessage.error((e as Error).message);
   } finally {
@@ -182,6 +202,12 @@ onMounted(load);
       </button>
       <span class="bar-title">{{ book?.name || "书籍详情" }}</span>
       <div class="bar-fill" />
+      <button class="icon-btn" :disabled="!bookId" title="刷新" @click="refresh">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+          <path d="M20 4v4.5h-4.5" />
+        </svg>
+      </button>
       <button
         class="icon-btn"
         :disabled="!book"
