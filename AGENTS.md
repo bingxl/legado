@@ -40,6 +40,8 @@ Wails **v3.0.0** — Go backend + Vue 3/Vite frontend (pnpm), business logic in 
 改包名要同时改 `desktop/build/android/app/build.gradle` 与根 `desktop/Taskfile.yml` 的 `android.vars.APP_ID`）。
 - `cd desktop && task android:build ARCH=arm64` — 用 NDK 把 Go 编成 `libwails.so`（含嵌入的前端产物）
 - `task android:assemble:apk` — Gradle 打 debug APK → `desktop/bin/legado-desktop.apk`
+- `task android:icons` — 从 `build/appicon.png` 重生成各密度启动图标（含圆形与自适应图标）。
+  安卓图标不是手改 PNG：脚本 `build/android/scripts/gen-icons.py` 是唯一入口，改了应用图标就跑一次
 - `task android:run:device` — 装到真机并启动；`task android:run` — 装到模拟器
 - `task android:logs` — adb logcat（过滤 Wails/应用）；`task android:studio` — 用 Android Studio 打开工程
 - 平台差异只写在 `platform_desktop.go`（`!android`）与 `platform_android.go`（`android`），`main.go` 不得出现 GOOS 分支

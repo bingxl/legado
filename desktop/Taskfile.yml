@@ -39,6 +39,17 @@ tasks:
       - task: sign:dev
         platforms: [windows]
 
+  android:icons:
+    summary: Regenerates Android launcher icons from build/appicon.png
+    desc: |
+      安卓宿主工程最初带的是 Wails 模板的默认图标（字母 W），与 Windows/macOS 用的
+      build/appicon.png 不一致。这个任务按各密度重生成 mipmap（含圆形图标与自适应
+      图标前景），改完 appicon.png 跑一次即可。
+
+      源图标：build/appicon.png（正方形、PNG）；生成脚本：build/android/scripts/gen-icons.py
+    cmds:
+      - python "{{.ROOT_DIR}}/build/android/scripts/gen-icons.py"
+
   sign:dev:
     summary: Signs the Windows binary with the local self-signed dev certificate
     desc: |
