@@ -7,8 +7,18 @@ build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
 # Mobile generated (per-machine; overlays hold absolute paths)
 build/ios/xcode/overlay.json
 build/ios/xcode/gen/
-build/android/overlay.json
-build/android/gen/
+# 安卓宿主工程里只有 gradle 脚本、Java 源码与 res 入库；
+# app/build、.gradle 是 Gradle 产物，jniLibs 里的 libwails.so 由
+# `task android:build` 生成（40 MB），assets 是构建时嵌入的前端产物。
+build/android/.overlay/
+build/android/.gradle/
+build/android/build/
+build/android/app/build/
+build/android/local.properties
+build/android/app/src/main/jniLibs/
+build/android/app/src/main/assets/
+# 本地开发证书的公钥（由 setup-dev-cert.ps1 按机器生成，不入库）
+build/windows/*.cer
 # 本地端到端测试数据（书源数据库与导出结果，不入库）
 tmp-sourcedl/
 downloads/
