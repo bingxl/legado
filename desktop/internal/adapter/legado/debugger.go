@@ -330,14 +330,11 @@ func (r *dbgRun) tocDebug(book *model.Book) {
 	}
 	debug.Log("︽目录页解析完成")
 
-	// 卷名不算正文（对齐 Kotlin tocDebug 的过滤）。
-	toc := make([]*model.BookChapter, 0, len(chapters))
-	for _, c := range chapters {
-		if c.IsVolume && strings.HasPrefix(c.Url, c.Title) {
-			continue
-		}
-		toc = append(toc, c)
-	}
+	// 卷名不算正文。
+	// 引擎出处：Kotlin Debug.kt:270 调试目录输出用完全相同的谓词过滤：
+	// `chapters.filter { !(it.isVolume && it.url.startsWith(it.title)) }`
+	// （BookHelp.kt:343 缓存路径也是同一判定）。逐字符对齐，不得改动。
+	toc := filterOutVolumes(chapters)
 	if len(toc) == 0 {
 		r.failed = true
 		r.reason = "目录页没有正文章节"
@@ -380,4 +377,19 @@ func headRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// filterOutVolumes 过滤卷名条目，只留正文章节。
+// 引擎出处：Kotlin Debug.kt:270
+// `chapters.filter { !(it.isVolume && it.url.startsWith(it.title)) }`。
+// 注意两个条件缺一不可：只有 isVolume 而地址不以标题开头的条目要保留。
+func filterOutVolumes(chapters []*model.BookChapter) []*model.BookChapter {
+	toc := make([]*model.BookChapter, 0, len(chapters))
+	for _, c := range chapters {
+		if c.IsVolume && strings.HasPrefix(c.Url, c.Title) {
+			continue
+		}
+		toc = append(toc, c)
+	}
+	return toc
 }

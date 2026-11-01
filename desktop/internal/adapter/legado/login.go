@@ -221,6 +221,12 @@ func wrapLoginScript(script string) string {
 }
 
 // loginJS 解析 loginUrl 里的脚本形态，返回脚本体。
+//
+// 前缀识别（@js: / <js>）与引擎 JS 规则判定一致（Kotlin AnalyzeRule 的
+// JS_PATTERN 语义）。整体「按形态分流登录方式」的决策树是桌面端自创
+// （原版在 WebView 里跑 loginUrl，桌面端无 cookie API，走表单/脚本/粘贴
+// Cookie 三路）——设计依据见 desktop/ARCHITECTURE.md §13，
+// 回归 tmp-mcptest/s12_source_login.py（21 项）。
 func loginJS(raw string) (string, bool) {
 	switch {
 	case strings.HasPrefix(strings.ToLower(raw), "@js:"):
@@ -268,6 +274,7 @@ func probeURLFor(src *legadomodel.BookSource) string {
 }
 
 // isJSRule 判断一段规则是不是脚本而不是地址。
+// 引擎出处：与 AnalyzeUrl/AnalyzeRule 对 @js:、<js> 的识别语义一致。
 func isJSRule(s string) bool {
 	lower := strings.ToLower(strings.TrimSpace(s))
 	return strings.HasPrefix(lower, "@js:") || strings.HasPrefix(lower, "<js>")

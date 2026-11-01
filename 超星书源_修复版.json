@@ -1,0 +1,71 @@
+[
+  {
+    "bookSourceComment": "超星电子书（yz4.chaoxing.com）。全链路 2026-11 实测通过：搜索/发现/详情/目录/正文。\n【修复记录】\n1. 正文图片：站点懒加载把真实地址放在 specialdata-src，src 是 refresh.png 占位图（表现为整页同一种\"图片字\"）；content 已改为 JS，先把 specialdata-src 还原成 src 再取正文，同时清掉 <a> 空锚点。\n2. ruleBookInfo.author 原规则 class.artCon@tag.p@text 无索引返回空，必须 .0；并清理\"作者：/主编/编著\"前缀后缀。\n3. ruleBookInfo.lastChapter 原 class.con@tag.a.-1@text 失效（目录是 JS 注入、详情页 DOM 无 .con），改从页面 Html 变量解出最后一章。\n4. 目录规则 Html=... + unescape + li a + attr##&name=.+ 经实测仍有效，未改动。\n【已知站点限制】搜索接口固定 channelId=52，只能搜到该频道的书；分类频道的书请从\"发现\"进入。\n【图片样式】图文混排的书 imageStyle 可按喜好改 TEXT/FULL。\n6. 发现分页公式：start 原为 {{page-1}}（page=2 时 start=1，与第 1 页重叠 24 本），实测引擎页码从 1 开始递增，已改为 {{(page-1)*25}}（第 2 页 start=25）。\n5. 章节 URL 保留 code/btype 参数（原规则把 name 之后全部删掉，丢失 btype=tushu）。实测 btype=tushu（图书版权合作）章节正文公开渠道拿不到（登录/cookie 均无效，站点仅在客户端提供），正文为空时规则会输出提示文字；非 tushu 章节（绝大多数）正常。",
+    "bookSourceGroup": "💠 综合,🍕 文字",
+    "bookSourceName": "💠 超星网站",
+    "bookSourceType": 0,
+    "bookSourceUrl": "http://yz4.chaoxing.com",
+    "bookUrlPattern": "",
+    "customOrder": 330,
+    "enabled": true,
+    "enabledCookieJar": false,
+    "enabledExplore": true,
+    "exploreUrl": "<js>\nu1='::/circlemarket/getBook,{\"method\":\"POST\",\"body\":\"start={{(page-1)*25}}&size=25&channelId=';\nu2='\"}';\nlist=[[\"❀超星推荐❀\",130],[\"❀世界名著❀\",1000000007],[\"名家名作\",1000000008],[\"流行小说\",1000000010],[\"古典文学\",1000000009],[\"诗歌散文\",1000000033],[\"文学理论\",1000000063],[\"纪实文学\",1000000498],[\"少儿文学\",1000001204],[\"外文原著\",1000000438],[\"❀中国历史❀\",1000000057],[\"史学研究\",1000000072],[\"人物传记\",1000000066],[\"文物考古\",1000000069],[\"通俗演绎\",1000000060],[\"世界历史\",1000001049],[\"❀中国哲学❀\",1000000013],[\"西方哲学\",1000000014],[\"马列哲学\",1000000015],[\"宗教\",1000000393],[\"❀艺术摄影❀\",1000000051],[\"美术书法\",1000000042],[\"音乐舞蹈\",1000000045],[\"建筑雕塑\",1000000048],[\"戏曲戏剧\",1000000081],[\"电影电视\",1000001046],[\"艺术理论\",1000000075],[\"❀经济管理❀\",1000000102],[\"投资理财\",1000000105],[\"金融会计\",1000000108],[\"成功励志\",1000000111],[\"创业创新\",1000000138],[\"❀政法政治❀\",1000000414],[\"法学\",1000000417],[\"国际关系\",1000000420],[\"❀社科心理❀\",1000000090],[\"社会学\",1000000087],[\"语言文字\",1000000135],[\"新闻传播\",1000000435],[\"❀军事理论❀\",1000000426],[\"军事技术\",1000000429],[\"军事百科\",1000000432],[\"❀工业技术❀\",1000000026],[\"航空航天\",1000000027],[\"交通运输\",1000000030],[\"环境科学\",1000000031],[\"农业科学\",1000000032],[\"计算机学\",1000000036],[\"❀公共卫生❀\",1000000471],[\"基础医学\",1000000474],[\"中医学\",1000000477],[\"临床医学\",1000000480],[\"药学\",1000000483],[\"❀高等教育❀\",1000000399],[\"基础教育\",1000000402],[\"职业教育\",1000000405],[\"理论管理\",1000000408],[\"❀大众烹饪❀\",1000000120],[\"旅游\",1000000123],[\"保健\",1000000126],[\"育儿\",1000000129],[\"体育\",1000001048],[\"小人书\",1000000522],[\"生活百科\",1000000486],[\"❀科普读物❀\",1000000017],[\"数理化学\",1000000019],[\"天文地球\",1000000020],[\"生物科学\",1000000022],[\"自然科学\",1000000023]];\nlist.map(a=>a[0]+u1+a[1]+u2).join(\"&&\").replace(/❀/g,\"❀　　　　　❀\")\n</js>",
+    "header": "{\"User-Agent\":\"Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36\"}",
+    "lastUpdateTime": 1793576400000,
+    "loginUrl": "",
+    "respondTime": 1717,
+    "ruleBookInfo": {
+      "author": "class.artCon@tag.p.0@text##^\\.+\\s*|作者[：:]|主编[：:]|\\s*编?著$|\\s*主编$",
+      "coverUrl": "",
+      "init": "",
+      "intro": "##[\\s\\S]*##<br>★★★     超星·出版     ★★★<br>★★★   本书暂无简介  ★★★###",
+      "kind": "",
+      "lastChapter": "@js:\nvar s = String(result);\nvar m = s.match(/Html = \"(.*?)\"/);\nif (!m) { ''; } else {\n    var d = unescape(m[1]);\n    var a = d.match(/chapterName='([^']*)'/g) || [];\n    var t = a.length ? a[a.length - 1].replace(/^chapterName='/, '').replace(/'$/, '') : '';\n    t;\n}",
+      "name": "tag.h2.0@text",
+      "tocUrl": "",
+      "wordCount": ""
+    },
+    "ruleContent": {
+      "content": "@js:\nvar s = String(result);\n// 1) 懒加载还原：真实地址在 specialdata-src，src 只是 refresh.png 占位图\ns = s.replace(/<img([^>]*)>/g, function (m0, attrs) {\n    var rm = attrs.match(/\\sspecialdata-src=\"([^\"]+)\"/);\n    if (!rm) return m0;\n    attrs = attrs.replace(/\\sspecialdata-src=\"[^\"]*\"/g, '').replace(/\\ssrc=\"[^\"]*\"/g, '');\n    return '<img' + attrs + ' src=\"' + rm[1] + '\">';\n});\n// 2) 提取正文容器 ztArtCon（div 配平，兼容嵌套）\nvar m = s.match(/<div[^>]*class=[\"']ztArtCon[\"'][^>]*>/i);\nvar html;\nif (m) {\n    var start = m.index, depth = 0, end = s.length;\n    var re = /<\\/?div\\b/g;\n    re.lastIndex = start;\n    var mm;\n    while ((mm = re.exec(s)) !== null) {\n        depth += (mm[0].charAt(1) === '/') ? -1 : 1;\n        if (depth === 0) { end = mm.index + mm[0].length; break; }\n    }\n    html = s.substring(start + m[0].length, Math.max(start + m[0].length, end - 6));\n} else {\n    var b = s.match(/<body[^>]*>([\\s\\S]*?)<\\/body>/i);\n    html = b ? b[1] : s;\n}\n// 3) 清理：空锚点、脚本、样式\nhtml = html.replace(/<a[^>]*>\\s*<\\/a>/g, '')\n           .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n           .replace(/<style[\\s\\S]*?<\\/style>/gi, '');\n// 4) 长段自动断行（保留原书源排版行为）\nhtml = html.replace(/([\\w，、。！？]{26}[。！？；]+[”’]?)(?=[^\\n]{27})/g, '$1<br>');\n// 5) 版权保护章节（btype=tushu）正文不公开，给出提示而非空白\nvar txt = html.replace(/<[^>]+>/g, '').replace(/\\s/g, '');\nif (txt.length < 10 && html.indexOf('prevChapter') > -1) {\n    html = '【本章无法获取正文】该章节属于超星版权保护内容（图书类），站点仅在客户端内提供正文。';\n}\nhtml;",
+      "imageStyle": "FULL",
+      "nextContentUrl": "",
+      "replaceRegex": "",
+      "sourceRegex": "",
+      "webJs": ""
+    },
+    "ruleExplore": {
+      "author": "author##^\\.+\\s*|作者[：:]|主编[：:]|\\s*编?著$|\\s*主编$",
+      "bookList": "subject",
+      "bookUrl": "mobileulr",
+      "coverUrl": "coverUrl",
+      "intro": "",
+      "kind": "",
+      "lastChapter": "",
+      "name": "name",
+      "wordCount": ""
+    },
+    "ruleReview": {},
+    "ruleSearch": {
+      "author": "author##^\\.+\\s*|作者[：:]|主编[：:]|\\s*编?著$|\\s*主编$",
+      "bookList": "$.[*]",
+      "bookUrl": "mobileulr",
+      "coverUrl": "coverUrl",
+      "intro": "",
+      "kind": "",
+      "lastChapter": "",
+      "name": "name",
+      "wordCount": ""
+    },
+    "ruleToc": {
+      "chapterList": "<js>\nresult=result.match(/Html = \"(.*?)\"/)[1]\nunescape(result)\n</js>li a",
+      "chapterName": "text##^目录$",
+      "chapterUrl": "attr##&name=[^&]*",
+      "isVip": "",
+      "nextTocUrl": "",
+      "updateTime": ""
+    },
+    "searchUrl": "http://yz4.chaoxing.com/circlemarket/getsearch,{\"method\":\"POST\",\"body\":\"channelId=52&sw={{key}}&start=0&size=25\"}",
+    "weight": 0
+  }
+]

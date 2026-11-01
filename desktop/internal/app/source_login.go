@@ -363,6 +363,10 @@ func (s *SourceLoginService) persistHeader(ctx context.Context, sourceURL, heade
 
 // parseLoginFields 解析 loginUi（对齐原版 RowUi）。
 //
+// 引擎出处：Kotlin data/entities/rule/RowUi.kt——name/type/action 三字段，
+// type 限定 text|password|button（本实现忽略 style，桌面表格布局不需要）。
+// 未知 type 跳过属于桌面端加固（原版会照常渲染）。
+//
 // loginUi 的两种存法都要认：JSON 数组，以及被转义成字符串的 JSON 数组
 // （老版本导入器会把对象写成字符串）。
 func parseLoginFields(raw string) []dto.LoginFieldView {

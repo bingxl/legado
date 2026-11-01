@@ -341,10 +341,21 @@ func (ar *AnalyzeRule) nodesFor(result any) []*html.Node {
 	case []any:
 		nodes := make([]*html.Node, 0, len(t))
 		for _, x := range t {
-			if n, ok := x.(*html.Node); ok {
-				nodes = append(nodes, n)
-			} else if w, ok := x.(*js.ElementWrap); ok {
+			switch w := x.(type) {
+			case *html.Node:
+				nodes = append(nodes, w)
+			case *js.ElementWrap:
 				nodes = append(nodes, w.Node())
+			case string:
+				// 前一段 <js> 规则返回 HTML 片段时的形态。
+				// 引擎出处：Kotlin AnalyzeRule.getElements(ruleStr, temp) 对
+				// String 类型的 temp 会重新 parseHtml 再交给选择器，
+				// 所以 `<js>…</js>li a` 这种「脚本产出 + 选择器接力」的
+				// 组合规则在原版可用；这里漏掉字符串会静默回退到
+				// 原始内容，导致组合规则永远解析为空（超星目录踩中）。
+				if doc, err := util.ParseHTML(w); err == nil && doc != nil {
+					nodes = append(nodes, doc)
+				}
 			}
 		}
 		if len(nodes) > 0 {

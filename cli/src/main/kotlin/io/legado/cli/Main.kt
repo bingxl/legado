@@ -239,16 +239,19 @@ private suspend fun exploreCommand(options: Options) {
     val source = sources.first()
 
     val kinds = parseExploreKinds(source)
-    if (options.has("list") || kinds.isEmpty()) {
+    // --url 显式给出地址时必须直达，不能被「分类为空」挡住：
+    // exploreUrl 是 <js> 形式的源（如超星）解析不出分类是常态，
+    // 早先在这里提前 return，--url 永远走不到。
+    if (options.value("url") == null) {
         Out.info("${source.bookSourceName} 的发现分类：")
         kinds.forEachIndexed { i, k -> Out.info("  ${i + 1}. ${k.title}") }
         if (kinds.isEmpty()) Out.warn("（该源没有解析出分类，可用 --url 直接指定发现地址）")
-        if (options.has("list")) return
-        return
+        if (options.has("list") || kinds.isEmpty()) return
     }
 
     val kindSelector = options.value("kind")
     val url = options.value("url") ?: run {
+        if (kinds.isEmpty()) error("该源没有解析出分类，请用 --url 直接指定发现地址")
         val kind = if (kindSelector == null) {
             kinds.first()
         } else {

@@ -125,10 +125,23 @@ func JsonGetObject(data any, pathRule string) any {
 // （ojg 不支持，legado 的真实书源里 `$.data.list.length()` 很常见）
 var jsonFuncRe = regexp.MustCompile(`\.(length|min|max|avg|sum)\(\)$`)
 
+// jayway 容忍 `$.` 后直接跟下标/通配符的写法（`$.[*]`、`$.[0]`），
+// ojg 则直接报 "an expression fragment can not start with a '['"。
+// 引擎出处：Kotlin AnalyzeByJSonPath.kt 把路径原样交给 jayway，
+// 而 jayway 的 path 解析会吞掉 `$` 后的多余点号，所以真实书源里
+// `$.[*]` 能用；这里归一化成 ojg 接受的 `$[*]` 形态。
+// 注意 `$..[`（递归下降）是合法语法，不能动；"$..[" 里不含 "$.[" 子串，天然不受影响。
+var jsonDotBracketRe = regexp.MustCompile(`\$\.\[+`)
+
+func normalizeJSONPath(path string) string {
+	return jsonDotBracketRe.ReplaceAllString(path, "$[")
+}
+
 func jsonRead(data any, path string) []any {
 	if data == nil {
 		return nil
 	}
+	path = normalizeJSONPath(path)
 	root := data
 	if s, ok := data.(string); ok {
 		var parsed any

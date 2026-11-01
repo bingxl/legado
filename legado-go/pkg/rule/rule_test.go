@@ -286,3 +286,42 @@ func TestDocExamples(t *testing.T) {
 		t.Fatalf("|| 短路错误: %#v", got2)
 	}
 }
+
+// jayway 容忍 `$.` 后直接跟下标的写法（`$.[*]`、`$.[0]`），ojg 不接受。
+// 引擎出处：Kotlin AnalyzeByJSonPath.kt 原样交给 jayway，jayway 会吞掉
+// `$` 后的多余点号，所以真实书源里 `$.[*]` 可用（超星书源的搜索列表就
+// 是这个写法，2026-11-01 曾因此全源搜索/目录为空）。
+func TestJsonPathDotBracket(t *testing.T) {
+	ar := newTestRule(t, testJSON)
+	list := ar.GetStringList("$.[*]")
+	if len(list) == 0 {
+		t.Fatal("$.​[*] 通配应为 jayway 等价写法，结果为空")
+	}
+	if got := ar.GetString("$.store.name"); got != "我的书店" {
+		t.Fatalf("$.​[ 前缀后普通路径失效: %q", got)
+	}
+	// 递归下降 `$..[` 是合法语法，不能被归一化误伤
+	n := len(ar.GetStringList("$..title"))
+	if n != 2 {
+		t.Fatalf("$..title 应为 2 项，得到 %d", n)
+	}
+}
+
+// 组合规则接力：<js> 产出 HTML 字符串后，后续选择器必须解析这段新
+// 内容，而不是回退到原始页面。引擎出处：Kotlin AnalyzeRule.getElements
+// 对 String 类型的 temp 会重新 parseHtml（超星目录 `<js>…</js>li a`
+// 踩中，2026-11-01 修复前整源目录为空）。
+func TestJSOutputThenSelectorChain(t *testing.T) {
+	page := `<html><body><script>var Html = "ignored";</script>
+<div id="real"><ul><li><a href="/c/1">一</a></li><li><a href="/c/2">二</a></li></ul></div>
+</body></html>`
+	ar := newTestRule(t, page)
+	rule := `<js>
+result=result.match(/id="real"[\s\S]*?(<ul[\s\S]*?<\/ul>)/)[1]
+result
+</js>li a`
+	els := ar.GetElements(rule)
+	if len(els) != 2 {
+		t.Fatalf("组合规则应接力出 2 个元素，得到 %d", len(els))
+	}
+}

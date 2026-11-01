@@ -63,6 +63,10 @@ func (f *Fetcher) Explore(ctx context.Context, src *domain.BookSource, url strin
 }
 
 // HasExplore 报告书源是否声明了发现地址。
+//
+// 引擎出处：Kotlin BookSourceDao.kt 的发现源查询
+// `where enabledExplore = 1 and hasExploreUrl = 1`（hasExploreUrl 即
+// exploreUrl 非空白）——本判定与原版逐条对应，不得放宽或收紧。
 func (f *Fetcher) HasExplore(src *domain.BookSource) bool {
 	engineSrc, err := toEngineSource(src)
 	if err != nil {
@@ -93,6 +97,8 @@ func (f *Fetcher) ExploreKinds(ctx context.Context, src *domain.BookSource) ([]d
 		title := strings.TrimSpace(k.Title)
 		if title == "" {
 			// 分类名缺失时退化成「全部」，比显示一长串 URL 更可读。
+			// [自创展示兜底] 原版会原样显示空名（ExploreSourceFragment 不做兜底），
+			// 只影响显示文案，不影响请求行为。
 			title = "全部"
 		}
 		out = append(out, domain.ExploreKind{Title: title, URL: strings.TrimSpace(k.Url)})
