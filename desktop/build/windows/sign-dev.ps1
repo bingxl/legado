@@ -1,4 +1,4 @@
-# 用本机自签名证书给 Windows 产物签名。
+﻿# 用本机自签名证书给 Windows 产物签名。
 #
 # 这个脚本能解决的问题（且只解决这些）：
 #   * 让「受控文件夹访问 (CFA)」按发布者而不是哈希认人，重建后不再被拦写受保护目录；
@@ -22,7 +22,11 @@
 
 param(
     [Parameter(Mandatory = $true)][string]$Exe,
-    [string]$Thumbprint = ""
+    [string]$Thumbprint = "",
+    # RFC3161 时间戳服务器；传空字符串可关闭时间戳。
+    # 有时间戳的签名在证书过期后仍然有效（时间戳证明签名时刻证书是有效的），
+    # 没有时间戳的签名在证书到期那一刻起就变成 Invalid。
+    [string]$TimestampServer = "http://timestamp.digicert.com"
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,11 +69,57 @@ Write-Host "[sign]   subject   : $($cert.Subject)"
 Write-Host "[sign]   thumbprint: $($cert.Thumbprint)"
 Write-Host "[sign]   expires   : $($cert.NotAfter)"
 
-try {
-    $r = Set-AuthenticodeSignature -FilePath $Exe -Certificate $cert -HashAlgorithm SHA256
-} catch {
-    Write-Host "[sign] FAILED: $($_.Exception.Message)"
-    exit 1
+# 优先用 signtool（VS / .NET SDK 自带，不必是完整 Windows SDK）。
+# 与 Set-AuthenticodeSignature 的签名结果在密码学上完全一致（文件哈希相同），
+# 用它的唯一实质收益是 RFC3161 时间戳：PS 5.1 的 cmdlet 只支持老的
+# Authenticode V1 时间戳（SHA1），signtool /tr 才是现代标准。
+function Find-SignTool {
+    $candidates = @(
+        "${env:ProgramFiles(x86)}\Microsoft SDKs\ClickOnce\SignTool\signtool.exe",
+        "${env:ProgramFiles(x86)}\Windows Kits\10\bin\x64\signtool.exe"
+    )
+    $kits = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+    if (Test-Path $kits) {
+        # 版本化目录（10.0.xxxxx.0）里挑最新
+        Get-ChildItem $kits -Directory | Sort-Object Name -Descending | ForEach-Object {
+            $candidates += Join-Path $_.FullName "x64\signtool.exe"
+        }
+    }
+    foreach ($c in $candidates) {
+        if ($c -and (Test-Path $c)) { return $c }
+    }
+    return $null
+}
+
+$signed = $false
+$signTool = Find-SignTool
+if ($signTool -and $TimestampServer) {
+    Write-Host "[sign] using signtool: $signTool"
+    Write-Host "[sign]   timestamp : $TimestampServer (RFC3161)"
+    & $signTool sign /sha1 $Thumbprint /fd sha256 /tr $TimestampServer /td sha256 /q $Exe 2>&1 |
+        ForEach-Object { Write-Host "[sign]   $_" }
+    if ($LASTEXITCODE -eq 0) { $signed = $true }
+    else { Write-Host "[sign] signtool failed (exit $LASTEXITCODE), falling back to Set-AuthenticodeSignature" }
+}
+
+if (-not $signed) {
+    if ($signTool -and -not $TimestampServer) {
+        # 用户显式关闭时间戳时也走 signtool（工具链统一）
+        & $signTool sign /sha1 $Thumbprint /fd sha256 /q $Exe 2>&1 |
+            ForEach-Object { Write-Host "[sign]   $_" }
+        if ($LASTEXITCODE -eq 0) { $signed = $true }
+    }
+    if (-not $signed) {
+        try {
+            $sigArgs = @{ FilePath = $Exe; Certificate = $cert; HashAlgorithm = "SHA256" }
+            if ($TimestampServer) { $sigArgs.TimeStampServer = $TimestampServer }
+            $r = Set-AuthenticodeSignature @sigArgs
+            $signed = $true
+        } catch {
+            Write-Host "[sign] FAILED: $($_.Exception.Message)"
+            exit 1
+        }
+    }
 }
 
 # 清掉 Mark-of-the-Web。产物若落在 OneDrive / 下载目录 / 被同步盘加过 Zone.Identifier，
@@ -78,16 +128,19 @@ try {
     Unblock-File -Path $Exe -ErrorAction SilentlyContinue
 } catch { }
 
-switch ($r.Status) {
+# 无论走哪条签名路径，都以本机验证结果为准做汇报。
+$verify = Get-AuthenticodeSignature -FilePath $Exe
+$tsNote = if ($verify.TimeStamperCertificate) { ", timestamped" } else { ", NOT timestamped" }
+switch ($verify.Status) {
     "Valid" {
-        Write-Host "[sign] OK (chain trusted)"
+        Write-Host "[sign] OK (chain trusted$tsNote)"
     }
     "UnknownError" {
-        Write-Host "[sign] signature written, but the self-signed root is not trusted on this machine"
+        Write-Host "[sign] signature written$tsNote, but the self-signed root is not trusted on this machine"
         Write-Host "[sign] run build/windows/setup-dev-cert.ps1 as administrator once to trust it"
     }
     default {
-        Write-Host "[sign] FAILED: $($r.Status) - $($r.StatusMessage)"
+        Write-Host "[sign] FAILED: $($verify.Status) - $($verify.StatusMessage)"
         exit 1
     }
 }

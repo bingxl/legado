@@ -233,6 +233,92 @@ LEGADO_EPUB_SAMPLE_DIR=~/Downloads go test ./internal/adapter/bookparser -run Te
 它校验解析不报错、章节均有标题与定位、首末章正文非空。
 构造样本发现不了的问题（畸形文件引发 panic、封面被声明为损坏文件等）都靠它兜住。
 
+## 安卓端构建（Windows）
+
+安卓端与桌面端共用同一套 Go 业务层与 Vue 前端，宿主工程在 `build/android/`（applicationId
+`cn.bingxl.legado`）。所有安卓任务定义在 `build/android/Taskfile.yml`，经根 `Taskfile.yml`
+以 `android:` 命名空间引入，**统一在 `desktop/` 目录下执行**。
+
+### 环境要求
+
+| 依赖 | 说明 |
+|---|---|
+| JDK 17+ | `assemble:apk` 会检查 `java` / `JAVA_HOME` |
+| Android SDK | 设 `ANDROID_HOME`（或 `ANDROID_SDK_ROOT`），需含 platform-tools（adb） |
+| Android NDK | 设 `ANDROID_NDK_HOME`，或装在 `<SDK>/ndk/` 下（任务自动取版本号最新的一个） |
+| go-task、wails3、pnpm | 与桌面构建相同 |
+
+### 环境依赖纪律：不依赖 Git Bash / 执行环境
+
+所有 Taskfile 只依赖 **go-task 内置 sh**（`mkdir/rm/cp/mv/ls` 等文件操作与 shell 语法均为
+内置实现）+ **go-task 模板**（`OS`/`ARCH` 解析期展开）+ 显式声明的工具（go/pnpm/adb/pwsh）。
+gosh **没有** `uname/awk/sed/grep/chmod/seq/sleep` 这些命令——它们来自 Git Bash 等执行环境，
+曾在纯 pwsh/System32 环境下让构建静默失败（`uname -s` 求值变空）。因此：
+
+- 平台判定用 `{{if eq OS "windows"}}` 模板，不用 `uname`；
+  gradlew 在 Windows 上由模板直接展开为 `cmd /c gradlew.bat`（gosh 执行不了 `./gradlew`）
+- NDK 的 Windows 工具链用 `windows-x86_64` + `aarch64-linux-android21-clang.cmd`
+  （无扩展名 clang 是 bash 脚本，cgo 的 `exec` 跑不了）
+- 文本/设备解析用纯 sh（`case`/`while read`/参数展开/算术）；复杂逻辑抽成 pwsh 脚本
+  （`build/android/scripts/vd-shot.ps1`、`build/scripts/vendor-puppertino.ps1`）
+- `chmod +x ./gradlew` 仅 POSIX 分支执行（Windows 无 exec 位概念）
+
+Windows 还有两个坑已在任务里兜住，无需手工干预：`main_android.go` 由
+`wails3 android overlay:gen` 生成到 `build/android/.overlay/`（点开头目录，Go 工具链不扫描），
+不要手写、也不要在 `build/android/` 下留模板副本；SDK/NDK 定位依次取
+`ANDROID_HOME` → `ANDROID_SDK_ROOT` → 各平台默认路径。
+
+### 常用命令
+
+```bash
+cd desktop
+
+# 一条龙：构建（Go→libwails.so + 前端）→ Gradle debug APK → 装到真机并启动
+# 注意：run:device 会先卸载旧版，书架/书源等应用数据全部清空
+task android:run:device
+
+# 迭代开发首选：构建 + 打包 + adb install -r -d 覆盖安装（保留应用数据）
+task android:update:device
+
+# 只构建不部署
+task android:build ARCH=arm64        # 编译 libwails.so（默认取宿主架构；真机用 arm64）
+task android:assemble:apk            # Gradle debug APK → bin/legado-desktop.apk
+task android:package                 # 生产 release APK（默认 arm64；模拟器加 ARCH=amd64）
+task android:package:fat             # 全架构 fat APK（arm64 + amd64）
+task android:bundle                  # 生产 AAB（Play 商店上传用）
+task android:bundle:fat              # 全架构 AAB
+```
+
+发布 AAB 默认用 debug keystore 签名（仅本机验证用）；正式上传前需设置
+`ANDROID_KEYSTORE_FILE` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD`。
+
+### 设备与调试
+
+```bash
+task android:device:list       # 列出在线设备/模拟器序列号
+task android:deploy-device     # release APK 装真机（先卸载，数据清空）
+task android:deploy-emulator   # release APK 装模拟器（无 AVD 时自动用已装系统镜像创建）
+task android:logs              # logcat（过滤 Wails / 应用名）
+task android:studio            # 用 Android Studio 打开 build/android
+task android:icons             # 从 build/appicon.png 重生成各密度启动图标
+task android:clean             # 清理 bin/、Gradle 产物、jniLibs 的 libwails.so
+```
+
+多设备时用 `DEVICE_ID=<serial>` 指定目标（如 `task android:update:device DEVICE_ID=abcdef`）。
+
+### 真机 UI 验收
+
+见下节「安卓端测试」，走 scrcpy 虚拟显示：`task android:vd`（开窗口）/
+`task android:vd:shot`（无窗口抓帧到 `bin/vd-shot.png`），要求 scrcpy >= 3.3.3。
+
+### 已知问题
+
+- Gradle wrapper 直连官方发行版地址可能卡住：可手动从腾讯云镜像
+  （`https://mirrors.cloud.tencent.com/gradle/`）下载对应版本 zip，
+  放到 `~/.gradle/wrapper/dists/gradle-<版本>-bin/<hash>/` 下用 `jar xf` 解压
+- 安卓 WebView 资源请求不带查询串（`/raw/`、`/img/` 参数必须编进路径段），
+  详见下文「关键设计决策」
+
 ## 安卓端测试（adb + scrcpy 虚拟显示）
 
 安卓 UI 的验收不碰手机主屏：scrcpy 用 `--new-display` 在手机上开一块**虚拟显示**，

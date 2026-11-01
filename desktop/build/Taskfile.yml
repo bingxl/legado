@@ -143,7 +143,13 @@ tasks:
     generates:
       - frontend/public/puppertino/puppertino.css
     cmds:
+      # gosh 只内置 mkdir/rm/cp 等少量文件操作，没有 grep/awk/sed/curl——
+      # 那些来自 Git Bash 等执行环境。Windows 分支走 pwsh（显式声明的跨平台
+      # 工具），POSIX 分支用系统自带的 Unix 工具，两条路都不依赖 Git Bash。
       - |
+        {{if eq OS "windows"}}
+        pwsh -NoProfile -File "{{.ROOT_DIR}}/build/scripts/vendor-puppertino.ps1"
+        {{else}}
         set -euo pipefail
         mkdir -p frontend/public/puppertino
         # If bundled Puppertino exists, prefer it. Otherwise, try to fetch, but don't fail build on error.
@@ -170,6 +176,7 @@ tasks:
           # Replace default .btn with Puppertino primary button classes if present
           sed -E -i'' 's/class=\"btn\"/class=\"p-btn p-prim-col\"/g' "$INDEX_HTML" || true
         fi
+        {{end}}
 
 
 

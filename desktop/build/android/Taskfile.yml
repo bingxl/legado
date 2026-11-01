@@ -7,34 +7,47 @@ vars:
   APP_ID: '{{.APP_ID | default "com.wails.app"}}'
   MIN_SDK: '21'
   TARGET_SDK: '35'
-  # Gradle wrapper 在 Windows 上的调用方式。
-  # go-task 的 cmds 由内置 gosh 执行，实测三种写法都不行：
+  # 平台差异一律用 go-task 的 OS/ARCH 模板（解析期展开，等价于 GOOS/GOARCH），
+  # 不用 `uname`——那是 Git Bash 的外部命令，纯 pwsh/System32 环境下不存在，
+  # 会让 sh: 求值静默变空。
+  #
+  # Gradle wrapper 在 Windows 上的调用方式（go-task 内置 gosh 执行）：
   #   `./gradlew`      → cmd 不认 "./" 前缀，报 "'.' 不是内部或外部命令"，
   #                      且无扩展名的 shell 脚本 cmd 本身就执行不了；
   #   `gradlew.bat`    → 不带分隔符时 gosh 走 exec.LookPath，当前目录又不在
   #                      PATH，报 "executable file not found"；
   #   `./gradlew.bat`  → 同样栽在 "./" 前缀上。
   # 只能显式交给 cmd：`cmd` 本身能被 LookPath 找到，后面的参数原样传给 cmd。
-  GRADLEW:
-    sh: 'case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) echo "cmd /c gradlew.bat" ;; *) echo "./gradlew" ;; esac'
+  GRADLEW: '{{if eq OS "windows"}}cmd /c gradlew.bat{{else}}./gradlew{{end}}'
   # The emulator runs the host architecture; physical devices are arm64
-  HOST_ARCH:
-    sh: '[ "$(uname -m)" = "x86_64" ] && echo "amd64" || echo "arm64"'
+  HOST_ARCH: '{{if eq ARCH "arm64"}}arm64{{else}}amd64{{end}}'
   # System-image ABI for the host, used in the "create an AVD" hint below.
-  ANDROID_ABI:
-    sh: '[ "$(uname -m)" = "arm64" ] && echo "arm64-v8a" || echo "x86_64"'
+  ANDROID_ABI: '{{if eq ARCH "arm64"}}arm64-v8a{{else}}x86_64{{end}}'
   # SDK location: $ANDROID_HOME / $ANDROID_SDK_ROOT, else the per-OS default
-  # (macOS: ~/Library/Android/sdk, Linux/other: ~/Android/Sdk)
+  # (Windows: %LOCALAPPDATA%\Android\Sdk, macOS: ~/Library/Android/sdk, Linux: ~/Android/Sdk)
   SDK_ROOT:
-    sh: 'echo "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$([ -d "$HOME/Library/Android/sdk" ] && echo "$HOME/Library/Android/sdk" || echo "$HOME/Android/Sdk")}}"'
+    sh: |
+      if [ -n "$ANDROID_HOME" ]; then echo "$ANDROID_HOME"
+      elif [ -n "$ANDROID_SDK_ROOT" ]; then echo "$ANDROID_SDK_ROOT"
+      elif [ "{{OS}}" = "darwin" ]; then echo "$HOME/Library/Android/sdk"
+      elif [ "{{OS}}" = "windows" ]; then echo "$LOCALAPPDATA/Android/Sdk"
+      else echo "$HOME/Android/Sdk"; fi
   ADB:
-    sh: 'command -v adb || echo "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$([ -d "$HOME/Library/Android/sdk" ] && echo "$HOME/Library/Android/sdk" || echo "$HOME/Android/Sdk")}}/platform-tools/adb"'
+    sh: 'command -v adb || echo "{{.SDK_ROOT}}/platform-tools/adb"'
   EMULATOR:
-    sh: 'command -v emulator || echo "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$([ -d "$HOME/Library/Android/sdk" ] && echo "$HOME/Library/Android/sdk" || echo "$HOME/Android/Sdk")}}/emulator/emulator"'
+    sh: 'command -v emulator || echo "{{.SDK_ROOT}}/emulator/emulator"'
   # avdmanager lives under cmdline-tools/<version>/bin; used to auto-create an
   # AVD when none exists (mirrors the iOS `ensure-simulator` auto-create flow).
+  # 用 glob 循环取字典序最后一个（cmdline-tools 目录名是两位版本号，字典序即
+  # 版本序），不用 ls|sort|tail——都是 Git Bash 外部命令。
   AVDMANAGER:
-    sh: 'command -v avdmanager || ls "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$([ -d "$HOME/Library/Android/sdk" ] && echo "$HOME/Library/Android/sdk" || echo "$HOME/Android/Sdk")}}"/cmdline-tools/*/bin/avdmanager 2>/dev/null | sort -V | tail -1 || true'
+    sh: |
+      command -v avdmanager && exit 0
+      AVD=""
+      for d in "{{.SDK_ROOT}}"/cmdline-tools/*/bin/avdmanager*; do
+        [ -f "$d" ] && AVD="$d"
+      done
+      echo "$AVD"
 
 tasks:
   install:deps:
@@ -70,20 +83,14 @@ tasks:
     summary: Compile Go code to shared library (.so)
     cmds:
       - |
-        # Locate the NDK: $ANDROID_NDK_HOME, or the newest installed NDK
+        # Locate the NDK: $ANDROID_NDK_HOME, or the newest installed NDK.
+        # glob 按字典序展开、循环取最后一个即最新（NDK 版本号均为两位数字段，
+        # 字典序与版本序一致）；不用 ls|sort -V|tail——都是 Git Bash 外部命令。
         NDK_ROOT="$ANDROID_NDK_HOME"
         if [ -z "$NDK_ROOT" ]; then
-          SDK_ROOT="{{.SDK_ROOT}}"
-          NDK_ENTRY=$(ls "$SDK_ROOT"/ndk 2>/dev/null | sort -V | tail -1)
-          # 同一条 ls 在不同 shell 下输出格式不同：go-task 内置的 gosh 回显
-          # 绝对路径，系统 bash 回显 basename。因此先判定它本身是不是一个
-          # 有效目录，是就直接用，不是才拼回 $SDK_ROOT/ndk 下面——
-          # 无条件拼接会得到 "…/ndk/C:\Users\…\ndk\29.0.x" 这种重复路径。
-          if [ -n "$NDK_ENTRY" ] && [ -d "$NDK_ENTRY" ]; then
-            NDK_ROOT="$NDK_ENTRY"
-          else
-            NDK_ROOT="$SDK_ROOT/ndk/$NDK_ENTRY"
-          fi
+          for d in "{{.SDK_ROOT}}"/ndk/*; do
+            [ -d "$d" ] && NDK_ROOT="$d"
+          done
         fi
         if [ -z "$NDK_ROOT" ] || [ ! -d "$NDK_ROOT" ]; then
           echo "Error: Android NDK not found"
@@ -92,19 +99,22 @@ tasks:
         fi
 
         # Determine toolchain based on host OS.
-        # 上游模板只认 Darwin/Linux；Windows 的 Git Bash 里 `uname -s` 是
-        # MINGW64_NT-*/MSYS_NT-*/CYGWIN_NT-*，会掉进 `*)` 直接退出。
+        # 宿主判定用 go-task 的 OS 模板在解析期展开，不再依赖 uname——
+        # 上游模板用 `case "$(uname -s)"`，而 uname 是 Git Bash 外部命令，
+        # 纯 pwsh/System32 环境下会静默失败掉进空分支。
         # NDK 的 Windows 预编译目录名是 windows-x86_64。
-        case "$(uname -s)" in
-          Darwin) HOST_TAG="darwin-x86_64"; CLANG_EXT="" ;;
-          Linux)  HOST_TAG="linux-x86_64";  CLANG_EXT="" ;;
-          MINGW*|MSYS*|CYGWIN*)
-            HOST_TAG="windows-x86_64"
-            # NDK 在 Windows 上给两个包装：无扩展名的是 bash 脚本（要 bash 才能执行），
-            # .cmd 是批处理。Go 的 cgo 直接 exec $CC，跑不了 bash 脚本，所以用 .cmd。
-            CLANG_EXT=".cmd" ;;
-          *)      echo "Unsupported host OS"; exit 1 ;;
-        esac
+        {{if eq OS "windows"}}
+        HOST_TAG="windows-x86_64"
+        # NDK 在 Windows 上给两个包装：无扩展名的是 bash 脚本（要 bash 才能执行），
+        # .cmd 是批处理。Go 的 cgo 直接 exec $CC，跑不了 bash 脚本，所以用 .cmd。
+        CLANG_EXT=".cmd"
+        {{else if eq OS "darwin"}}
+        HOST_TAG="darwin-x86_64"
+        CLANG_EXT=""
+        {{else}}
+        HOST_TAG="linux-x86_64"
+        CLANG_EXT=""
+        {{end}}
 
         TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG"
 
@@ -212,8 +222,9 @@ tasks:
       - |
         cd build/android
         # The exec bit is lost when gradlew is extracted from the embedded
-        # build assets, so restore it before invoking the wrapper.
-        chmod +x ./gradlew
+        # build assets, so restore it before invoking the wrapper. POSIX only:
+        # Windows 没有 exec 位概念，且 gosh 的 chmod 是外部命令（依赖 Git Bash）。
+        {{if ne OS "windows"}}chmod +x ./gradlew{{end}}
         {{.GRADLEW}} assembleDebug
         cp app/build/outputs/apk/debug/app-debug.apk "../../{{.BIN_DIR}}/{{.APP_NAME}}.apk"
         echo "APK created: {{.BIN_DIR}}/{{.APP_NAME}}.apk"
@@ -227,8 +238,9 @@ tasks:
       - |
         cd build/android
         # The exec bit is lost when gradlew is extracted from the embedded
-        # build assets, so restore it before invoking the wrapper.
-        chmod +x ./gradlew
+        # build assets, so restore it before invoking the wrapper. POSIX only:
+        # Windows 没有 exec 位概念，且 gosh 的 chmod 是外部命令（依赖 Git Bash）。
+        {{if ne OS "windows"}}chmod +x ./gradlew{{end}}
         {{.GRADLEW}} assembleRelease
         cp app/build/outputs/apk/release/app-release.apk "../../{{.BIN_DIR}}/{{.APP_NAME}}.apk"
         echo "Release APK created: {{.BIN_DIR}}/{{.APP_NAME}}.apk"
@@ -242,8 +254,9 @@ tasks:
       - |
         cd build/android
         # The exec bit is lost when gradlew is extracted from the embedded
-        # build assets, so restore it before invoking the wrapper.
-        chmod +x ./gradlew
+        # build assets, so restore it before invoking the wrapper. POSIX only:
+        # Windows 没有 exec 位概念，且 gosh 的 chmod 是外部命令（依赖 Git Bash）。
+        {{if ne OS "windows"}}chmod +x ./gradlew{{end}}
         {{.GRADLEW}} bundleDebug
         cp app/build/outputs/bundle/debug/app-debug.aab "../../{{.BIN_DIR}}/{{.APP_NAME}}.aab"
         echo "AAB created: {{.BIN_DIR}}/{{.APP_NAME}}.aab"
@@ -266,8 +279,9 @@ tasks:
         fi
         cd build/android
         # The exec bit is lost when gradlew is extracted from the embedded
-        # build assets, so restore it before invoking the wrapper.
-        chmod +x ./gradlew
+        # build assets, so restore it before invoking the wrapper. POSIX only:
+        # Windows 没有 exec 位概念，且 gosh 的 chmod 是外部命令（依赖 Git Bash）。
+        {{if ne OS "windows"}}chmod +x ./gradlew{{end}}
         {{.GRADLEW}} bundleRelease
         cp app/build/outputs/bundle/release/app-release.aab "../../{{.BIN_DIR}}/{{.APP_NAME}}.aab"
         echo "Release AAB created: {{.BIN_DIR}}/{{.APP_NAME}}.aab"
@@ -309,26 +323,36 @@ tasks:
     silent: true
     cmds:
       - |
-        # Check if an emulator is already running
-        if "{{.ADB}}" devices | grep -q "emulator"; then
-          echo "Emulator already running"
-          exit 0
-        fi
+        # Check if an emulator is already running（case 替代 grep -q，grep 是
+        # Git Bash 外部命令）
+        case "$("{{.ADB}}" devices)" in
+          *emulator*) echo "Emulator already running"; exit 0 ;;
+        esac
 
-        # Get first available AVD
-        AVD_NAME=$("{{.EMULATOR}}" -list-avds | tail -1)
+        # Get last available AVD（heredoc + while read 取末行，替代 tail -1）
+        AVD_NAME=""
+        while IFS= read -r l; do AVD_NAME="$l"; done <<AVDS
+        $("{{.EMULATOR}}" -list-avds)
+        AVDS
         if [ -z "$AVD_NAME" ]; then
           # No AVD yet. Mirror the iOS `ensure-simulator` flow and create one
           # automatically — but ONLY from a system image that is already
           # installed. We never trigger an sdkmanager download from a `run`
           # task (that would be a surprise multi-GB download + license prompt).
           # Pick the highest-API installed image matching the host ABI.
+          # glob 循环取最后一个（字典序 = 版本序），替代 ls|sort -V|tail。
           SDK_ROOT="{{.SDK_ROOT}}"
           ABI="{{.ANDROID_ABI}}"
-          IMG=$(ls -d "$SDK_ROOT"/system-images/android-*/*/"$ABI" 2>/dev/null | sort -V | tail -1)
+          IMG=""
+          for d in "$SDK_ROOT"/system-images/android-*/*/"$ABI"; do
+            [ -d "$d" ] && IMG="$d"
+          done
           AVDMANAGER="{{.AVDMANAGER}}"
           if [ -n "$IMG" ] && [ -x "$AVDMANAGER" ]; then
-            PKG="system-images;$(echo "$IMG" | sed "s|$SDK_ROOT/system-images/||" | tr '/' ';')"
+            # 纯参数展开做路径分段，替代 sed|tr：IMG = <SDK>/system-images/
+            # android-<API>/<variant>/<ABI> → system-images;android-N;variant;ABI
+            REL=${IMG#"$SDK_ROOT"/system-images/}
+            PKG="system-images;${REL%%/*};$(R=${REL#*/}; echo "${R%%/*};${R#*/}")"
             echo "No Android Virtual Devices found. Creating 'wails' from $PKG..."
             echo "no" | "$AVDMANAGER" create avd --name wails --package "$PKG" --device pixel_7 --force
             AVD_NAME=wails
@@ -346,26 +370,21 @@ tasks:
         # shell tracks background jobs by PID and reaps them when the command's
         # interpreter finishes (which nohup/setsid alone don't prevent — the kill
         # is direct), so a bare `emulator &` is gone before the later
-        # install/launch steps run. Launch it from a short-lived child shell that
-        # backgrounds the emulator and exits immediately: the emulator is then
-        # reparented to init/launchd and go-task's shell has no handle to reap it.
+        # install/launch steps run. Windows 用 pwsh Start-Process 直接脱管
+        # （nohup/sh 都是 Git Bash 外部命令）；POSIX 保留 nohup 子壳方案。
+        {{if eq OS "windows"}}
+        pwsh -NoProfile -Command "Start-Process -FilePath '{{.EMULATOR}}' -ArgumentList '-avd','$AVD_NAME','-no-snapshot-load' -WindowStyle Hidden"
+        {{else}}
         nohup sh -c "'{{.EMULATOR}}' -avd '$AVD_NAME' -no-snapshot-load </dev/null >/dev/null 2>&1 &" >/dev/null 2>&1
+        {{end}}
 
-        # Wait for emulator to boot (max 120 seconds)
+        # Wait for emulator to boot (max 120 seconds). 轮询循环放到设备端执行
+        # （toybox 自带 sleep/getprop），宿主侧没有 sleep/seq 可用。
         echo "Waiting for emulator to boot..."
         "{{.ADB}}" wait-for-device
-
-        for i in $(seq 1 120); do
-          BOOT_COMPLETED=$("{{.ADB}}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-          if [ "$BOOT_COMPLETED" = "1" ]; then
-            echo "Emulator booted successfully"
-            exit 0
-          fi
-          sleep 1
-        done
-
-        echo "Emulator boot timeout"
-        exit 1
+        "{{.ADB}}" shell 'i=0; while [ "$i" -lt 120 ]; do [ "$(getprop sys.boot_completed)" = "1" ] && exit 0; i=$((i+1)); sleep 1; done; exit 1' \
+          || { echo "Emulator boot timeout"; exit 1; }
+        echo "Emulator booted successfully"
     preconditions:
       - sh: '[ -x "{{.ADB}}" ] || command -v adb'
         msg: "adb not found. Install the Android SDK platform-tools (or set ANDROID_HOME)"
@@ -414,7 +433,7 @@ tasks:
           DEVICE="${DEVICE_ID:-}"
         fi
         if [ -z "$DEVICE" ]; then
-          DEVICE=$("{{.ADB}}" devices | awk 'NR > 1 && $2 == "device" && $1 !~ /^emulator-/ { print $1; exit }')
+          DEVICE=$("{{.ADB}}" devices | while read -r serial state _; do serial=${serial%$'\r'}; case "$serial" in ''|List*|emulator-*) continue ;; esac; [ "${state%$'\r'}" = "device" ] && { echo "$serial"; break; }; done)
         fi
         if [ -z "$DEVICE" ]; then
           echo "Error: no connected physical Android device found."
@@ -444,7 +463,7 @@ tasks:
           DEVICE="${DEVICE_ID:-}"
         fi
         if [ -z "$DEVICE" ]; then
-          DEVICE=$("{{.ADB}}" devices | awk 'NR > 1 && $2 == "device" && $1 !~ /^emulator-/ { print $1; exit }')
+          DEVICE=$("{{.ADB}}" devices | while read -r serial state _; do serial=${serial%$'\r'}; case "$serial" in ''|List*|emulator-*) continue ;; esac; [ "${state%$'\r'}" = "device" ] && { echo "$serial"; break; }; done)
         fi
         if [ -z "$DEVICE" ]; then
           echo "Error: no connected physical Android device found."
@@ -479,7 +498,7 @@ tasks:
       - |
         DEVICE="${DEVICE_ID:-}"
         if [ -z "$DEVICE" ]; then
-          DEVICE=$("{{.ADB}}" devices | awk 'NR > 1 && $2 == "device" && $1 !~ /^emulator-/ { print $1; exit }')
+          DEVICE=$("{{.ADB}}" devices | while read -r serial state _; do serial=${serial%$'\r'}; case "$serial" in ''|List*|emulator-*) continue ;; esac; [ "${state%$'\r'}" = "device" ] && { echo "$serial"; break; }; done)
         fi
         if [ -z "$DEVICE" ]; then
           echo "Error: no connected physical Android device found."
@@ -505,7 +524,7 @@ tasks:
       - |
         DEVICE="${DEVICE_ID:-}"
         if [ -z "$DEVICE" ]; then
-          DEVICE=$("{{.ADB}}" devices | awk 'NR > 1 && $2 == "device" && $1 !~ /^emulator-/ { print $1; exit }')
+          DEVICE=$("{{.ADB}}" devices | while read -r serial state _; do serial=${serial%$'\r'}; case "$serial" in ''|List*|emulator-*) continue ;; esac; [ "${state%$'\r'}" = "device" ] && { echo "$serial"; break; }; done)
         fi
         if [ -z "$DEVICE" ]; then
           echo "Error: no connected physical Android device found."
@@ -535,7 +554,7 @@ tasks:
       - |
         DEVICE="${DEVICE_ID:-}"
         if [ -z "$DEVICE" ]; then
-          DEVICE=$("{{.ADB}}" devices | awk 'NR > 1 && $2 == "device" && $1 !~ /^emulator-/ { print $1; exit }')
+          DEVICE=$("{{.ADB}}" devices | while read -r serial state _; do serial=${serial%$'\r'}; case "$serial" in ''|List*|emulator-*) continue ;; esac; [ "${state%$'\r'}" = "device" ] && { echo "$serial"; break; }; done)
         fi
         if [ -z "$DEVICE" ]; then
           echo "Error: no connected physical Android device found."
@@ -554,8 +573,14 @@ tasks:
           exit 1
         fi
 
-        VER=$("$SCRCPY_BIN" --version 2>/dev/null | head -1 | sed -E 's/^scrcpy ([0-9]+\.[0-9]+(\.[0-9]+)?).*/\1/')
-        NUM=$(echo "$VER" | awk -F. '{printf "%d%03d%03d", $1, $2, $3}')
+        # 版本解析用参数展开 + 算术比较（head|sed|awk 都是 Git Bash 外部命令）
+        VER=$("$SCRCPY_BIN" --version 2>/dev/null | while IFS=' ' read -r _ v _; do echo "${v%$'\r'}"; break; done)
+        MAJOR=${VER%%.*}; REST=${VER#*.}; MINOR=${REST%%.*}; PATCH=${REST#*.}; PATCH=${PATCH%%[!0-9]*}
+        NUM=""
+        case "${MAJOR}${MINOR}${PATCH}" in
+          *[!0-9]*|"") NUM="" ;;
+          *) NUM=$((MAJOR*1000000 + MINOR*1000 + PATCH)) ;;
+        esac
         if [ -n "$NUM" ] && [ "$NUM" -lt 3003003 ]; then
           echo "Error: scrcpy $VER is too old. Virtual display crashes on Android 16+"
           echo "  (AbstractMethodError: onDisplayAnimationsDisabledChanged; fixed in 3.3.3)."
@@ -589,7 +614,8 @@ tasks:
          所以从最后 3 秒里取 4 个候选帧，选**文件体积最大**的那张 —— 纯黑 PNG 只有
          十几 KB，正常界面在几十到上百 KB，这个判据比固定时间点稳。
 
-      依赖 ffmpeg（能出 png 的任意版本；不需要 ffprobe）。VARS 同 vd，另有 SEC（默认 12）。
+      依赖 pwsh 7 与 ffmpeg（能出 png 的任意版本；不需要 ffprobe）；实现脚本
+      build/android/scripts/vd-shot.ps1。VARS 同 vd，另有 SEC（默认 12）。
 
       渲染时长依分辨率/密度而变（实测 1080x1920/240 要 10 秒以上才出画面，8 秒抓到的是
       纯黑），因此取不到内容时会自动把录制时长翻倍重试一次，避免把黑图当成「页面没渲染」。
@@ -597,61 +623,16 @@ tasks:
       - |
         DEVICE="${DEVICE_ID:-}"
         if [ -z "$DEVICE" ]; then
-          DEVICE=$("{{.ADB}}" devices | awk 'NR > 1 && $2 == "device" && $1 !~ /^emulator-/ { print $1; exit }')
+          DEVICE=$("{{.ADB}}" devices | while read -r serial state _; do serial=${serial%$'\r'}; case "$serial" in ''|List*|emulator-*) continue ;; esac; [ "${state%$'\r'}" = "device" ] && { echo "$serial"; break; }; done)
         fi
         if [ -z "$DEVICE" ]; then echo "Error: no connected physical Android device found."; exit 1; fi
-        SCRCPY_BIN='{{.SCRCPY}}'
-        if [ -z "$SCRCPY_BIN" ]; then SCRCPY_BIN=$(command -v scrcpy || true); fi
-        if [ -z "$SCRCPY_BIN" ]; then echo "Error: scrcpy not found (need >= 3.3.3)."; exit 1; fi
-        if ! command -v ffmpeg >/dev/null 2>&1; then
-          echo "Error: ffmpeg not found (needed to extract the frame)."
-          exit 1
-        fi
-
-        SIZE='{{.VD_SIZE | default "720x1280"}}'
-        DPI='{{.VD_DPI | default "320"}}'
-        SEC='{{.SEC | default "12"}}'
-        MP4="{{.BIN_DIR}}/_vd-shot.mp4"
-        PNG="{{.BIN_DIR}}/vd-shot.png"
-        rm -f "$MP4" "$PNG" "{{.BIN_DIR}}"/_vd-f*.png
-
-        ATTEMPT=1
-        while [ "$ATTEMPT" -le 2 ]; do
-          "$SCRCPY_BIN" -s "$DEVICE" --no-window --no-audio \
-            --new-display="${SIZE}/${DPI}" \
-            --start-app={{.APP_ID}} \
-            --no-vd-system-decorations \
-            --record="$MP4" --time-limit="$SEC"
-
-          if [ -f "$MP4" ]; then
-            # 从末尾回退取 4 个候选帧；超出视频长度的会报错，忽略。
-            for t in 3 2 1 0; do
-              ffmpeg -v quiet -sseof "-$t" -i "$MP4" -frames:v 1 -update 1 -y "{{.BIN_DIR}}/_vd-f$t.png" 2>/dev/null || true
-            done
-            BEST=$(ls -S "{{.BIN_DIR}}"/_vd-f*.png 2>/dev/null | head -1)
-            if [ -n "$BEST" ]; then
-              SZ=$(wc -c < "$BEST" | tr -d ' ')
-              # 纯黑/空白 PNG 只有十几 KB；正常界面几十 KB 以上。
-              if [ "$SZ" -gt 20000 ]; then
-                mv "$BEST" "$PNG"
-                break
-              fi
-            fi
-          fi
-
-          echo "No usable frame in ${SEC}s (recorded before the first paint?); retrying with $((SEC * 2))s..."
-          ATTEMPT=$((ATTEMPT + 1))
-          SEC=$((SEC * 2))
-          rm -f "$MP4" "{{.BIN_DIR}}"/_vd-f*.png
-        done
-
-        rm -f "$MP4" "{{.BIN_DIR}}"/_vd-f*.png
-        if [ ! -f "$PNG" ]; then
-          echo "Error: still no non-blank frame. The app may have failed to start — check:"
-          echo "  {{.ADB}} -s $DEVICE logcat -d | grep -iE 'legado|wails|fatal'"
-          exit 1
-        fi
-        echo "Captured: {{.BIN_DIR}}/vd-shot.png ($(wc -c < "$PNG" | tr -d ' ') bytes)"
+        # 录制/取帧/挑帧逻辑在 pwsh 脚本里实现：wc/ls -S/tr 等 Unix 工具
+        # gosh 没有（只有 Git Bash 环境才提供），pwsh 与 scrcpy/ffmpeg 一样
+        # 是显式声明的跨平台工具，不依赖执行环境。
+        pwsh -NoProfile -File "{{.ROOT_DIR}}/build/android/scripts/vd-shot.ps1" \
+          -DeviceId "$DEVICE" -AppId "{{.APP_ID}}" -OutDir "{{.BIN_DIR}}" \
+          -Scrcpy '{{.SCRCPY}}' \
+          -Size '{{.VD_SIZE | default "720x1280"}}' -Dpi '{{.VD_DPI | default "320"}}' -Sec '{{.SEC | default "12"}}'
 
   studio:
     summary: Open the generated Android project in Android Studio
@@ -670,7 +651,11 @@ tasks:
   logs:
     summary: Stream Android logcat filtered to this app
     cmds:
-      - '"{{.ADB}}" logcat -v time | grep -E "(Wails|{{.APP_NAME}})" || true'
+      # 纯 sh 流过滤（grep 是 Git Bash 外部命令）
+      - |
+        ( "{{.ADB}}" logcat -v time | while IFS= read -r line; do
+            case "$line" in *Wails*|*{{.APP_NAME}}*) echo "$line" ;; esac
+          done ) || true
 
   logs:all:
     summary: Stream all Android logcat (verbose)
