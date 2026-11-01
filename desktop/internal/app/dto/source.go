@@ -1,7 +1,7 @@
 package dto
 
 import (
-	"strings"
+	"regexp"
 	"time"
 
 	"github.com/legado/desktop/internal/domain"
@@ -12,6 +12,9 @@ import (
 //
 // Raw 保留原始 JSON，供前端的高级编辑器直接使用；
 // 表单编辑器则使用 Name/Group/Enabled 等结构化字段。
+// 注意：Raw 单条可达几十 KB，只允许在单条接口（Get/Save/订阅同步）里填充；
+// 列表接口必须走 NewSourceBriefViews——上千书源时多传的 Raw 会把列表
+// 响应撑到几十 MB，是书源页进页卡顿的主因（2026-11-01）。
 type SourceView struct {
 	ID           int64      `json:"id"`
 	Name         string     `json:"name"`
@@ -25,8 +28,15 @@ type SourceView struct {
 	CreatedAt    time.Time  `json:"createdAt"`
 }
 
-// NewSourceView 从领域实体转换书源视图。
+// NewSourceView 从领域实体转换书源视图（含 Raw，仅限单条接口使用）。
 func NewSourceView(s *domain.BookSource) SourceView {
+	v := NewSourceBriefView(s)
+	v.Raw = s.Raw
+	return v
+}
+
+// NewSourceBriefView 转换列表用的精简书源视图（不含 Raw）。
+func NewSourceBriefView(s *domain.BookSource) SourceView {
 	var last *time.Time
 	if !s.LastUpdateAt.IsZero() {
 		t := s.LastUpdateAt
@@ -40,17 +50,25 @@ func NewSourceView(s *domain.BookSource) SourceView {
 		Enabled:      s.Enabled,
 		Order:        s.Order,
 		Comment:      s.Comment,
-		Raw:          s.Raw,
 		LastUpdateAt: last,
 		CreatedAt:    s.CreatedAt,
 	}
 }
 
-// NewSourceViews 批量转换书源视图。
+// NewSourceViews 批量转换书源视图（含 Raw，仅限单条语义的调用方）。
 func NewSourceViews(sources []*domain.BookSource) []SourceView {
 	out := make([]SourceView, 0, len(sources))
 	for _, s := range sources {
 		out = append(out, NewSourceView(s))
+	}
+	return out
+}
+
+// NewSourceBriefViews 批量转换精简书源视图（不含 Raw）——列表接口专用。
+func NewSourceBriefViews(sources []*domain.BookSource) []SourceView {
+	out := make([]SourceView, 0, len(sources))
+	for _, s := range sources {
+		out = append(out, NewSourceBriefView(s))
 	}
 	return out
 }
@@ -147,8 +165,8 @@ func NewSearchResultViews(in []*domain.SearchResult) []SearchResultView {
 
 // ExploreKindView 是发现页上的一个分类入口。
 //
-// Paged 表示该分类地址里带 {{page}} 分页变量——只有这时「下一页」才有意义。
-// 桌面端据此决定是否显示翻页按钮，避免用户点了没反应。
+// Paged 表示该分类地址里带 {{page}} / {{page-1}} 等分页变量——只有这时
+// 「下一页」才有意义。桌面端据此决定是否显示翻页按钮，避免用户点了没反应。
 type ExploreKindView struct {
 	Title string `json:"title"`
 	URL   string `json:"url"`
@@ -157,13 +175,30 @@ type ExploreKindView struct {
 
 // NewExploreKindView 转换单个分类。
 // 「是否支持翻页」由地址里有没有分页变量决定，与具体分类无关。
+//
+// 分页写法有三种（均为 AnalyzeUrl 引擎能力）：
+//  1. `{{page}}` / `{{page-1}}` / `{{page*2}}` —— {{}} 内 JS 表达式可用 page 变量；
+//  2. `<1,2,3>` 页码列表（pagePattern），翻页时按下标取值；
+//  3. `{{pageNumber}}` 这类自定义变量不算分页变量。
+//
+// 注意：原版引擎没有 `@page` 约定（2026-11 核实），旧判定里的 `strings.Contains(url, "@page")`
+// 属于误报来源，已移除。
 func NewExploreKindView(k domain.ExploreKind) ExploreKindView {
 	return ExploreKindView{
 		Title: k.Title,
 		URL:   k.URL,
-		Paged: strings.Contains(k.URL, "{{page}}") || strings.Contains(k.URL, "@page"),
+		Paged: pageVarRe.MatchString(k.URL) || pageListRe.MatchString(k.URL),
 	}
 }
+
+// pageVarRe 匹配 {{...}} 内含 page 整词的分页表达式：
+// {{page}} / {{page-1}} / {{(page-1)*25}} / {{ page + 1 }} 都命中；
+// {{pageNumber}} 等自定义变量因「page」后跟字母不成词边界而排除。
+// 注意不能只认 `{{page` 前缀——`{{(page-1)*25}}` 的 {{ 后是括号（2026-11 实测踩坑）。
+var pageVarRe = regexp.MustCompile(`\{\{[^{}]*\bpage\b`)
+
+// pageListRe 匹配 <1,2,3> 页码列表写法。
+var pageListRe = regexp.MustCompile(`<\d+\s*,\s*\d+[^<>]*>`)
 
 // ExploreSourceBrief 是发现页列表里的一个书源条目。
 //

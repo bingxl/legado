@@ -71,7 +71,10 @@ func (s *SourceService) List(ctx context.Context, group string) ([]dto.SourceVie
 	if err != nil {
 		return nil, err
 	}
-	return dto.NewSourceViews(list), nil
+	// 列表不带 Raw：Raw 是每条几 KB~几十 KB 的原始 JSON，上千书源时会把
+	// 响应撑到几十 MB（序列化 + 前端 parse 双重卡顿）。编辑页需要原始
+	// JSON 时走 Get 单条拉取。见 dto.SourceView 注释。
+	return dto.NewSourceBriefViews(list), nil
 }
 
 // Get 获取单个书源。

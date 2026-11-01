@@ -1,23 +1,22 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { useRouter } from "vue-router";
 
 import { sourceApi } from "@/api/source";
 import { coverURL } from "@/utils/media";
+import { useSourcesStore } from "@/stores/sources";
 import type { SearchResultView, SourceView } from "@/types";
 
 const router = useRouter();
 const keyword = ref("");
 const results = ref<SearchResultView[]>([]);
 const loading = ref(false);
-const sources = ref<SourceView[]>([]);
 const sourceId = ref(0);
-
-async function load() {
-  sources.value = await sourceApi.list("");
-}
-load();
+// 复用全局 sources store（启动已预载、列表已精简），不再单独全量拉一遍。
+const sourceStore = useSourcesStore();
+const sources = computed<SourceView[]>(() => sourceStore.sources);
+void sourceStore.ensureLoaded();
 
 async function search() {
   if (!keyword.value.trim()) {

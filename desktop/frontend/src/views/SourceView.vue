@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 
@@ -159,7 +159,16 @@ async function validate() {
   }
 }
 
-const filtered = () => {
+// ── 列表渲染 ────────────────────────────────────────────────
+// el-table 无虚拟化：上千行 × 5 列（每行还有开关和 4 个按钮）一次性
+// 挂载会明显卡顿。渲染层做增量分页：首屏 PAGE_SIZE 行，表格滚动触底后
+// 自动在底部追加下一页；搜索/删除仍作用于完整 filtered 数组。
+// 配合后端 List 不传 Raw，进页已无感。
+const PAGE_SIZE = 300;
+const visibleCount = ref(PAGE_SIZE);
+const tableRef = ref<{ $el?: HTMLElement } | null>(null);
+
+const filtered = computed(() => {
   const k = keyword.value.trim().toLowerCase();
   if (!k) return store.sources;
   return store.sources.filter(
@@ -168,7 +177,36 @@ const filtered = () => {
       s.group.toLowerCase().includes(k) ||
       s.url.toLowerCase().includes(k),
   );
-};
+});
+
+const visibleRows = computed(() => filtered.value.slice(0, visibleCount.value));
+
+/** 表格内部的滚动容器（Element Plus 表格 body 包在 el-scrollbar 里）。 */
+function scrollWrap(): HTMLElement | null {
+  return tableRef.value?.$el?.querySelector<HTMLElement>(".el-scrollbar__wrap") ?? null;
+}
+
+// 触底追加下一页。只做数组切片，无异步，无需 loading/防抖；
+// 100px 的提前量让连续滚动时不出现「到底才触发」的顿挫。
+function onTableScroll() {
+  const wrap = scrollWrap();
+  if (!wrap) return;
+  const nearBottom =
+    wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 100;
+  if (nearBottom && visibleCount.value < filtered.value.length) {
+    visibleCount.value = Math.min(
+      visibleCount.value + PAGE_SIZE,
+      filtered.value.length,
+    );
+  }
+}
+
+// 关键词变了就回到第一页并滚回顶部：搜索的目的就是缩小范围。
+watch(keyword, () => {
+  visibleCount.value = PAGE_SIZE;
+  const wrap = scrollWrap();
+  if (wrap) wrap.scrollTop = 0;
+});
 
 onMounted(() => {
   // store 启动时已预载过：这里只在真没数据时拉一次，进 tab 不再白等。
@@ -176,6 +214,11 @@ onMounted(() => {
   onSourceCheckProgress((data) => {
     checkProgress.value = data;
   });
+  scrollWrap()?.addEventListener("scroll", onTableScroll, { passive: true });
+});
+
+onBeforeUnmount(() => {
+  scrollWrap()?.removeEventListener("scroll", onTableScroll);
 });
 </script>
 
@@ -209,32 +252,42 @@ onMounted(() => {
       {{ checkProgress.current }}
     </div>
 
-    <el-table :data="filtered()" v-loading="store.loading" size="small" height="100%">
-      <el-table-column prop="name" label="名称" min-width="160" />
-      <el-table-column prop="group" label="分组" width="120" />
-      <el-table-column prop="url" label="地址" min-width="220" show-overflow-tooltip />
-      <el-table-column label="启用" width="80">
-        <template #default="{ row }">
-          <el-switch
-            :model-value="row.enabled"
-            @change="(v: boolean) => toggle(row, v)"
-          />
+    <div class="table-wrap">
+      <el-table ref="tableRef" :data="visibleRows" v-loading="store.loading" size="small" height="100%">
+        <el-table-column prop="name" label="名称" min-width="160" />
+        <el-table-column prop="group" label="分组" width="120" />
+        <el-table-column prop="url" label="地址" min-width="220" show-overflow-tooltip />
+        <el-table-column label="启用" width="80">
+          <template #default="{ row }">
+            <el-switch
+              :model-value="row.enabled"
+              @change="(v: boolean) => toggle(row, v)"
+            />
+          </template>
+        </el-table-column>
+        <!-- 操作列不固定：fixed 列在窄窗口下反而压缩主内容区，且本页无横向滚动需求 -->
+        <el-table-column label="操作" width="220">
+          <template #default="{ row }">
+            <el-button link type="primary" data-login-row="login" @click="openLogin(row)">
+              登录
+            </el-button>
+            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button link type="primary" @click="openDebug(row)">调试</el-button>
+            <el-button link type="danger" @click="remove(row)">删除</el-button>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <el-empty description="还没有书源，导入一份试试" />
         </template>
-      </el-table-column>
-      <el-table-column label="操作" width="220" fixed="right">
-        <template #default="{ row }">
-          <el-button link type="primary" data-login-row="login" @click="openLogin(row)">
-            登录
-          </el-button>
-          <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-          <el-button link type="primary" @click="openDebug(row)">调试</el-button>
-          <el-button link type="danger" @click="remove(row)">删除</el-button>
-        </template>
-      </el-table-column>
-      <template #empty>
-        <el-empty description="还没有书源，导入一份试试" />
+      </el-table>
+    </div>
+    <div v-if="filtered.length > PAGE_SIZE" class="table-foot">
+      <template v-if="visibleRows.length < filtered.length">
+        已显示 {{ visibleRows.length }} / 共 {{ filtered.length }} 条，
+        滑到底部自动加载下一页（也可用上方搜索缩小范围）
       </template>
-    </el-table>
+      <template v-else>已显示全部 {{ filtered.length }} 条</template>
+    </div>
 
     <SourceLoginDialog
       v-model="loginDialog"
@@ -310,6 +363,16 @@ onMounted(() => {
   font-size: 13px;
   color: #9a3412;
   background: #fff7ed;
+}
+.table-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.table-foot {
+  padding: 4px 16px 0;
+  font-size: 12px;
+  color: #6b7280;
 }
 .check-item {
   margin-bottom: 12px;
