@@ -181,6 +181,12 @@ export interface BookBrief {
     "percent": number;
     "lastReadAt": string | null;
     "updatedAt": string;
+
+    /**
+     * FileMissing 仅对本地书有意义：源文件已被移动/重命名/删除。
+     * 网络书恒为 false；由服务层 stat 后填充（DTO 不做 I/O）。
+     */
+    "fileMissing": boolean;
 }
 
 /**
@@ -210,6 +216,12 @@ export interface BookDetail {
     "percent": number;
     "lastReadAt": string | null;
     "updatedAt": string;
+
+    /**
+     * FileMissing 仅对本地书有意义：源文件已被移动/重命名/删除。
+     * 网络书恒为 false；由服务层 stat 后填充（DTO 不做 I/O）。
+     */
+    "fileMissing": boolean;
     "intro": string;
     "origin": string;
     "bookUrl": string;
@@ -349,8 +361,8 @@ export interface DebugSessionView {
 /**
  * ExploreKindView 是发现页上的一个分类入口。
  * 
- * Paged 表示该分类地址里带 {{page}} 分页变量——只有这时「下一页」才有意义。
- * 桌面端据此决定是否显示翻页按钮，避免用户点了没反应。
+ * Paged 表示该分类地址里带 {{page}} / {{page-1}} 等分页变量——只有这时
+ * 「下一页」才有意义。桌面端据此决定是否显示翻页按钮，避免用户点了没反应。
  */
 export interface ExploreKindView {
     "title": string;
@@ -681,6 +693,9 @@ export interface SourceLoginView {
  * 
  * Raw 保留原始 JSON，供前端的高级编辑器直接使用；
  * 表单编辑器则使用 Name/Group/Enabled 等结构化字段。
+ * 注意：Raw 单条可达几十 KB，只允许在单条接口（Get/Save/订阅同步）里填充；
+ * 列表接口必须走 NewSourceBriefViews——上千书源时多传的 Raw 会把列表
+ * 响应撑到几十 MB，是书源页进页卡顿的主因（2026-11-01）。
  */
 export interface SourceView {
     "id": number;

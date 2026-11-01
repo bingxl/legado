@@ -231,6 +231,16 @@ onMounted(load);
 
     <div v-if="book" class="scroll">
       <div class="inner">
+        <!-- 本地书源文件丢失：显式提示，避免用户进了阅读器才见到报错 -->
+        <el-alert
+          v-if="book.fileMissing"
+          class="missing-alert"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="书籍文件不存在"
+          :description="`源文件可能已被移动、重命名或删除：${book.bookUrl}`"
+        />
         <section class="hero">
           <div class="cover">
             <img
@@ -485,6 +495,9 @@ onMounted(load);
   max-width: 960px;
   margin: 0 auto;
   padding: 20px 24px 32px;
+}
+.missing-alert {
+  margin-bottom: 16px;
 }
 
 /* ---- 头部信息 ---- */

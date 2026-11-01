@@ -9,12 +9,14 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 
+import { bookshelfApi } from "@/api/bookshelf";
 import { readerApi } from "@/api/reader";
 import { CacheScope, cacheApi } from "@/api/cache";
 import { rawFileURL } from "@/api/system";
 import { useBookDataStore } from "@/stores/bookData";
+import { useBookshelfStore } from "@/stores/bookshelf";
 import { jobPercent, useCacheStore } from "@/stores/cache";
 import { useTtsStore } from "@/stores/tts";
 import { domSegment } from "@/tts/domSegment";
@@ -296,8 +298,13 @@ function goBack() {
   });
 }
 
+/** 本地书源文件已被移动/删除：后端在 ListBooks/GetBook 时 stat 标注。 */
+const fileMissing = computed(() => book.value?.fileMissing === true);
+
 /** 载入某章。返回是否成功——朗读自动翻章要靠它判断能不能继续。 */
 async function loadChapter(i: number): Promise<boolean> {
+  // 文件已缺失时正文必然取不到：面板已在展示，别再弹 OS 原始报错。
+  if (fileMissing.value) return false;
   loading.value = true;
   try {
     content.value = await bookData.getContent(boundBookId.value, i);
@@ -313,6 +320,29 @@ async function loadChapter(i: number): Promise<boolean> {
     return false;
   } finally {
     loading.value = false;
+  }
+}
+
+/** 移除源文件已丢失的本地书：只删书架记录与进度，不动磁盘上的任何东西。 */
+async function removeMissingBook() {
+  const name = book.value?.name ?? "这本书";
+  try {
+    await ElMessageBox.confirm(
+      `将从书架移除《${name}》及其目录与阅读进度，源文件本身不会被删除。`,
+      "移除书籍",
+      { type: "warning", confirmButtonText: "移除", cancelButtonText: "取消" },
+    );
+  } catch {
+    return; // 用户取消
+  }
+  try {
+    await bookshelfApi.deleteBook(boundBookId.value);
+    bookData.invalidateBook(boundBookId.value);
+    await useBookshelfStore().loadBooks();
+    ElMessage.success("已从书架移除");
+    router.replace("/");
+  } catch (e) {
+    ElMessage.error((e as Error).message);
   }
 }
 
@@ -622,8 +652,19 @@ onBeforeUnmount(() => {
         </div>
       </aside>
 
+      <!-- 本地书源文件缺失：明确的状态页，代替每次进来的 OS 原始报错 -->
+      <div v-if="fileMissing" class="file-missing">
+        <p class="fm-title">找不到书籍文件</p>
+        <p class="fm-desc">《{{ book?.name }}》的源文件可能已被移动、重命名或删除。</p>
+        <p class="fm-path" :title="book?.bookUrl">{{ book?.bookUrl }}</p>
+        <div class="fm-actions">
+          <el-button @click="goBack">返回</el-button>
+          <el-button type="danger" plain @click="removeMissingBook">从书架移除</el-button>
+        </div>
+      </div>
+
       <!-- PDF：交给 WebView 内置 PDF 能力 -->
-      <iframe v-if="isPdf" class="pdf" :src="pdfURL" />
+      <iframe v-else-if="isPdf" class="pdf" :src="pdfURL" />
 
       <!-- 漫画：图片流 -->
       <div v-else-if="isComic" class="comic" @scroll="onScroll">
@@ -747,6 +788,39 @@ onBeforeUnmount(() => {
   flex: 1;
   display: flex;
   min-height: 0;
+}
+/* 本地书源文件缺失的状态页 */
+.file-missing {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+}
+.file-missing .fm-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #303133;
+}
+.file-missing .fm-desc {
+  color: #606266;
+}
+.file-missing .fm-path {
+  max-width: 80%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #909399;
+  font-family: monospace;
+}
+.file-missing .fm-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 12px;
 }
 .toc {
   width: 240px;

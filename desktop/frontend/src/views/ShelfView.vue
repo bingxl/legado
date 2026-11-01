@@ -157,6 +157,8 @@ function openBook(book: BookBrief) {
             <div class="cover">
               <img v-if="b.cover" :src="coverURL(b.cover)" :alt="b.name" />
               <div v-else class="cover-fallback">{{ b.formatLabel }}</div>
+              <!-- 本地书源文件丢失：入口处就亮红牌，避免进了阅读器才见到报错 -->
+              <span v-if="b.fileMissing" class="missing-badge">文件丢失</span>
             </div>
             <div class="meta">
               <div class="name" :title="b.name">{{ b.name }}</div>
@@ -282,6 +284,21 @@ function openBook(book: BookBrief) {
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+}
+/* 本地书源文件丢失角标 */
+.missing-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #fef0f0;
+  color: #f56c6c;
+  border: 1px solid #fde2e2;
+  font-size: 12px;
+  line-height: 18px;
 }
 .cover img {
   width: 100%;

@@ -32,6 +32,9 @@ type BookBrief struct {
 	Percent         int        `json:"percent"` // 阅读进度 0~100
 	LastReadAt      *time.Time `json:"lastReadAt"`
 	UpdatedAt       time.Time  `json:"updatedAt"`
+	// FileMissing 仅对本地书有意义：源文件已被移动/重命名/删除。
+	// 网络书恒为 false；由服务层 stat 后填充（DTO 不做 I/O）。
+	FileMissing bool `json:"fileMissing"`
 }
 
 // NewBookBrief 从领域实体构造书架摘要。

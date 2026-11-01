@@ -8,6 +8,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/legado/desktop/internal/app/dto"
 	"github.com/legado/desktop/internal/domain"
@@ -71,12 +72,21 @@ func (s *BookshelfService) ListGroups(ctx context.Context) ([]dto.BookGroupView,
 }
 
 // ListBooks 列出指定分组的书籍；groupID 为 0 时返回全部。
+//
+// 本地书要额外 stat 一次源文件：文件被移动/删除后若不显式标注，
+// 前端只能在打开阅读器时弹一条晦涩的 OS 报错（用户感知是「一直报错」）。
 func (s *BookshelfService) ListBooks(ctx context.Context, groupID int64) ([]dto.BookBrief, error) {
 	books, err := s.books.List(ctx, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("查询书架失败: %w", err)
 	}
-	return dto.NewBookBriefs(books), nil
+	briefs := dto.NewBookBriefs(books)
+	for i, b := range books {
+		if b.IsLocal() {
+			briefs[i].FileMissing = !localFileExists(b.BookURL)
+		}
+	}
+	return briefs, nil
 }
 
 // GetBook 获取书籍详情。
@@ -85,7 +95,21 @@ func (s *BookshelfService) GetBook(ctx context.Context, id int64) (dto.BookDetai
 	if err != nil {
 		return dto.BookDetail{}, err
 	}
-	return dto.NewBookDetail(b), nil
+	detail := dto.NewBookDetail(b)
+	if b.IsLocal() {
+		detail.FileMissing = !localFileExists(b.BookURL)
+	}
+	return detail, nil
+}
+
+// localFileExists 报告本地书源文件是否仍然可访问。
+// 任何 stat 错误（不存在、无权限）都按缺失处理——对「能不能读」而言二者等价。
+func localFileExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // DeleteBook 从书架移除书籍（章节、进度与内容缓存一并清理）。
