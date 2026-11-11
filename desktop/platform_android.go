@@ -78,3 +78,14 @@ func webviewBrowserArgs() []string { return nil }
 // 对应 Wails 的 application.Android.SafeAreaJSON()（Java 侧 WindowInsets）。
 // 首次调用时 Activity 可能尚未完成布局，返回空串，前端按 0 处理即可。
 func safeAreaJSON() string { return application.Android.SafeAreaJSON() }
+
+// setFullscreen 安卓端没有"窗口全屏"这一层，恒返回 false。
+//
+// 手机上的沉浸是另一回事：WebView 本来就铺满 Activity，阅读器隐藏顶栏/底栏
+// 就是全屏阅读（点正文中间切换，见 ReaderView 的 chromeVisible），
+// 不需要也不应该动 Activity 的窗口标志——那会连带改变状态栏行为。
+// 前端拿到 false 后会退回"只收起栏位"的沉浸，两端因此共用同一套判定。
+func setFullscreen(bool) bool { return false }
+
+// isFullscreen 安卓端恒 false，理由同上。
+func isFullscreen() bool { return false }

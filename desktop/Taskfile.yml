@@ -38,6 +38,10 @@ tasks:
       # 不会让构建失败。配置见 build/windows/setup-dev-cert.ps1。
       - task: sign:dev
         platforms: [windows]
+      # 签名工具若替换了文件，产物会重新继承 work 目录的 Low 完整性标签；
+      # 最后再兜一次底，保证 task build 出来的 exe 普通权限可直接双击。
+      - task: fix:il
+        platforms: [windows]
 
   android:icons:
     summary: Regenerates Android launcher icons from build/appicon.png
@@ -62,6 +66,43 @@ tasks:
       证书不存在时只打印提示并以 0 退出，不阻塞构建。
     cmds:
       - pwsh -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}/build/windows/sign-dev.ps1" -Exe "{{.BIN_DIR}}/{{.APP_NAME}}.exe"
+
+  fix:il:
+    summary: 修正 bin 产物的完整性标签，使普通权限双击即可启动
+    desc: |
+      work 目录被施加了 Low Mandatory Level，产物 exe 继承后普通权限启动得到的是
+      Low IL 进程：写不了数据目录、WebView2 初始化失败（800700aa），表现就是
+      「双击没反应，只有以管理员身份运行才打得开」。
+
+      本任务只给产物文件设一条显式 Medium 标签（不需要管理员权限，也不改动
+      work 目录本身）。构建链已自动调用，这里留一个手工入口，用于重新 clone、
+      手工复制 exe、或怀疑标签被沙箱重置之后修复。
+    cmds:
+      - pwsh -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}/build/windows/fix-integrity.ps1" -Exe "{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe"
+    platforms: [windows]
+
+  publish:
+    summary: 发布可执行文件到工作区之外，使资源管理器双击可以启动
+    desc: |
+      本仓库位于带 Low 完整性标签的目录下（work 目录被施加了
+      "Mandatory Label\Low Mandatory Level"）。产物 exe 继承后，普通权限启动会得到
+      Low IL 进程：写不了数据目录、WebView2 初始化失败（800700aa）——表现就是
+      「双击没反应、只有管理员权限能跑」，与应用本身无关。
+
+      构建链已自动给 bin 产物设一条显式 Medium 标签（见 fix-integrity.ps1），正常
+      双击 bin/<APP_NAME>.exe 即可启动。本任务作为备用入口，把 exe 再复制到
+      %LOCALAPPDATA%\Programs\legado\，用于标签被沙箱重置或需要分发时。
+    cmds:
+      - pwsh -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}/build/windows/publish.ps1" -Source "{{.BIN_DIR}}/{{.APP_NAME}}.exe" -Name "{{.APP_NAME}}"
+    platforms: [windows]
+
+  run:published:
+    summary: 发布后启动（等价于在工作区外双击）
+    deps:
+      - publish
+    cmds:
+      - cmd: pwsh -NoProfile -Command "Start-Process (Join-Path $env:LOCALAPPDATA 'Programs\legado\{{.APP_NAME}}.exe')"
+        platforms: [windows]
 
   package:
     summary: Packages a production build of the application

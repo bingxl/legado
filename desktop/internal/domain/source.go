@@ -24,6 +24,13 @@ type BookSource struct {
 	// Raw 是书源的原始 JSON，与 Legado 书源格式保持一致。
 	Raw string `json:"raw"`
 
+	// Variable 是书源自定义变量（对应 Legado 的 sourceVariable）。
+	//
+	// 它不存在 Raw 里，也不在 book_sources 表里，而是按书源地址单独存一份
+	// （source_variables 表），抓取前由 SourceService 填充。放在实体上是为了
+	// 让 adapter/legado 在 toEngineSource 时能直接注入，不必额外查一次库。
+	Variable string `json:"variable,omitempty"`
+
 	LastUpdateAt time.Time `json:"lastUpdateAt"` // 最近一次校验/更新的时间
 	CreatedAt    time.Time `json:"createdAt"`
 }

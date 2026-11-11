@@ -31,6 +31,47 @@ wails3 build            # 或 task build
 `Taskfile.yml` 的 `PACKAGE_MANAGER` 默认值已改为 `pnpm`，若强行用 npm 会报
 `Cannot read properties of null (reading 'edgesOut')`。
 
+### Windows 本机运行：为什么"双击打不开、必须以管理员身份运行"
+
+**这是环境问题，不是应用 bug。** 本仓库位于 `C:\Users\<用户>\work` 下，`work`
+目录上有一条显式的 `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`
+（外加 `Everyone` 的 `DENY(DELETE_CHILD)`），子目录和文件全部继承。Windows 创建
+进程时会把新进程的令牌**降到镜像文件的完整性级别**，所以普通权限双击工作区里的
+exe 得到的是 Low IL 进程：写不了 `%LOCALAPPDATA%` 下的 `app.log` / 数据库
+（NO_WRITE_UP），WebView2 创建 controller 报 `800700aa`，进程随即退出。
+以管理员身份运行得到 High IL，绕过上述限制，于是看起来像「程序要求管理员权限」，
+实际与 UAC manifest（`asInvoker`）、签名、Defender CFA、数据目录 ACL 都无关。
+
+对照实验：同一时刻、同一非提升会话，从 `desktop\bin\legado-desktop.exe` 启动
+退出码 1 且 `app.log` 一字不增；把 exe 复制到工作区外启动则页面完整加载、日志正常写入。
+
+**修复方式（构建链已自动处理）**：给产物文件本身设一条显式 Medium 标签即可，
+**不需要管理员权限**，也不需要改动 `work` 目录（那会削弱工作区写保护）：
+
+```powershell
+task fix:il    # 手工补一次；build / ui:mcp / publish 都会自动调用
+```
+
+产物每次落地后都会重设标签（`build/windows/fix-integrity.ps1`），因为删除重建或
+签名工具替换文件时会重新继承 Low 标签。
+
+**备用入口**：把 exe 发布到工作区之外（默认 `%LOCALAPPDATA%\Programs\legado\`）：
+
+```powershell
+task publish        # 复制 + 顺手修源产物标签
+task run:published  # 发布并启动（等价于在发布目录双击）
+```
+
+若确实要把整个工作区标签改回 Medium（会削弱写保护、可能被沙箱重新施加，谨慎，
+需要管理员）：
+
+```powershell
+icacls "C:\Users\<用户>\work" /setintegritylevel (OI)(CI)M
+```
+
+另外：启动失败现在**不再静默**了——应用会把日志写到 `%LOCALAPPDATA%\legado-desktop\app.log`，
+并在致命错误（如 WebView2 初始化失败）时弹出原生错误框。
+
 ### Windows 产物签名（可选，仅开发机）
 
 `wails3 build` / `task build` 会自动调用 `build/windows/sign-dev.ps1`，用本机自签名证书签名。
@@ -103,9 +144,10 @@ go test ./internal/...
     撞上「下一章」链接即停，单章上限 50 页
   - 漫画源按图片流渲染：后端把正文里的 `<img>` 抽成图片列表，网络图片经 `/img/` 代理补齐 Referer
 - **书籍详情**：封面、作者、分类、简介、阅读进度与完整目录；「继续阅读 / 从第一章开始」与一键复制书籍地址；
-  从「发现」和「搜索」的列表点书直接进入，点任意章节跳到阅读器对应位置，返回时保留来源列表的状态
+  从「发现」和「搜索」的列表点书直接进入（**只是试读，不会自动进书架**；详情页或退出阅读器时确认才入架），
+  点任意章节跳到阅读器对应位置，返回时保留来源列表的状态
 - **书源管理**：增删改查、启停、JSON 导入导出（兼容 Legado 备份格式）、**从 URL 导入**（地址指向含多书源
-  的 JSON 文件，导入一次即止；想跟随远程更新请用「订阅」）、规则校验、搜索与发现、结果入架
+  的 JSON 文件，导入一次即止；想跟随远程更新请用「订阅」）、规则校验、搜索与发现、结果试读与入架
 - **发现（探索）**：照原生 `ExploreFragment` 的两级结构实现——书源手风琴列表（每条 6px 圆角灰条、12px 行距，展开后缩进 8px 铺分类胶囊，同时只展开一个）→ 点分类整页进入书单（80×110 封面 + 触底自动加载），分类按需解析并缓存 10 分钟
 - **WebDAV**：连接配置、连接测试、远端浏览、备份上传下载与删除
   - **从 WebDAV 选书导入**：在目录里逐层浏览、勾选文件或整个目录（目录会被递归展开），

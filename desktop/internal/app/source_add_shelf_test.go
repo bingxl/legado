@@ -24,10 +24,25 @@ func (s stubSources) Get(context.Context, int64) (*domain.BookSource, error) {
 type stubBooks struct {
 	port.BookRepository
 	created *domain.Book
+	// existing 非空时 FindByURL 返回它（模拟书已在库：可能是试读，也可能已入架）。
+	existing *domain.Book
+	// promoted 记录 SetInShelf 的调用，用于断言「试读转正」发生了。
+	promoted []int64
 }
 
 func (b *stubBooks) FindByURL(context.Context, string, string) (*domain.Book, error) {
+	if b.existing != nil {
+		return b.existing, nil
+	}
 	return nil, domain.ErrNotFound
+}
+
+func (b *stubBooks) SetInShelf(_ context.Context, id int64, inShelf bool) error {
+	b.promoted = append(b.promoted, id)
+	if b.existing != nil {
+		b.existing.Previewing = !inShelf
+	}
+	return nil
 }
 
 func (b *stubBooks) Create(_ context.Context, book *domain.Book) error {
@@ -120,5 +135,63 @@ func TestAddToShelfKeepsListVariable(t *testing.T) {
 	}
 	if books.created == nil || books.created.Variable != vars {
 		t.Fatalf("变量没有落库: %+v", books.created)
+	}
+}
+
+// 发现/搜索点开书只试读（不进书架），用户在详情页/阅读器点「加入书架」
+// 时走的还是 AddToShelf：已存在的试读书要就地转正，而不是再插一条。
+func TestAddToShelfPromotesPreviewBook(t *testing.T) {
+	existing := &domain.Book{ID: 9, Name: "试读的书", Previewing: true}
+	books := &stubBooks{existing: existing}
+	svc := newTestSourceService(books, &stubFetcher{})
+
+	brief, err := svc.AddToShelf(context.Background(), 20, "https://example.com/book/9", "", "", "", 0)
+	if err != nil {
+		t.Fatalf("AddToShelf 出错: %v", err)
+	}
+	if brief.ID != 9 || !brief.InShelf {
+		t.Fatalf("应把已有的试读书转正: %+v", brief)
+	}
+	if len(books.promoted) != 1 || books.promoted[0] != 9 {
+		t.Fatalf("没有更新书架标记: %v", books.promoted)
+	}
+	if books.created != nil {
+		t.Fatal("已存在的书不应重复落库")
+	}
+}
+
+// PreviewBook 遇到已在书架的书，不能把它降级成试读。
+func TestPreviewBookKeepsExistingShelfState(t *testing.T) {
+	existing := &domain.Book{ID: 9, Name: "已在书架"}
+	books := &stubBooks{existing: existing}
+	svc := newTestSourceService(books, &stubFetcher{})
+
+	brief, err := svc.PreviewBook(context.Background(), 20, "https://example.com/book/9", "", "", "")
+	if err != nil {
+		t.Fatalf("PreviewBook 出错: %v", err)
+	}
+	if !brief.InShelf {
+		t.Fatalf("已在书架的书不能被当成试读: %+v", brief)
+	}
+	if len(books.promoted) != 0 {
+		t.Fatalf("不应改写书架标记: %v", books.promoted)
+	}
+}
+
+// 新书走 PreviewBook 时以试读状态落库：书架里看不到，但目录已经抓好，
+// 用户点「加入书架」后可以立刻接着读。
+func TestPreviewBookCreatesPreviewing(t *testing.T) {
+	books := &stubBooks{}
+	svc := newTestSourceService(books, &stubFetcher{})
+
+	brief, err := svc.PreviewBook(context.Background(), 20, "https://example.com/book/10", "书名", "作者", "")
+	if err != nil {
+		t.Fatalf("PreviewBook 出错: %v", err)
+	}
+	if books.created == nil || !books.created.Previewing {
+		t.Fatalf("新书应以试读状态落库: %+v", books.created)
+	}
+	if brief.InShelf {
+		t.Fatalf("试读书不应出现在书架: %+v", brief)
 	}
 }

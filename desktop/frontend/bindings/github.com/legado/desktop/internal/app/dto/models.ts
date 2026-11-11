@@ -187,6 +187,12 @@ export interface BookBrief {
      * 网络书恒为 false；由服务层 stat 后填充（DTO 不做 I/O）。
      */
     "fileMissing": boolean;
+
+    /**
+     * InShelf 表示这本书已在书架中。false 表示只是试读（发现/搜索点开后
+     * 读过几章，但没点「加入书架」），书架列表不会展示它。
+     */
+    "inShelf": boolean;
 }
 
 /**
@@ -222,6 +228,12 @@ export interface BookDetail {
      * 网络书恒为 false；由服务层 stat 后填充（DTO 不做 I/O）。
      */
     "fileMissing": boolean;
+
+    /**
+     * InShelf 表示这本书已在书架中。false 表示只是试读（发现/搜索点开后
+     * 读过几章，但没点「加入书架」），书架列表不会展示它。
+     */
+    "inShelf": boolean;
     "intro": string;
     "origin": string;
     "bookUrl": string;
@@ -356,6 +368,189 @@ export interface ChapterItem {
 export interface DebugSessionView {
     "session": string;
     "running": boolean;
+}
+
+/**
+ * DictEntryView 是一条词条的前端形态。
+ */
+export interface DictEntryView {
+    "word": string;
+    "phonetic"?: string;
+    "translation": string;
+    "pos"?: string;
+    "tags"?: string[] | null;
+    "collins"?: number;
+    "oxford"?: boolean;
+    "bnc"?: number;
+    "frq"?: number;
+
+    /**
+     * Pinyin/Trad 仅汉英词典有。
+     */
+    "pinyin"?: string;
+    "trad"?: string;
+
+    /**
+     * Note 是这一条的补充说明，例如「按单字给出」。
+     */
+    "note"?: string;
+}
+
+/**
+ * DictPackageView 是词库包的状态。
+ */
+export interface DictPackageView {
+    "id": string;
+    "name": string;
+    "size": number;
+    "entries": number;
+    "version": string;
+    "builtAt": string;
+    "builtin": boolean;
+    "installed": boolean;
+
+    /**
+     * DownloadBytes 是安装这个包需要下载的源文件体积；
+     * 与 Size 并列给出，用户才知道「下 63 MB 装出 47 MB」。
+     */
+    "downloadBytes"?: number;
+
+    /**
+     * SourceLabel 是「来源与许可」那一行的文案。
+     */
+    "sourceLabel"?: string;
+
+    /**
+     * Removable 表示界面上可以显示删除。内置核心永远为 false。
+     */
+    "removable": boolean;
+}
+
+/**
+ * DictProbeView 是一次源探测的结论。
+ */
+export interface DictProbeView {
+    "ok": boolean;
+    "url"?: string;
+    "httpCode"?: number;
+    "kbps"?: number;
+    "rangeOk"?: boolean;
+    "elapsedMs"?: number;
+    "err"?: string;
+}
+
+/**
+ * DictResultView 是一次查词的完整结果。
+ */
+export interface DictResultView {
+    /**
+     * Query 是归一化后的查询词，前端要把它显示出来：
+     * 用户选的是 `Perceived`，归一化后是 `perceived`，不说清楚会以为是两回事。
+     */
+    "query": string;
+    "direction": string;
+    "source": string;
+
+    /**
+     * Lemma 非空表示命中的是变体，Entry.Word 才是原型。
+     */
+    "lemma"?: string;
+
+    /**
+     * FormLabel 是变体说明，如「过去式」。
+     */
+    "formLabel"?: string;
+    "matchedBy": string;
+    "entries": DictEntryView[] | null;
+    "suggestions"?: string[] | null;
+
+    /**
+     * Hint 是面向用户的说明（未收录、词典未安装、疑似整句）。
+     */
+    "hint"?: string;
+
+    /**
+     * Sentence 标记「这更像一整句」，前端据此把整句翻译入口放到最前。
+     */
+    "sentence"?: boolean;
+
+    /**
+     * RuleGuess 标记结果来自规则还原，可信度低于词形表。
+     */
+    "ruleGuess"?: boolean;
+}
+
+/**
+ * DictSourceConfigView 是当前下载源配置。
+ */
+export interface DictSourceConfigView {
+    /**
+     * Mode：auto（依次尝试）/ manual（只用选中源）。
+     */
+    "mode": string;
+    "sourceId": string;
+    "customUrl": string;
+
+    /**
+     * CustomKind 是自定义串被识别出的形态（中文说明）。
+     */
+    "customKind"?: string;
+    "order": string[] | null;
+
+    /**
+     * PreviewURL 是「按当前配置，这个包最终会请求哪个地址」。
+     * 设置页要显示它：用户填了前缀还是完整地址，一眼可辨。
+     */
+    "previewUrl"?: string;
+
+    /**
+     * PreviewError 非空表示当前配置拼不出可用地址（例如自定义串未填）。
+     */
+    "previewError"?: string;
+}
+
+/**
+ * DictSourceView 是下载源选择器里的一项。
+ * 
+ * Usable=false 时必须带 Reason 且界面要显示出来：灰掉不解释，
+ * 用户会以为是软件坏了。
+ */
+export interface DictSourceView {
+    "id": string;
+    "name": string;
+
+    /**
+     * Kind：builtin / custom。
+     */
+    "kind": string;
+
+    /**
+     * Note 是常驻说明（例如「实测约 283 KB/s」）。
+     */
+    "note"?: string;
+
+    /**
+     * Reason 是在**当前包**的上下文里不可用的原因。
+     */
+    "reason"?: string;
+
+    /**
+     * Usable 是按包体与托管形态过滤后的结论。
+     */
+    "usable": boolean;
+    "selected": boolean;
+}
+
+/**
+ * DictStatusView 是设置页词典卡片的整体状态。
+ */
+export interface DictStatusView {
+    "packages": DictPackageView[] | null;
+
+    /**
+     * Ready 表示核心词库已解压可用；为假时查词会返回明确错误。
+     */
+    "ready": boolean;
 }
 
 /**
@@ -605,6 +800,17 @@ export interface SourceFailure {
 }
 
 /**
+ * SourceGroupView 是书源管理界面的一个分组条目。
+ * 
+ * Count 是组内书源数量：分组菜单要显示「分组名 (12)」，
+ * 分组管理对话框也要靠它判断哪些组是空的。
+ */
+export interface SourceGroupView {
+    "name": string;
+    "count": number;
+}
+
+/**
  * SourceImportResult 是书源导入的汇总结果。
  */
 export interface SourceImportResult {
@@ -689,6 +895,25 @@ export interface SourceLoginView {
 }
 
 /**
+ * SourceVariableView 是「设置源变量」对话框的数据。
+ * 
+ * 原生把源变量存在缓存里、书源实体不持久化；桌面端存在独立表
+ * （source_variables），按书源地址作为主键。
+ */
+export interface SourceVariableView {
+    "sourceId": number;
+    "name": string;
+    "url": string;
+    "variable": string;
+
+    /**
+     * Comment 是书源的 variableComment 字段（原生把它作为对话框提示文本），
+     * 为空时前端显示一句通用说明。
+     */
+    "comment": string;
+}
+
+/**
  * SourceView 是书源在管理界面上的视图。
  * 
  * Raw 保留原始 JSON，供前端的高级编辑器直接使用；
@@ -708,6 +933,51 @@ export interface SourceView {
     "raw": string;
     "lastUpdateAt": string | null;
     "createdAt": string;
+
+    /**
+     * ── 以下字段从 Raw 派生，不落库 ──────────────────────────
+     * 书源管理界面需要按「是否有发现 / 是否需登录 / 响应时间 / 权重 / 类型」
+     * 做筛选、排序与徽标展示，这些值都在原始 JSON 里。派生值随列表一起下发，
+     * 前端就不必为每个源各拉一次完整 Raw（上千源时那是几十 MB）。
+     * 派生规则见 domain.ParseSourceMeta，默认值与 Legado 原生实体一致。
+     * 0 文本 / 1 音频 / 2 图片 / 3 文件
+     */
+    "type": number;
+
+    /**
+     * 是否在发现页展示
+     */
+    "enabledExplore": boolean;
+
+    /**
+     * 是否配置了 exploreUrl
+     */
+    "hasExploreUrl": boolean;
+
+    /**
+     * 是否配置了 loginUrl
+     */
+    "hasLoginUrl": boolean;
+
+    /**
+     * 是否自动保存 Cookie
+     */
+    "enabledCookieJar": boolean;
+
+    /**
+     * 智能排序权重
+     */
+    "weight": number;
+
+    /**
+     * 响应时间（毫秒）
+     */
+    "respondTime": number;
+
+    /**
+     * 源变量说明
+     */
+    "variableComment": string;
 }
 
 /**

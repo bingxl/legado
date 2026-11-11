@@ -12,6 +12,7 @@ require (
 	github.com/studio-b12/gowebdav v0.13.0
 	github.com/wailsapp/wails/v3 v3.0.0
 	golang.org/x/net v0.62.0
+	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.61.0
 )
 
@@ -48,7 +49,6 @@ require (
 	github.com/yuin/goldmark v1.7.17 // indirect
 	go4.org v0.0.0-20260112195520-a5071408f32f // indirect
 	golang.org/x/image v0.45.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	modernc.org/libc v1.79.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

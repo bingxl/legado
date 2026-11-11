@@ -24,7 +24,7 @@ var _ port.BookRepository = (*BookRepo)(nil)
 
 const bookColumns = `id, name, author, intro, cover_url, kind, format, origin, book_url,
 	group_id, sort_order, total_chapters, last_chapter, dur_chapter_index, dur_chapter_title,
-	dur_chapter_pos, created_at, updated_at, last_read_at, variable`
+	dur_chapter_pos, created_at, updated_at, last_read_at, variable, in_shelf`
 
 // Create 插入一本书并回填主键。
 func (r *BookRepo) Create(ctx context.Context, b *domain.Book) error {
@@ -40,14 +40,15 @@ func (r *BookRepo) Create(ctx context.Context, b *domain.Book) error {
 	}
 
 	const query = `INSERT INTO books (` + bookColumns + `)
-		VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id`
-	// bookColumns 含 id，故需 19 个占位符（不含 id）。
+	// bookColumns 含 id，故需 20 个占位符（不含 id）。
 	args := []any{
 		b.Name, b.Author, b.Intro, b.CoverURL, string(b.Kind), string(b.Format),
 		b.Origin, b.BookURL, b.GroupID, b.Order, b.TotalChapters, b.LastChapter,
 		b.DurChapterIndex, b.DurChapterTitle, b.DurChapterPos,
 		b.CreatedAt, b.UpdatedAt, nullableTime(b.LastReadAt), b.Variable,
+		boolInt(!b.Previewing),
 	}
 	row := r.db.q(ctx).QueryRowContext(ctx, query, args...)
 	if err := row.Scan(&b.ID); err != nil {
@@ -110,16 +111,39 @@ func (r *BookRepo) FindByURL(ctx context.Context, origin, bookURL string) (*doma
 }
 
 // List 列出指定分组的书籍；groupID 为 0 表示全部。
+//
+// 只返回已加入书架的书：发现/搜索点开试读的书也落库（阅读进度、目录都要
+// books.id），但 in_shelf=0，不能出现在书架列表里。
 func (r *BookRepo) List(ctx context.Context, groupID int64) ([]*domain.Book, error) {
-	query := `SELECT ` + bookColumns + ` FROM books`
+	query := `SELECT ` + bookColumns + ` FROM books WHERE in_shelf = 1`
 	args := []any{}
 	if groupID > 0 {
-		query += ` WHERE group_id = ?`
+		query += ` AND group_id = ?`
 		args = append(args, groupID)
 	}
 	query += ` ORDER BY sort_order ASC, updated_at DESC`
 
 	rows, err := r.db.q(ctx).QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("查询书籍列表失败: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*domain.Book
+	for rows.Next() {
+		b, err := scanBook(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// ListAll 列出全部书籍（含试读），按 Order、UpdatedAt 排序。
+func (r *BookRepo) ListAll(ctx context.Context) ([]*domain.Book, error) {
+	rows, err := r.db.q(ctx).QueryContext(ctx,
+		`SELECT `+bookColumns+` FROM books ORDER BY sort_order ASC, updated_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("查询书籍列表失败: %w", err)
 	}
@@ -147,6 +171,20 @@ func (r *BookRepo) UpdateProgress(ctx context.Context, id int64, chapterIndex in
 	return ensureAffected(res, domain.ErrNotFound, "书籍不存在")
 }
 
+// SetInShelf 把书加入或移出书架（试读转正 / 撤下）。
+//
+// 只动 in_shelf 一列：章节、缓存、阅读进度都保留，用户点「加入书架」后
+// 能接着上次的位置读，不必重新抓目录。
+func (r *BookRepo) SetInShelf(ctx context.Context, id int64, inShelf bool) error {
+	res, err := r.db.q(ctx).ExecContext(ctx,
+		`UPDATE books SET in_shelf=?, updated_at=? WHERE id=?`,
+		boolInt(inShelf), time.Now(), id)
+	if err != nil {
+		return fmt.Errorf("更新书架状态失败: %w", err)
+	}
+	return ensureAffected(res, domain.ErrNotFound, "书籍不存在")
+}
+
 // scanner 是 *sql.Row 与 *sql.Rows 的公共 Scan 子集。
 type scanner interface{ Scan(dest ...any) error }
 
@@ -157,18 +195,20 @@ func scanBook(s scanner) (*domain.Book, error) {
 		kind, format         string
 		lastReadAt           sql.NullTime
 		createdAt, updatedAt time.Time
+		inShelf              int
 	)
 	err := s.Scan(
 		&b.ID, &b.Name, &b.Author, &b.Intro, &b.CoverURL, &kind, &format,
 		&b.Origin, &b.BookURL, &b.GroupID, &b.Order, &b.TotalChapters, &b.LastChapter,
 		&b.DurChapterIndex, &b.DurChapterTitle, &b.DurChapterPos,
-		&createdAt, &updatedAt, &lastReadAt, &b.Variable,
+		&createdAt, &updatedAt, &lastReadAt, &b.Variable, &inShelf,
 	)
 	if err != nil {
 		return nil, err
 	}
 	b.Kind = domain.BookKind(kind)
 	b.Format = domain.BookFormat(format)
+	b.Previewing = inShelf == 0
 	b.CreatedAt = createdAt
 	b.UpdatedAt = updatedAt
 	if lastReadAt.Valid {

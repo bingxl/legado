@@ -25,10 +25,16 @@ type BookRepository interface {
 	Get(ctx context.Context, id int64) (*domain.Book, error)
 	// FindByURL 按来源标识 + 书籍 URL 定位，用于导入去重；不存在返回 domain.ErrNotFound。
 	FindByURL(ctx context.Context, origin, bookURL string) (*domain.Book, error)
-	// List 列出指定分组的书籍；groupID 为 0 时返回全部，按 Order、UpdatedAt 排序。
+	// List 列出指定分组中**已在书架**的书籍；groupID 为 0 时返回全部，按 Order、UpdatedAt 排序。
+	// 试读（未入架）的书不在此列。
 	List(ctx context.Context, groupID int64) ([]*domain.Book, error)
+	// ListAll 列出全部书籍，含未加入书架的试读书。
+	// 只给「按 book id 维护数据」的场景用（缓存管理、备份），书架 UI 一律用 List。
+	ListAll(ctx context.Context) ([]*domain.Book, error)
 	// UpdateProgress 仅更新阅读进度相关字段，避免整行覆盖带来的并发写冲突。
 	UpdateProgress(ctx context.Context, id int64, chapterIndex int, chapterTitle string, chapterPos int) error
+	// SetInShelf 把书籍加入或移出书架；章节、缓存与阅读进度都保留。
+	SetInShelf(ctx context.Context, id int64, inShelf bool) error
 }
 
 // BookGroupRepository 提供书架分组的持久化能力。
@@ -71,6 +77,13 @@ type BookSourceRepository interface {
 	List(ctx context.Context, group string) ([]*domain.BookSource, error)
 	// ListEnabled 列出全部启用书源，供搜索/发现使用。
 	ListEnabled(ctx context.Context) ([]*domain.BookSource, error)
+	// UpdateOrders 批量更新排序号（拖拽排序、置顶、置底后统一落库）。
+	// 键为书源 ID，值为新的 Order。实现应在单个事务内完成，避免中途失败
+	// 留下「一半源换了序」的中间态。
+	UpdateOrders(ctx context.Context, orders map[int64]int) error
+	// Groups 汇总全部分组及组内书源数量。
+	// 书源的 group_name 允许逗号分隔多个分组，实现需拆分后各自计数。
+	Groups(ctx context.Context) ([]domain.SourceGroup, error)
 }
 
 // ReplaceRuleRepository 提供全局替换规则的持久化能力。
@@ -113,4 +126,17 @@ type SourceLoginRepository interface {
 type UnitOfWork interface {
 	// Do 在单个事务内执行 fn；fn 内部应通过参数传入的仓储访问数据。
 	Do(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
+// SourceVariableRepository 提供书源自定义变量的持久化能力。
+//
+// 主键是书源地址（bookSourceUrl），与登录信息同理：变量跟着站点走，
+// 书源重新导入或换 id 都不该丢。
+type SourceVariableRepository interface {
+	// Get 读取变量；不存在时返回空串而不是错误——没设过变量是常态。
+	Get(ctx context.Context, sourceURL string) (string, error)
+	// Put 写入（覆盖）变量。
+	Put(ctx context.Context, sourceURL, variable string) error
+	// Delete 删除变量；不存在不算错误。
+	Delete(ctx context.Context, sourceURL string) error
 }

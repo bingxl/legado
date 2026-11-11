@@ -515,9 +515,11 @@ func (s *CacheService) Books(ctx context.Context) ([]dto.CacheBookView, error) {
 	if err != nil {
 		return nil, err
 	}
-	books, err := s.books.List(ctx, 0)
+	// 用 ListAll：试读书（不在书架）也可能有缓存，漏掉会让「总占用」
+	// 与下面列出的明细对不上。
+	books, err := s.books.ListAll(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("查询书架失败: %w", err)
+		return nil, fmt.Errorf("查询书籍失败: %w", err)
 	}
 	byID := make(map[int64]*domain.Book, len(books))
 	for _, b := range books {

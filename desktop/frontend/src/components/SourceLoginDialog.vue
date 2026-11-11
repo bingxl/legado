@@ -337,7 +337,7 @@ async function copyHeader() {
       </el-collapse>
 
       <div v-if="resultMsg" class="result" data-login="result">{{ resultMsg }}</div>
-      <pre v-if="logs.length" class="logs" data-login="logs">{{ logs.join("\n") }}</pre>
+      <pre v-if="logs.length" class="logs r-scroll-x" data-login="logs">{{ logs.join("\n") }}</pre>
       <div v-if="probe" class="probe" :class="{ bad: probe.needLogin }" data-login="probe">
         {{ probe.detail }}
         <span v-if="probe.url" class="probe-url">（{{ probe.url }}）</span>
@@ -367,68 +367,90 @@ async function copyHeader() {
 
 <style scoped>
 .body {
-  min-height: 180px;
+  min-height: min(180px, 40vh);
+  min-width: 0;
+  max-width: 100%;
 }
 .head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  margin-bottom: var(--r-pad);
 }
 .mask {
   font-size: 12px;
+  min-width: 0;
   color: var(--el-text-color-secondary);
   word-break: break-all;
 }
 .form {
   margin-bottom: 4px;
+  min-width: 0;
+  max-width: 100%;
 }
 .actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  margin-bottom: var(--r-pad-sm);
 }
 .tip {
-  margin: 0 0 8px;
+  margin: 0 0 var(--r-pad-sm);
   font-size: 13px;
+  min-width: 0;
   color: var(--el-text-color-regular);
   line-height: 1.6;
 }
 .url {
-  margin: 8px 0 0;
+  margin: var(--r-pad-sm) 0 0;
   font-size: 12px;
+  min-width: 0;
+  max-width: 100%;
   color: var(--el-text-color-secondary);
   word-break: break-all;
 }
 .cookie {
-  margin-top: 12px;
+  margin-top: var(--r-pad);
+  min-width: 0;
+  max-width: 100%;
 }
 .cookie-actions {
   display: flex;
-  gap: 8px;
-  margin: 8px 0;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  margin: var(--r-pad-sm) 0;
 }
 .result {
-  margin-top: 12px;
+  margin-top: var(--r-pad);
   font-size: 13px;
+  min-width: 0;
+  word-break: break-word;
   color: var(--el-color-success);
 }
 .logs {
-  margin: 8px 0 0;
-  padding: 8px;
-  max-height: 140px;
+  margin: var(--r-pad-sm) 0 0;
+  padding: var(--r-pad-sm);
+  max-height: min(140px, 30vh);
+  min-width: 0;
+  max-width: 100%;
   overflow: auto;
   font-size: 12px;
   line-height: 1.5;
   background: var(--el-fill-color-light);
-  border-radius: 4px;
+  border-radius: var(--r-radius-sm);
   white-space: pre-wrap;
   word-break: break-all;
 }
 .probe {
-  margin-top: 8px;
+  margin-top: var(--r-pad-sm);
   font-size: 13px;
+  min-width: 0;
+  max-width: 100%;
+  word-break: break-word;
   color: var(--el-color-success);
 }
 .probe.bad {
@@ -437,9 +459,24 @@ async function copyHeader() {
 .probe-url {
   color: var(--el-text-color-secondary);
   font-size: 12px;
+  word-break: break-all;
 }
 .clear-form {
-  margin-right: 8px;
-  float: left;
+  float: none;
+  margin-right: auto;
+  min-width: 0;
+}
+:deep(.el-dialog__footer) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--r-gap-sm);
+}
+
+@media (max-width: 640px) {
+  .clear-form {
+    margin-right: 0;
+  }
 }
 </style>

@@ -17,6 +17,9 @@ export const bookshelfApi = {
   /** 书籍详情。 */
   getBook: (id: number) => call(binding.GetBook(id)),
 
+  /** 把已在库中的书加入书架（发现/搜索里试读过的书转正）。 */
+  putOnShelf: (bookId: number) => call(binding.PutOnShelf(bookId)),
+
   /** 删除书籍。 */
   deleteBook: (id: number) => call(binding.DeleteBook(id)),
 

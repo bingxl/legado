@@ -1,0 +1,228 @@
+/**
+ * 统一响应式基线（全应用唯一一份，由 main.ts 在 Element Plus 之后引入）
+ *
+ * 设计目标：同一个 Vue 视图在 412px 手机、768px 平板/窄窗口、1200px+ 桌面上
+ * 都能自然排布，不再依赖「平台判定 → 两套 DOM」这种硬切换。
+ *
+ * 三档断点（数值的唯一来源是 utils/breakpoint.ts 的 BREAKPOINTS）：
+ *   compact  <= 640px    手机 / 很窄的桌面窗口：单列、工具栏换行、弹层近全宽
+ *   medium   641~1024px  平板 / 分屏：侧栏收成图标栏、网格列宽收紧
+ *   wide     > 1024px    桌面：完整侧栏、多列网格
+ *
+ * CSS 自定义属性**不能**用在 @media 的条件里（规范限制），所以 :root 里的
+ * --bp-* 只是文档与同步用的声明；真正写在 @media 里的数值必须与
+ * utils/breakpoint.ts 保持一致，改动时两处一起改。
+ */
+
+:root {
+  /* ── 断点（文档用途，不可用于 @media 条件） ─────────────── */
+  --bp-compact: 640px;
+  --bp-medium: 1024px;
+
+  /* ── 流式间距：小屏自动收紧，大屏自动放宽 ───────────────── */
+  --r-gap: clamp(8px, 1.1vw, 16px);
+  --r-gap-sm: clamp(4px, 0.6vw, 8px);
+  --r-pad: clamp(10px, 1.4vw, 20px);
+  --r-pad-sm: clamp(6px, 0.9vw, 12px);
+  --r-radius: 10px;
+  --r-radius-sm: 6px;
+
+  /* ── 尺寸 token ─────────────────────────────────────────── */
+  --r-tap: 40px;                 /* 触控目标最小高度 */
+  --r-content-max: 1600px;      /* 超宽屏内容区不无限拉伸 */
+  --r-card-min: 150px;          /* 卡片网格最小列宽 */
+  --r-cover-h: clamp(140px, 17vw, 200px);
+  --r-line: 1px solid #e5e7eb;
+  --r-surface: #fff;
+  --r-muted: #6b7280;
+
+  /* ── 文本 ───────────────────────────────────────────────── */
+  color-scheme: light;
+}
+
+/* ── 通用布局原语：视图只加类名，不再各写一份 flex/grid ───── */
+
+/** 页面根：纵向铺满，内部滚动区自己管 */
+.r-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+/** 可滚动的主体 */
+.r-main {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+}
+/** 工具栏 / 标题栏：窄屏自动换行，按钮不会被压成一条缝 */
+.r-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  padding: var(--r-pad-sm) var(--r-pad);
+  min-width: 0;
+}
+/** 行内横向组合 */
+.r-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+}
+.r-spacer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/** 自适应卡片网格：列数由可用宽度决定，不需要写 N 个 @media */
+.r-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--r-card-min), 1fr));
+  gap: var(--r-gap);
+  min-width: 0;
+}
+/** 窄屏需要横向滚动的表格 / 代码块：让溢出发生在自己身上，不撑破整页 */
+.r-scroll-x {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.r-ellipsis {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.r-full {
+  width: 100%;
+  max-width: 100%;
+}
+/**
+ * 替代内联 `style="width: 240px"`：宽度上限受容器约束。
+ * 用法：`class="r-fit" style="--r-fit-w: 240px"`
+ */
+.r-fit {
+  width: min(100%, var(--r-fit-w, 240px));
+  max-width: 100%;
+  min-width: 0;
+}
+/** 按断点显隐（用于纯展示差异，不替代真正的 DOM 分支） */
+.r-only-compact,
+.r-only-medium {
+  display: none;
+}
+
+/* ── Element Plus 全局降级 ─────────────────────────────────
+   视图里有大量内联 `style="width: NNNpx"`（优先级高于任何选择器），
+   所以这里用 max-width 设上限而不是覆盖 width，避免和 Element Plus
+   自己的尺寸计算打架。 */
+.el-input,
+.el-select,
+.el-input-number,
+.el-date-editor,
+.el-cascader {
+  max-width: 100%;
+}
+.el-dialog,
+.el-message-box,
+.el-drawer {
+  max-width: calc(100vw - 24px);
+}
+/* 表格的父级必须允许收缩，否则 flex 子项会被内容撑开 */
+.el-table {
+  max-width: 100%;
+}
+
+/* ── compact：<= 640px ────────────────────────────────────── */
+@media (max-width: 640px) {
+  :root {
+    --r-card-min: 120px;
+    --r-cover-h: clamp(120px, 34vw, 170px);
+  }
+  /* 各视图 scoped 样式里的类名，全局规则仍按类名命中 */
+  .toolbar,
+  .bar,
+  .head,
+  .r-toolbar {
+    flex-wrap: wrap;
+  }
+  .toolbar > .el-input,
+  .toolbar > .el-select,
+  .bar > .el-input,
+  .bar > .el-select {
+    flex: 1 1 140px;
+    max-width: 100% !important;
+  }
+  .el-input,
+  .el-select,
+  .el-input-number,
+  .el-date-editor {
+    max-width: 100% !important;
+  }
+  /* 弹窗默认固定宽 + 外边距，窄屏会露出两侧空白并把按钮挤出可视区 */
+  .el-dialog {
+    width: calc(100vw - 24px) !important;
+    margin: 12px auto !important;
+  }
+  .el-message-box {
+    width: calc(100vw - 32px) !important;
+  }
+  .el-drawer {
+    width: 100% !important;
+  }
+  .el-button {
+    min-height: var(--r-tap);
+  }
+  /* 触控友好：复选框/开关的可点区域不小于 40px */
+  .el-checkbox,
+  .el-radio {
+    min-height: 32px;
+  }
+  .r-hide-compact {
+    display: none !important;
+  }
+  .r-only-compact {
+    display: revert; /* 回到元素默认 display，别用 initial（div 会变 inline） */
+  }
+  /* 窄屏下两栏布局统一改单栏（避免左右各占 140px 把内容挤没） */
+  .r-stack-compact {
+    flex-direction: column !important;
+  }
+}
+
+/* ── medium：641 ~ 1024px ─────────────────────────────────── */
+@media (min-width: 641px) and (max-width: 1024px) {
+  :root {
+    --r-card-min: 140px;
+  }
+  .r-hide-medium {
+    display: none !important;
+  }
+  .r-only-medium {
+    display: revert;
+  }
+  .r-stack-compact {
+    flex-direction: column !important;
+  }
+}
+
+/* ── wide：> 1024px ───────────────────────────────────────── */
+@media (min-width: 1025px) {
+  .r-hide-wide {
+    display: none !important;
+  }
+}
+
+/** 尊重系统的减少动效偏好 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

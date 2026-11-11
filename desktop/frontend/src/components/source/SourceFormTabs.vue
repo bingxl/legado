@@ -181,7 +181,8 @@ function groupHasMissing(key: string): boolean {
           <el-select
             v-else-if="f.type === 'Array'"
             :model-value="arrayValue(f)"
-            style="width: 200px"
+            class="r-fit"
+            style="--r-fit-w: 200px"
             @update:model-value="(v: number) => setNum(f, v)"
           >
             <el-option
@@ -227,7 +228,7 @@ function groupHasMissing(key: string): boolean {
       <el-input
         v-model="bigText"
         type="textarea"
-        class="mono"
+        class="mono r-full"
         :autosize="{ minRows: 12, maxRows: 24 }"
       />
       <template #footer>
@@ -244,6 +245,8 @@ function groupHasMissing(key: string): boolean {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
 }
 .form-tabs {
   flex: none;
@@ -269,19 +272,22 @@ function groupHasMissing(key: string): boolean {
   flex: none;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  padding-bottom: 8px;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  max-width: 100%;
+  padding-bottom: var(--r-pad-sm);
   border-bottom: 1px solid var(--el-border-color-lighter);
-  margin-bottom: 10px;
+  margin-bottom: var(--r-pad-sm);
 }
 .group-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 12px;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  padding: var(--r-pad-sm) var(--r-pad);
   border: none;
   background: transparent;
-  border-radius: 4px;
+  border-radius: var(--r-radius-sm);
   font-size: 13px;
   color: var(--el-text-color-regular);
   cursor: pointer;
@@ -297,32 +303,47 @@ function groupHasMissing(key: string): boolean {
 .form-body {
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
   overflow-y: auto;
-  padding: 4px 6px 24px 2px;
+  padding: var(--r-pad-sm) var(--r-pad-sm) var(--r-pad) var(--r-pad-sm);
 }
 .field-form {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
 }
 .field-item {
-  margin-bottom: 14px;
+  margin-bottom: var(--r-pad);
+  min-width: 0;
+  max-width: 100%;
 }
 .field-label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  max-width: 100%;
   width: 100%;
 }
 .field-title {
   font-weight: 600;
   font-size: 13px;
+  min-width: 0;
 }
 .field-key {
   font-size: 11px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--el-text-color-placeholder);
   background: var(--el-fill-color-light);
   padding: 0 4px;
-  border-radius: 3px;
+  border-radius: var(--r-radius-sm);
 }
 .field-help {
   display: inline-flex;
@@ -338,6 +359,7 @@ function groupHasMissing(key: string): boolean {
 }
 .field-expand {
   margin-left: auto;
+  min-width: 0;
   cursor: pointer;
   color: var(--el-color-primary);
   font-size: 13px;
@@ -351,10 +373,34 @@ function groupHasMissing(key: string): boolean {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.5;
+  max-width: 100%;
 }
 .big-hint {
-  margin-bottom: 8px;
+  margin-bottom: var(--r-pad-sm);
+  min-width: 0;
+  word-break: break-word;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+@media (max-width: 1024px) {
+  .group-bar {
+    gap: var(--r-gap-sm);
+  }
+  .group-btn {
+    padding: var(--r-pad-sm);
+  }
+  .field-item {
+    margin-bottom: var(--r-pad-sm);
+  }
+}
+
+@media (max-width: 640px) {
+  .form-body {
+    padding: var(--r-pad-sm);
+  }
+  .field-label {
+    flex-wrap: wrap;
+  }
 }
 </style>

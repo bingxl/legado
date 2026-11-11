@@ -4,10 +4,14 @@ import { ElMessage, ElMessageBox } from "element-plus";
 
 import { sourceApi } from "@/api/source";
 import { usePlatformStore } from "@/stores/platform";
+import { useSourcesStore } from "@/stores/sources";
+import { useBreakpoint } from "@/utils/breakpoint";
 import type { SubscriptionView } from "@/types";
 
 const platform = usePlatformStore();
-const isNarrow = computed(() => platform.isMobile);
+const sourceStore = useSourcesStore();
+const { isCompact } = useBreakpoint();
+const isNarrow = computed(() => platform.isMobile || isCompact.value);
 
 const subs = ref<SubscriptionView[]>([]);
 const loading = ref(false);
@@ -57,6 +61,21 @@ async function load() {
   }
 }
 
+/**
+ * 刷新订阅会批量新增/更新书源。
+ *
+ * 书源页被 keep-alive 缓存且 ensureLoaded 只拉一次，不主动重拉 store 的话
+ * 「同步完了回书源页还是旧列表」；重拉同时递增 revision，发现页与搜索页的
+ * 书源下拉也跟着更新。
+ */
+async function refreshSources() {
+  try {
+    await sourceStore.refresh();
+  } catch {
+    // 刷新失败不该推翻「同步完成」的结论，书源页还有手动刷新兜底。
+  }
+}
+
 async function remove(s: SubscriptionView) {
   try {
     await ElMessageBox.confirm(
@@ -82,11 +101,13 @@ async function syncOne(s: SubscriptionView) {
   syncing.value = true;
   try {
     const res = await sourceApi.syncSubscription(s.id);
-    if (!res) return;
-    ElMessage.success(
-      `同步完成：新增 ${res.imported}，更新 ${res.updated}，失败 ${(res.failures ?? []).length}`,
-    );
+    if (res) {
+      ElMessage.success(
+        `同步完成：新增 ${res.imported}，更新 ${res.updated}，失败 ${(res.failures ?? []).length}`,
+      );
+    }
     await load();
+    await refreshSources();
   } catch (e) {
     ElMessage.error((e as Error).message);
   } finally {
@@ -122,6 +143,7 @@ async function syncAll() {
       ElMessage.success("全部订阅已刷新");
     }
     await load();
+    await refreshSources();
   } catch (e) {
     ElMessage.error((e as Error).message);
   } finally {
@@ -205,33 +227,39 @@ onMounted(load);
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 0 0 12px;
+  min-width: 0;
+  padding: 0 0 var(--r-pad-sm);
 }
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  padding: var(--r-pad-sm) var(--r-pad);
+  min-width: 0;
 }
 .spacer {
   flex: 1;
+  min-width: 0;
 }
 .list {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
-  padding: 0 16px;
+  padding: 0 var(--r-pad);
 }
 .sub-card {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--r-gap);
   flex-wrap: wrap;
-  padding: 12px 14px;
+  padding: var(--r-pad-sm) var(--r-pad);
   margin-bottom: 8px;
+  min-width: 0;
   background: #fff;
   border: 1px solid #e5e7eb;
-  border-radius: 10px;
+  border-radius: var(--r-radius);
 }
 .sub-main {
   min-width: 0;
@@ -258,15 +286,17 @@ onMounted(load);
 .sub-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
   flex: none;
+  min-width: 0;
 }
 
 @media (max-width: 640px) {
   .toolbar,
   .list {
-    padding-left: 12px;
-    padding-right: 12px;
+    padding-left: var(--r-pad);
+    padding-right: var(--r-pad);
   }
   .sub-actions {
     width: 100%;

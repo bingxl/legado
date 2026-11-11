@@ -16,11 +16,13 @@
  *  1. 列表限制最大宽度并居中，否则宽屏下书源条会拉成整屏长条。
  *  2. 原生靠长按弹菜单，这里把分组筛选放到标题栏右侧。
  */
-import { computed, nextTick, ref } from "vue";
-import { useRouter } from "vue-router";
+import { computed, nextTick, onActivated, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 
 import { sourceApi } from "@/api/source";
+import { useSourcesStore } from "@/stores/sources";
+import { smartBack } from "@/utils/nav";
 import { coverURL } from "@/utils/media";
 import type { ExploreKindView, ExploreSourceBrief, SearchResultView } from "@/types";
 
@@ -39,6 +41,8 @@ interface ActiveKind {
 }
 
 const router = useRouter();
+const route = useRoute();
+const sourceStore = useSourcesStore();
 
 const sources = ref<ExploreSourceBrief[]>([]);
 const booting = ref(true);
@@ -101,17 +105,43 @@ function kindsOf(id: number): ExploreKindView[] {
   return kindsState.value[id]?.list ?? [];
 }
 
+/**
+ * 并发重拉时只认最后一次的结果：书源页批量操作会连着改几次 store，
+ * 旧请求后到会把列表打回中间状态。
+ */
+let loadSeq = 0;
+
+/** 内容没变就不动展开态 / 分类缓存 / 滚动位置，保住 keep-alive 的体验。 */
+function sameSources(a: ExploreSourceBrief[], b: ExploreSourceBrief[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every(
+    (s, i) =>
+      s.id === b[i].id &&
+      s.name === b[i].name &&
+      (s.group ?? "") === (b[i].group ?? ""),
+  );
+}
+
 async function loadSources() {
+  const seq = ++loadSeq;
   booting.value = true;
   try {
-    sources.value = (await sourceApi.listExploreSources()) ?? [];
+    const list = (await sourceApi.listExploreSources()) ?? [];
+    if (seq !== loadSeq) return; // 已有更新的重拉，丢弃这次结果
+    if (sameSources(sources.value, list)) return;
+    sources.value = list;
     // 重新拉列表通常是因为改了书源规则，缓存的分类可能已过期。
     kindsState.value = {};
     expanded.value = null;
+    // 选中的分组若已被改名/删掉，清掉筛选，否则列表会一直空着。
+    if (group.value && !list.some((s) => (s.group ?? "") === group.value)) {
+      group.value = "";
+    }
   } catch (e) {
+    if (seq !== loadSeq) return;
     ElMessage.error((e as Error).message);
   } finally {
-    booting.value = false;
+    if (seq === loadSeq) booting.value = false;
   }
 }
 
@@ -124,6 +154,31 @@ async function reload() {
     await toggle(id);
   }
 }
+
+/**
+ * 书源变更后同步发现页。
+ *
+ * 这个组件在 App.vue 里被 keep-alive 缓存，setup 只在首次挂载跑一次；
+ * 书源页的增删改只就地更新 sources store，以前没有任何通知能到这里，
+ * 于是「书源页加了源、发现页要整页刷新才看得见」。两条触发路径：
+ *  - revision：所有走 store 的变更立刻重拉，用户还在别的页面时数据也是新的；
+ *  - onActivated：切回发现页再兜一次，覆盖不经过前端 store 的写入
+ *    （订阅同步、外部直接调后端 API 等）。
+ * 两次重拉撞在一起时 loadSeq 会丢弃过期响应；sameSources 保证内容没变
+ * 时不会收起用户展开的分类。
+ */
+watch(
+  () => sourceStore.revision,
+  () => {
+    void loadSources();
+  },
+);
+// keep-alive 组件首次挂载时 onActivated 也会跑一次，与下面的顶层加载并发；
+// loadSeq 丢弃过期响应，sameSources 保证内容没变时不重置展开状态。
+// 顶层加载单独保留：即便将来把本页移出 keep-alive，首屏也照样有数据。
+onActivated(() => {
+  void loadSources();
+});
 
 loadSources();
 
@@ -165,6 +220,21 @@ async function toggle(id: number) {
   await loadKinds(id);
 }
 
+/**
+ * 分类书单在 URL 上的深度标记（sid=书源 id，k=该源分类列表里的下标）。
+ *
+ * 书单是「页面内的二级页」，但必须让 vue-router 也记一条历史：安卓返回键
+ * 是 WebView.goBack()、桌面 Alt+← 同样是 popstate，它们只认路由记账，
+ * 不认组件里的 active。以前 openKind 只改组件状态，按返回就直接退到上一个
+ * tab；现在这条 query 记录就是书单页的历史入口。
+ * 书单数据仍留在组件里（keep-alive 保留 books / 滚动位置 / 展开的分类），
+ * query 只用来驱动收起，不承载数据。
+ */
+const kindMark = computed(() => {
+  const k = route.query.k;
+  return typeof k === "string" && k !== "" ? k : null;
+});
+
 async function openKind(sourceId: number, kind: ExploreKindView) {
   const src = sources.value.find((s) => s.id === sourceId);
   if (!src) return;
@@ -182,17 +252,58 @@ async function openKind(sourceId: number, kind: ExploreKindView) {
   noMore.value = false;
   loadedOnce.value = false;
   autoFills.value = 0;
+  // 先压历史再取书：用户点完立刻按返回，那条记录也必须已经存在。
+  // 用下标而不是分类 url，避免把含 {{page}}、& 的规则地址塞进 URL。
+  const idx = kindsOf(sourceId).findIndex(
+    (x) => x.title === kind.title && x.url === kind.url,
+  );
+  if (idx >= 0) {
+    void router.push({
+      name: "explore",
+      query: { sid: String(sourceId), k: String(idx) },
+    });
+  }
   await fetchPage(1, false);
   await nextTick();
   bookScroll.value?.scrollTo({ top: 0 });
 }
 
-async function backToSources() {
+/** 收起书单：只动组件状态，展开的分类与列表滚动位置都留着。 */
+async function clearActive() {
   active.value = null;
   books.value = [];
   await nextTick();
   if (listScroll.value) listScroll.value.scrollTop = savedScroll.value;
 }
+
+/** 页面内「返回发现」按钮：和系统返回键走同一条路，避免两条逻辑分叉。 */
+function backToSources() {
+  if (!kindMark.value) {
+    // 没压过历史（分类下标意外缺失时不 push），退回组件内收起即可。
+    void clearActive();
+    return;
+  }
+  smartBack(router, "/explore", { mustMatch: "/explore" });
+}
+
+/**
+ * 系统返回键 / Alt+← / 从别的 tab 回到无标记的 /explore 时，vue-router
+ * 更新 query.k → 这里收起书单；从书籍详情返回时 query.k 不变，书单原样保留。
+ * 前进键或带 query 的深链会出现「URL 有标记、组件状态已丢」，此时校正回
+ * 一级列表，不假装还在看某个分类（也顺手清掉跳走再回来的残留书单）。
+ */
+watch(kindMark, (mark) => {
+  // 本页在 keep-alive 里，切到 /book/:id 等别的路由时组件并不会卸载，
+  // 全局 route.query 的变化照样会触发这个 watch。那不是「从书单返回」，
+  // 若在这里清状态 / 校正 URL，从详情页返回时书单就没了、URL 还会被
+  // replace 成无标记的 /explore。只在当前路由确实属于发现页时处理。
+  if (route.name !== "explore") return;
+  if (!mark) {
+    if (active.value) void clearActive();
+  } else if (!active.value) {
+    void router.replace({ name: "explore" });
+  }
+});
 
 async function fetchPage(target: number, append: boolean) {
   const cur = active.value;
@@ -271,8 +382,9 @@ async function addToShelf(r: SearchResultView) {
 /**
  * 点书籍行 → 详情页。
  *
- * 详情页要按 book id 取目录与进度，所以先把这本书入库（后端按 URL 去重，
- * 重复点击不会产生多条记录），再带着 id 跳转。
+ * 详情页要按 book id 取目录与进度，所以先把这本书入库；但用 previewBook
+ * 而不是 addToShelf——只是点开看看，不该悄悄进书架（后端标记为试读，
+ * 书架列表不展示）。用户点「加入书架」或在阅读器退出时确认才转正。
  */
 const opening = ref("");
 async function openBook(r: SearchResultView) {
@@ -280,13 +392,12 @@ async function openBook(r: SearchResultView) {
   if (!cur || opening.value) return;
   opening.value = r.bookUrl;
   try {
-    const brief = await sourceApi.addToShelf(
+    const brief = await sourceApi.previewBook(
       cur.sourceId,
       r.bookUrl,
       r.name,
       r.author,
       r.variable ?? "",
-      0,
     );
     if (!brief) return;
     router.push({ name: "book", params: { id: String(brief.id) } });
@@ -492,23 +603,29 @@ async function openBook(r: SearchResultView) {
 .bar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
   flex: none;
+  min-width: 0;
   height: 56px;
-  padding: 0 16px;
+  padding: 0 var(--r-pad);
   border-bottom: 1px solid #eef0f3;
 }
 .bar-title {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   margin: 0;
   font-size: 17px;
   font-weight: 600;
   color: rgba(0, 0, 0, 0.87);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .bar-sub {
-  flex: none;
-  max-width: 220px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(100%, 220px);
   font-size: 12px;
   color: rgba(0, 0, 0, 0.45);
   white-space: nowrap;
@@ -523,6 +640,8 @@ async function openBook(r: SearchResultView) {
   align-items: center;
   gap: 6px;
   flex: 0 1 320px;
+  min-width: 0;
+  max-width: 100%;
   height: 30px;
   margin-left: 6px;
   padding: 0 8px;
@@ -573,7 +692,9 @@ async function openBook(r: SearchResultView) {
 }
 .group-pick {
   flex: none;
-  width: 120px;
+  width: min(100%, 120px);
+  max-width: 100%;
+  min-width: 0;
 }
 .icon-btn {
   display: flex;
@@ -638,9 +759,9 @@ async function openBook(r: SearchResultView) {
 
 /* ---- 书源列表：整行左右 16dp、上 12dp，行与行之间 12dp ---- */
 .list {
-  max-width: 960px;
+  max-width: min(100%, 960px);
   margin: 0 auto;
-  padding: 12px 16px 16px;
+  padding: var(--r-pad-sm) var(--r-pad) var(--r-pad);
 }
 .src + .src {
   margin-top: 12px;
@@ -651,6 +772,7 @@ async function openBook(r: SearchResultView) {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   min-height: 32px;
   padding: 6px 10px;
   border-radius: 6px;
@@ -692,9 +814,10 @@ async function openBook(r: SearchResultView) {
 .src-kinds {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--r-gap-sm);
   margin: 8px 8px 0;
   padding: 3px;
+  min-width: 0;
 }
 /* 胶囊：圆角 16dp、4dp/12dp 内边距、14sp（item_fillet_text） */
 .kind {
@@ -706,7 +829,8 @@ async function openBook(r: SearchResultView) {
   color: rgba(0, 0, 0, 0.87);
   font-size: 14px;
   line-height: 20px;
-  max-width: 260px;
+  min-width: 0;
+  max-width: min(100%, 260px);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -745,14 +869,15 @@ async function openBook(r: SearchResultView) {
 
 /* ---- 书单：每行 80x110 封面 + 文字，行间一条细线 ---- */
 .books {
-  max-width: 960px;
+  max-width: min(100%, 960px);
   margin: 0 auto;
-  padding: 0 8px 16px;
+  padding: 0 var(--r-pad-sm) var(--r-pad);
 }
 .book {
   display: flex;
-  gap: 8px;
+  gap: var(--r-gap-sm);
   padding: 8px 0;
+  min-width: 0;
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   cursor: pointer;
 }
@@ -770,6 +895,7 @@ async function openBook(r: SearchResultView) {
 .cover {
   flex: none;
   width: 80px;
+  max-width: 100%;
   height: 110px;
   border-radius: 2px;
   overflow: hidden;
@@ -862,7 +988,8 @@ async function openBook(r: SearchResultView) {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
   padding: 16px 0 4px;
   font-size: 12px;
   color: rgba(0, 0, 0, 0.42);
@@ -895,6 +1022,23 @@ async function openBook(r: SearchResultView) {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* 手机：标题栏换行后解除固定高度，搜索框占满整行；
+   触屏没有 hover，让「加入书架」按钮常显 */
+@media (max-width: 640px) {
+  .bar {
+    height: auto;
+    min-height: 56px;
+    padding: var(--r-pad-sm) var(--r-pad);
+  }
+  .bar-search {
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
+  .shelf-btn {
+    opacity: 1;
   }
 }
 </style>

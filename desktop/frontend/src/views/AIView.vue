@@ -24,7 +24,9 @@ const bookId = computed(() => Number(route.query.book || 0));
 const book = computed(() => shelf.books.find((b) => b.id === bookId.value) ?? null);
 
 function choose(id: number) {
-  router.replace({ path: "/ai", query: { book: String(id) } });
+  // 必须 push：选书是页面内的一层状态（picker → 对话），用 replace 会把
+  // picker 那条历史抹掉，安卓返回键/Alt+← 就直接退出 AI 页而不是回到选书。
+  router.push({ path: "/ai", query: { book: String(id) } });
 }
 
 /** 点引用：跳到阅读器对应章节，并带上高亮片段。 */
@@ -54,7 +56,7 @@ onMounted(async () => {
   <div class="ai-view">
     <header class="head">
       <h1 class="title">AI 问答</h1>
-      <span v-if="book" class="sub">{{ book.name }}</span>
+      <span v-if="book" class="sub r-ellipsis">{{ book.name }}</span>
       <div class="fill" />
       <el-button
         v-if="book"
@@ -99,15 +101,18 @@ onMounted(async () => {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: 16px 20px 20px;
+  min-width: 0;
+  padding: var(--r-pad);
   background: #fff;
 }
 .head {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
   flex: none;
-  margin-bottom: 12px;
+  margin-bottom: var(--r-gap);
+  min-width: 0;
 }
 .title {
   font-size: 18px;
@@ -118,15 +123,19 @@ onMounted(async () => {
 .sub {
   font-size: 13px;
   color: rgba(0, 0, 0, 0.45);
+  min-width: 0;
 }
 .fill {
   flex: 1;
+  min-width: 0;
 }
 .picker {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  max-width: 420px;
+  gap: var(--r-gap-sm);
+  width: min(100%, 420px);
+  max-width: 100%;
+  min-width: 0;
 }
 .select {
   width: 100%;
@@ -140,5 +149,6 @@ onMounted(async () => {
 .panel {
   flex: 1;
   min-height: 0;
+  min-width: 0;
 }
 </style>

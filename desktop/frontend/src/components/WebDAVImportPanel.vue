@@ -10,13 +10,14 @@
  *    所以挂载时先读一次 bookImportStatus。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 import { webdavApi } from "@/api/webdav";
 import { onWebDAVImportProgress } from "@/api/events";
 import type { WebDAVImportProgressPayload } from "@/api/events";
 import { formatBytes, formatDateTime } from "@/utils/format";
+import { smartBack } from "@/utils/nav";
 import type {
   ImportFailure,
   RemoteBookView,
@@ -26,8 +27,19 @@ import type {
 
 const props = defineProps<{ configured: boolean }>();
 const router = useRouter();
+const route = useRoute();
 
-const curPath = ref("");
+/**
+ * 当前目录同时记在 URL 的 `p` 上：每进一层都压一条 vue-router 历史，
+ * 安卓返回键（WebView.goBack）/ Alt+← 才能逐级回到上级目录，而不是直接
+ * 跳出 /webdav 到上一个 tab。组件状态仍以 curPath 为准，query 只负责记账。
+ */
+const pathQuery = computed(() => {
+  const p = route.query.p;
+  return typeof p === "string" ? p : "";
+});
+
+const curPath = ref(pathQuery.value);
 const entries = ref<WebDAVEntryView[]>([]);
 const loading = ref(false);
 const selection = ref<WebDAVEntryView[]>([]);
@@ -116,9 +128,18 @@ async function load(p = curPath.value) {
   }
 }
 
+/** 生成带/不带目录深度标记的 query（根目录直接去掉 p）。 */
+function queryFor(p: string) {
+  const q = { ...route.query };
+  if (p) q.p = p;
+  else delete q.p;
+  return q;
+}
+
+/** 进目录 / 点面包屑：压一条历史，由 watch(pathQuery) 统一加载。 */
 function go(p: string) {
-  curPath.value = p;
-  void load(p);
+  if (p === curPath.value) return;
+  void router.push({ path: route.path, query: queryFor(p) });
 }
 
 function enter(row: WebDAVEntryView) {
@@ -127,9 +148,24 @@ function enter(row: WebDAVEntryView) {
 }
 
 function goUp() {
+  if (atRoot.value) return;
   const i = curPath.value.lastIndexOf("/");
-  go(i < 0 ? "" : curPath.value.slice(0, i));
+  const parent = i < 0 ? "" : curPath.value.slice(0, i);
+  if (!route.query.p) {
+    // 没压过历史（深链 / 外部写入状态），退化为一次普通跳转。
+    go(parent);
+    return;
+  }
+  // 消费掉刚才那层，而不是再 push 一条「上级」——否则按返回会又回到子目录。
+  smartBack(router, "/webdav", { mustMatch: "/webdav" });
 }
+
+/** 返回键 / 面包屑 / 前进键都会改 query.p，这里把它同步回目录与列表。 */
+watch(pathQuery, (p) => {
+  if (p === curPath.value) return;
+  curPath.value = p;
+  void load(p);
+});
 
 function onSelectionChange(rows: WebDAVEntryView[]) {
   selection.value = rows;
@@ -300,6 +336,10 @@ watch(
   async (ready) => {
     if (!ready) return;
     curPath.value = "";
+    // 配置刚补上时回根目录，URL 上残留的目录标记也要一起清掉。
+    if (route.query.p) {
+      void router.replace({ path: route.path, query: queryFor("") });
+    }
     await load("");
     await restoreStatus();
   },
@@ -325,7 +365,7 @@ onBeforeUnmount(() => {
     <template v-else>
       <div class="bar">
         <el-button size="small" :disabled="atRoot" @click="goUp">↑ 上级</el-button>
-        <el-breadcrumb separator="/" class="crumbs">
+        <el-breadcrumb separator="/" class="crumbs r-scroll-x">
           <el-breadcrumb-item v-for="c in crumbs" :key="c.path">
             <button class="crumb" @click="go(c.path)">{{ c.name }}</button>
           </el-breadcrumb-item>
@@ -347,7 +387,7 @@ onBeforeUnmount(() => {
       <el-table
         :data="entries"
         size="small"
-        class="files"
+        class="files r-scroll-x"
         row-key="path"
         v-loading="loading"
         @row-dblclick="enter"
@@ -413,7 +453,7 @@ onBeforeUnmount(() => {
     </template>
 
     <el-dialog v-model="showFailures" title="导入失败的文件" width="620">
-      <el-table :data="failures" size="small">
+      <el-table :data="failures" size="small" class="r-scroll-x">
         <el-table-column prop="path" label="远端路径" min-width="240" />
         <el-table-column prop="reason" label="原因" min-width="240" />
         <template #empty><el-empty description="没有失败项" :image-size="60" /></template>
@@ -424,23 +464,31 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .import-panel {
-  padding: 8px 0;
+  padding: var(--r-pad-sm) 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--r-gap);
+  min-width: 0;
+  max-width: 100%;
 }
 .bar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  max-width: 100%;
 }
 .crumbs {
   display: flex;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
 }
 .crumb {
   font: inherit;
   font-size: 13px;
+  min-width: 0;
   color: #0969da;
   background: none;
   border: none;
@@ -452,19 +500,26 @@ onBeforeUnmount(() => {
 }
 .spacer {
   flex: 1;
+  min-width: 0;
 }
 .hint {
   font-size: 12px;
+  min-width: 0;
   color: #57606a;
 }
 .files {
   flex: 1;
-  min-height: 240px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: min(240px, 40vh);
 }
 .name {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   cursor: default;
 }
 .name.dir {
@@ -483,17 +538,21 @@ onBeforeUnmount(() => {
 }
 .job {
   border: 1px solid #d8dee4;
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: var(--r-radius);
+  padding: var(--r-pad);
+  min-width: 0;
+  max-width: 100%;
   background: #fafbfc;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--r-gap-sm);
 }
 .job-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
   font-size: 13px;
 }
 .state {
@@ -513,15 +572,30 @@ onBeforeUnmount(() => {
 }
 .count {
   color: #57606a;
+  min-width: 0;
 }
 .job-line {
   display: flex;
-  gap: 10px;
+  gap: var(--r-gap-sm);
+  min-width: 0;
   font-size: 12px;
   color: #57606a;
   flex-wrap: wrap;
 }
 .current {
   color: #1f2328;
+  min-width: 0;
+  word-break: break-all;
+}
+.msg {
+  min-width: 0;
+  word-break: break-word;
+}
+
+@media (max-width: 640px) {
+  .crumbs {
+    flex: 1 1 100%;
+    max-width: 100%;
+  }
 }
 </style>

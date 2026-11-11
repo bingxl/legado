@@ -13,10 +13,17 @@ import (
 
 	legadomodel "github.com/legado/legado-go/pkg/model"
 	"github.com/legado/legado-go/pkg/source"
+	"github.com/legado/legado-go/pkg/store"
 	"github.com/legado/legado-go/pkg/webbook"
 
 	"github.com/legado/desktop/internal/domain"
 	"github.com/legado/desktop/internal/port"
+)
+
+// 编译期断言：Fetcher 同时提供抓取与会话清理能力。
+var (
+	_ port.SourceFetcher = (*Fetcher)(nil)
+	_ port.SourceSession = (*Fetcher)(nil)
 )
 
 // Fetcher 实现 port.SourceFetcher，内部委托 legado-go 的 webbook 包。
@@ -175,7 +182,7 @@ func (f *Fetcher) Validate(ctx context.Context, src *domain.BookSource, items po
 
 	// 静态校验不通过时无需再联网，直接返回。
 	if items.NeedNetwork() && !hasBlockingIssue(issues) {
-		online := source.ValidateOnline(engineSrc, "", source.CheckItems{
+		online := source.ValidateOnline(engineSrc, items.Keyword, source.CheckItems{
 			Search:  items.Search,
 			Info:    items.Info,
 			Toc:     items.TOC,
@@ -184,6 +191,19 @@ func (f *Fetcher) Validate(ctx context.Context, src *domain.BookSource, items po
 		issues = append(issues, fromEngineIssues(online.Issues)...)
 	}
 	return issues, nil
+}
+
+// ClearCookie 清除书源站点保存的 Cookie。
+//
+// 引擎的 CookieStore 以「主域名」为键做归并，所以传书源地址即可——
+// 清完之后该书源下所有子域名的登录态一起失效，这正是原生「清除 Cookie」
+// 菜单的语义（有些源的登录态脏了，重登前必须先清）。
+func (f *Fetcher) ClearCookie(sourceURL string) error {
+	if strings.TrimSpace(sourceURL) == "" {
+		return fmt.Errorf("%w: 书源地址为空", domain.ErrInvalidArgument)
+	}
+	store.Default().RemoveCookie(sourceURL)
+	return nil
 }
 
 // toEngineSource 把领域书源还原为引擎模型。
@@ -206,6 +226,11 @@ func toEngineSource(src *domain.BookSource) (*legadomodel.BookSource, error) {
 	}
 	if out.BookSourceName == "" {
 		out.BookSourceName = src.Name
+	}
+	// 源变量来自 source_variables 表（SourceService 已填充）。原生在 JS 里
+	// 通过 source.getVariable() 读取它；不注入的话「设置源变量」形同虚设。
+	if src.Variable != "" {
+		out.SetVariable(src.Variable)
 	}
 	return out, nil
 }

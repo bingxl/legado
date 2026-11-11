@@ -8,12 +8,15 @@
 package bootstrap
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/legado/desktop/internal/adapter/aihttp"
 	"github.com/legado/desktop/internal/adapter/bookparser"
+	"github.com/legado/desktop/internal/adapter/dictbuild"
+	"github.com/legado/desktop/internal/adapter/dictsqlite"
 	"github.com/legado/desktop/internal/adapter/exporter"
 	"github.com/legado/desktop/internal/adapter/filesystem"
 	"github.com/legado/desktop/internal/adapter/imagefetch"
@@ -55,6 +58,8 @@ type App struct {
 	Content *app.ContentProvider
 	// AI 提供书籍总结与基于书籍内容的问答。
 	AI *app.AIService
+	// Dict 提供阅读器取词（英汉互译的词典部分）。
+	Dict *app.DictService
 }
 
 // New 在 root 下装配全部业务依赖。
@@ -85,6 +90,7 @@ func New(root string, events port.EventBus) (*App, error) {
 	progress := sqlite.NewProgressRepo(db)
 	sources := sqlite.NewBookSourceRepo(db)
 	subs := sqlite.NewSubscriptionRepo(db)
+	sourceVars := sqlite.NewSourceVariableRepo(db)
 	rules := sqlite.NewReplaceRuleRepo(db)
 	settings := sqlite.NewSettingsStore(db)
 	chapterCache := sqlite.NewChapterCacheRepo(db)
@@ -129,6 +135,10 @@ func New(root string, events port.EventBus) (*App, error) {
 		Chapters: chapters,
 		Fetcher:  fetcher,
 		Events:   events,
+		Vars:     sourceVars,
+		// db 同时实现 port.UnitOfWork：批量启停/分组/排序要在一个事务里完成。
+		UoW:     db,
+		Session: fetcher,
 	})
 	library := app.NewLibraryService(app.LibraryDeps{
 		Books:    books,
@@ -172,6 +182,29 @@ func New(root string, events port.EventBus) (*App, error) {
 		Chats:     sqlite.NewAIChatRepo(db),
 	})
 
+	// 词典：核心词库随二进制内嵌，首次查词时解压到 <root>/dict/。
+	// OpenRepo 用函数注入，保持 internal/app 不依赖具体适配器。
+	dict := app.NewDictService(app.DictDeps{
+		Root:     root,
+		Settings: settings,
+		Events:   events,
+		OpenRepo: func(path string) (port.DictionaryRepository, error) {
+			return dictsqlite.OpenReadOnly(path)
+		},
+		// 转换器同样注入：下载的上游源文件在本地转成词库，
+		// 与离线构建工具共用一份实现（internal/adapter/dictbuild）。
+		Build: func(ctx context.Context, kind, srcPath, outPath, tier string, progress func(done, total int64)) (int, error) {
+			switch kind {
+			case "ecdict":
+				return dictbuild.ECDICT(ctx, srcPath, outPath, tier, progress)
+			case "cedict":
+				return dictbuild.CEDICT(ctx, srcPath, outPath, progress)
+			default:
+				return 0, fmt.Errorf("未知的词库类型 %q", kind)
+			}
+		},
+	})
+
 	return &App{
 		Root:        root,
 		DB:          db,
@@ -188,6 +221,7 @@ func New(root string, events port.EventBus) (*App, error) {
 		SourceDebug: sourceDebug,
 		SourceLogin: sourceLogin,
 		AI:          ai,
+		Dict:        dict,
 	}, nil
 }
 
@@ -203,6 +237,11 @@ func (a *App) Close() error {
 	// WebDAV 导入是后台下载，退出时也要掐掉，否则进程会被挂住。
 	if a.WebDAV != nil {
 		a.WebDAV.StopImport()
+	}
+	// 词库是只读连接，关掉即可；不关会在 Windows 上让词库文件保持被占用，
+	// 用户升级换词库时删不掉旧文件。
+	if a.Dict != nil {
+		a.Dict.Close() //nolint:errcheck
 	}
 	if a.DB == nil {
 		return nil

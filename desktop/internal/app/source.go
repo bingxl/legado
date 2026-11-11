@@ -22,6 +22,9 @@ type SourceService struct {
 	chapters port.ChapterRepository
 	fetcher  port.SourceFetcher
 	events   port.EventBus
+	vars     port.SourceVariableRepository
+	uow      port.UnitOfWork
+	session  port.SourceSession
 
 	kindsMu    sync.Mutex
 	kindsCache map[int64]exploreKindsEntry
@@ -51,6 +54,12 @@ type SourceDeps struct {
 	Chapters port.ChapterRepository
 	Fetcher  port.SourceFetcher
 	Events   port.EventBus
+	// Vars 是书源自定义变量存储（「设置源变量」）。
+	Vars port.SourceVariableRepository
+	// UoW 让批量操作（批量启停/分组/排序）在单个事务内完成。
+	UoW port.UnitOfWork
+	// Session 用于「清除 Cookie」这类会话操作。
+	Session port.SourceSession
 }
 
 // NewSourceService 构造书源服务。
@@ -62,6 +71,9 @@ func NewSourceService(d SourceDeps) *SourceService {
 		chapters: d.Chapters,
 		fetcher:  d.Fetcher,
 		events:   d.Events,
+		vars:     d.Vars,
+		uow:      d.UoW,
+		session:  d.Session,
 	}
 }
 
@@ -156,6 +168,10 @@ func (s *SourceService) Import(ctx context.Context, data []byte, overwrite bool)
 
 	// 注意：导入是本地写库，不发「书源校验进度」事件——
 	// 该事件由前端当作「校验中」渲染，误用会让导入时的进度条显示成校验态。
+	//
+	// 新建的书源按顺序追加到末尾：手动排序（原生默认的排序方式）靠 Order
+	// 决定先后，全给 0 会让新导入的源在排序上完全并列，拖拽调整也就无从下手。
+	baseOrder := s.nextOrder(ctx)
 	for _, raw := range items {
 		var probe map[string]any
 		if err := json.Unmarshal(raw, &probe); err != nil {
@@ -197,7 +213,7 @@ func (s *SourceService) Import(ctx context.Context, data []byte, overwrite bool)
 				Raw:   string(raw),
 				// 导入的书源默认启用，避免用户导入后还要逐个开启。
 				Enabled:      true,
-				Order:        0,
+				Order:        baseOrder + result.Imported,
 				LastUpdateAt: time.Now(),
 			}
 			if err := s.sources.Create(ctx, src); err != nil {
@@ -298,24 +314,67 @@ func (s *SourceService) Validate(ctx context.Context, ids []int64, items port.Ch
 
 	results := make([]dto.SourceCheckResult, 0, len(targets))
 	for i, src := range targets {
-		s.emitCheckProgress(ctx, len(targets), i+1, src.Name)
-
 		issues, err := s.fetcher.Validate(ctx, src, items)
 		if err != nil {
 			// 单个书源校验失败不中断整体，记为一条 error 级问题。
 			issues = []port.ValidationIssue{{Level: port.IssueLevelError, Message: err.Error()}}
 		}
-		results = append(results, dto.SourceCheckResult{
+		res := dto.SourceCheckResult{
 			SourceID:   src.ID,
 			SourceName: src.Name,
 			OK:         !hasErrorIssue(issues),
 			Issues:     dto.NewValidationIssues(issues),
+		}
+		results = append(results, res)
+
+		// 逐条推送：列表页每行显示自己的「成功/失败」与消息（原生就是这个行为）。
+		// 同时仍带 Total/Done，进度条与行内消息共用一次事件。
+		s.emitCheckProgress(ctx, dto.SourceCheckProgress{
+			Total:    len(targets),
+			Done:     i + 1,
+			Current:  src.Name,
+			SourceID: src.ID,
+			OK:       res.OK,
+			Message:  checkMessage(res),
 		})
 
 		src.LastUpdateAt = time.Now()
 		_ = s.sources.Update(ctx, src)
 	}
 	return results, nil
+}
+
+// checkMessage 把校验结论压成一行文字，供列表行内展示。
+//
+// 原生行内只显示「成功/失败」这种短句；这里优先给出第一条 error 的具体原因，
+// 因为「失败」两个字对排查毫无帮助，而用户点开详情前就该知道是搜索还是正文出问题。
+func checkMessage(r dto.SourceCheckResult) string {
+	for _, i := range r.Issues {
+		if i.Level == string(port.IssueLevelError) {
+			return "失败：" + i.Message
+		}
+	}
+	for _, i := range r.Issues {
+		if i.Level == string(port.IssueLevelWarning) {
+			return "成功（有警告）"
+		}
+	}
+	return "成功"
+}
+
+// nextOrder 返回一个可用的追加排序号（当前最大 Order + 1）。
+func (s *SourceService) nextOrder(ctx context.Context) int {
+	list, err := s.sources.List(ctx, "")
+	if err != nil || len(list) == 0 {
+		return 0
+	}
+	maxOrder := list[0].Order
+	for _, src := range list {
+		if src.Order > maxOrder {
+			maxOrder = src.Order
+		}
+	}
+	return maxOrder + 1
 }
 
 // ListExploreSources 列出开启「发现」的书源，只带名字与分组。
@@ -349,7 +408,7 @@ func (s *SourceService) ExploreKinds(ctx context.Context, sourceID int64) ([]dto
 	if s.fetcher == nil {
 		return nil, fmt.Errorf("%w: 未配置书源抓取器", domain.ErrNotConfigured)
 	}
-	src, err := s.sources.Get(ctx, sourceID)
+	src, err := s.loadSource(ctx, sourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -397,7 +456,7 @@ func (s *SourceService) Explore(ctx context.Context, sourceID int64, url string,
 	if s.fetcher == nil {
 		return nil, fmt.Errorf("%w: 未配置书源抓取器", domain.ErrNotConfigured)
 	}
-	src, err := s.sources.Get(ctx, sourceID)
+	src, err := s.loadSource(ctx, sourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -419,7 +478,7 @@ func (s *SourceService) Search(ctx context.Context, sourceID int64, keyword stri
 	if s.fetcher == nil {
 		return nil, fmt.Errorf("%w: 未配置书源抓取器", domain.ErrNotConfigured)
 	}
-	src, err := s.sources.Get(ctx, sourceID)
+	src, err := s.loadSource(ctx, sourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -467,32 +526,59 @@ func (s *SourceService) SearchAll(ctx context.Context, keyword string, page int)
 // variable 同样是列表页的产物：书源用 @put 存下的变量（JSON 对象串），
 // 目录/正文地址里的 @get 依赖它，丢了就会请求到参数为空的地址。
 func (s *SourceService) AddToShelf(ctx context.Context, sourceID int64, bookURL, name, author, variable string, groupID int64) (dto.BookBrief, error) {
+	return s.upsertBook(ctx, sourceID, bookURL, name, author, variable, groupID, true)
+}
+
+// PreviewBook 打开一本书用于查看详情或阅读，但**不加入书架**。
+//
+// 发现/搜索里点开书籍走这里：用户只是想看看简介、试读几章，不该悄悄
+// 在书架里多出一本。试读仍要落库（详情、目录、阅读进度都按 books.id 存），
+// 只是标记为不在书架，等用户明确「加入书架」时再转正（AddToShelf / PutOnShelf）。
+func (s *SourceService) PreviewBook(ctx context.Context, sourceID int64, bookURL, name, author, variable string) (dto.BookBrief, error) {
+	return s.upsertBook(ctx, sourceID, bookURL, name, author, variable, 0, false)
+}
+
+// upsertBook 是 AddToShelf / PreviewBook 的公共实现。
+//
+// inShelf 只影响「新建」时的初始状态；已存在的书不会被降级（从书架移除
+// 是 DeleteBook 的职责，不能被一次详情页访问悄悄改掉），只有试读转正
+// 这一种状态提升会发生。
+func (s *SourceService) upsertBook(ctx context.Context, sourceID int64, bookURL, name, author, variable string, groupID int64, inShelf bool) (dto.BookBrief, error) {
 	if s.fetcher == nil {
 		return dto.BookBrief{}, fmt.Errorf("%w: 未配置书源抓取器", domain.ErrNotConfigured)
 	}
-	src, err := s.sources.Get(ctx, sourceID)
+	src, err := s.loadSource(ctx, sourceID)
 	if err != nil {
 		return dto.BookBrief{}, err
 	}
 
 	// 已存在则直接返回，避免重复抓取。
 	if existing, err := s.books.FindByURL(ctx, src.URL, bookURL); err == nil {
+		if inShelf && existing.Previewing {
+			if err := s.books.SetInShelf(ctx, existing.ID, true); err != nil {
+				return dto.BookBrief{}, err
+			}
+			existing.Previewing = false
+		}
 		return dto.NewBookBrief(existing), nil
 	}
 
 	book := &domain.Book{
-		Name:     strings.TrimSpace(name),
-		Author:   strings.TrimSpace(author),
-		Origin:   src.URL,
-		BookURL:  bookURL,
-		Kind:     domain.BookKindWeb,
-		Variable: variable,
-		GroupID:  groupID,
+		Name:       strings.TrimSpace(name),
+		Author:     strings.TrimSpace(author),
+		Origin:     src.URL,
+		BookURL:    bookURL,
+		Kind:       domain.BookKindWeb,
+		Variable:   variable,
+		GroupID:    groupID,
+		Previewing: !inShelf,
 	}
 	book, chapters, err := s.fetcher.GetBookInfo(ctx, src, book)
 	if err != nil {
 		return dto.BookBrief{}, err
 	}
+	// 抓取器返回的可能是新对象，初始状态以入参为准。
+	book.Previewing = !inShelf
 	if strings.TrimSpace(book.Name) == "" {
 		return dto.BookBrief{}, fmt.Errorf("%w: 该书源详情页没有解析出书名，请在书源规则里检查「书名」", domain.ErrInvalidArgument)
 	}
@@ -509,11 +595,19 @@ func (s *SourceService) AddToShelf(ctx context.Context, sourceID int64, bookURL,
 // pickSources 选出待校验的书源；ids 为空则取全部启用书源。
 func (s *SourceService) pickSources(ctx context.Context, ids []int64) ([]*domain.BookSource, error) {
 	if len(ids) == 0 {
-		return s.sources.ListEnabled(ctx)
+		list, err := s.sources.ListEnabled(ctx)
+		if err != nil {
+			return nil, err
+		}
+		// 校验同样走书源规则，源变量要一起挂上（部分源的搜索地址依赖它）。
+		for _, src := range list {
+			s.attachVariable(ctx, src)
+		}
+		return list, nil
 	}
 	out := make([]*domain.BookSource, 0, len(ids))
 	for _, id := range ids {
-		src, err := s.sources.Get(ctx, id)
+		src, err := s.loadSource(ctx, id)
 		if err != nil {
 			continue
 		}
@@ -525,16 +619,12 @@ func (s *SourceService) pickSources(ctx context.Context, ids []int64) ([]*domain
 	return out, nil
 }
 
-// emitCheckProgress 推送书源校验进度。
-func (s *SourceService) emitCheckProgress(ctx context.Context, total, done int, current string) {
+// emitCheckProgress 推送书源校验进度与单条结论。
+func (s *SourceService) emitCheckProgress(ctx context.Context, p dto.SourceCheckProgress) {
 	if s.events == nil {
 		return
 	}
-	_ = s.events.Emit(ctx, port.EventSourceCheckProgress, dto.SourceCheckProgress{
-		Total:   total,
-		Done:    done,
-		Current: current,
-	})
+	_ = s.events.Emit(ctx, port.EventSourceCheckProgress, p)
 }
 
 // hasErrorIssue 判断是否存在 error 级问题。

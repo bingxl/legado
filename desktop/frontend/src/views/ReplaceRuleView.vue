@@ -6,15 +6,17 @@ import { replaceRuleApi } from "@/api/replacerule";
 import { systemApi } from "@/api/system";
 import { rawFileURL } from "@/api/system";
 import { usePlatformStore } from "@/stores/platform";
+import { useBreakpoint } from "@/utils/breakpoint";
 import type { ReplaceRuleView } from "@/types";
 
 const platform = usePlatformStore();
+const { isCompact } = useBreakpoint();
 /**
  * 窄屏判定：移动端把编辑弹窗做成全屏。
  * 不做的话输入区只剩几行高，规则原文根本没法改——这类页面在手机上
  * 全屏编辑比留白更能用。
  */
-const isNarrow = computed(() => platform.isMobile);
+const isNarrow = computed(() => platform.isMobile || isCompact.value);
 
 const rules = ref<ReplaceRuleView[]>([]);
 const loading = ref(false);
@@ -282,40 +284,46 @@ onMounted(load);
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 0 0 12px;
+  min-width: 0;
+  padding: 0 0 var(--r-pad-sm);
 }
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
   flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  padding: var(--r-pad-sm) var(--r-pad);
+  min-width: 0;
 }
 .search {
-  width: 240px;
+  width: min(100%, 240px);
   max-width: 100%;
+  min-width: 0;
 }
 .spacer {
   flex: 1;
+  min-width: 0;
 }
 /* 卡片列表而非表格：同一套标记在 360px 到 1200px 下都读得顺，
    表格在窄屏只能横向滚动，操作列还会被挤出去。 */
 .list {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
-  padding: 0 16px;
+  padding: 0 var(--r-pad);
 }
 .rule-card {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--r-gap);
   flex-wrap: wrap;
-  padding: 12px 14px;
+  padding: var(--r-pad-sm) var(--r-pad);
   margin-bottom: 8px;
+  min-width: 0;
   background: #fff;
   border: 1px solid #e5e7eb;
-  border-radius: 10px;
+  border-radius: var(--r-radius);
 }
 .rule-main {
   min-width: 0;
@@ -331,7 +339,9 @@ onMounted(load);
   margin-top: 4px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
   font-size: 12px;
   color: #6b7280;
 }
@@ -343,8 +353,10 @@ onMounted(load);
 .rule-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
   flex: none;
+  min-width: 0;
 }
 .raw-error {
   margin-top: 4px;
@@ -356,22 +368,24 @@ onMounted(load);
   font-size: 12px;
   color: #6b7280;
   line-height: 1.6;
+  min-width: 0;
 }
 .raw-hint code {
   background: #f3f4f6;
   padding: 1px 4px;
   border-radius: 3px;
+  word-break: break-all;
 }
 
 @media (max-width: 640px) {
   .toolbar {
-    padding: 10px 12px;
+    padding: var(--r-pad-sm) var(--r-pad);
   }
   .search {
     width: 100%;
   }
   .list {
-    padding: 0 12px;
+    padding: 0 var(--r-pad);
   }
   /* 窄屏下操作区独占一行，避免和开关挤在一起误触 */
   .rule-actions {

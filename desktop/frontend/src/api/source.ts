@@ -42,6 +42,59 @@ export const sourceApi = {
   /** 校验书源。 */
   validate: (ids: number[] = []) => call(binding.Validate(ids)),
 
+  /**
+   * 校验书源并指定搜索关键词。
+   *
+   * 关键词影响「搜索规则」这一项的判定：部分书源只在特定词下才返回结果，
+   * 用默认词校验会误报失效。原生在开始校验前弹框让用户填。
+   */
+  validateWith: (ids: number[] = [], keyword = "") =>
+    call(binding.ValidateWith(ids, keyword)),
+
+  // ── 分组 ──────────────────────────────────────────────────
+  /** 全部分组及组内书源数量。 */
+  listGroups: () => callList(binding.ListGroups()),
+
+  /** 新建分组：把「无分组」的书源归入该组（分组不是独立实体）。 */
+  addGroupToNoGroup: (group: string) => call(binding.AddGroupToNoGroup(group)),
+
+  /** 重命名分组；newName 为空表示清空该分组。 */
+  renameGroup: (oldName: string, newName: string) =>
+    call(binding.RenameGroup(oldName, newName)),
+
+  /** 删除分组（书源保留）。 */
+  deleteGroup: (name: string) => call(binding.DeleteGroup(name)),
+
+  addToGroup: (ids: number[], group: string) =>
+    call(binding.AddToGroup(ids, group)),
+
+  removeFromGroup: (ids: number[], group: string) =>
+    call(binding.RemoveFromGroup(ids, group)),
+
+  // ── 批量操作 ──────────────────────────────────────────────
+  setEnabledBatch: (ids: number[], enabled: boolean) =>
+    call(binding.SetEnabledBatch(ids, enabled)),
+
+  setEnabledExploreBatch: (ids: number[], enabled: boolean) =>
+    call(binding.SetEnabledExploreBatch(ids, enabled)),
+
+  deleteBatch: (ids: number[]) => call(binding.DeleteBatch(ids)),
+
+  // ── 排序 ──────────────────────────────────────────────────
+  moveTop: (ids: number[]) => call(binding.MoveTop(ids)),
+  moveBottom: (ids: number[]) => call(binding.MoveBottom(ids)),
+
+  /** 按给定顺序重排（拖拽结束后调用，传当前可见顺序的 id 序列）。 */
+  reorder: (ids: number[]) => call(binding.Reorder(ids)),
+
+  // ── 源变量 ────────────────────────────────────────────────
+  getVariable: (id: number) => call(binding.GetVariable(id)),
+  setVariable: (id: number, variable: string) =>
+    call(binding.SetVariable(id, variable)),
+
+  /** 清除书源站点的 Cookie（登录态异常时先清再重登）。 */
+  clearCookie: (id: number) => call(binding.ClearCookie(id)),
+
   /** 单源搜索。 */
   search: (sourceId: number, keyword: string, page = 1) =>
     callList(binding.Search(sourceId, keyword, page)),
@@ -80,6 +133,20 @@ export const sourceApi = {
     call(
       binding.AddToShelf(sourceId, bookUrl, name, author, variable, groupId),
     ),
+
+  /**
+   * 打开书籍查看详情/试读，**不加入书架**。
+   *
+   * 与 addToShelf 的参数一致：试读同样要落库（目录、进度按 book id 存），
+   * 只是书架列表里看不到；用户点「加入书架」时才转正。
+   */
+  previewBook: (
+    sourceId: number,
+    bookUrl: string,
+    name = "",
+    author = "",
+    variable = "",
+  ) => call(binding.PreviewBook(sourceId, bookUrl, name, author, variable)),
 
   // ── 书源订阅 ──────────────────────────────────────────────
   /** 订阅列表。 */

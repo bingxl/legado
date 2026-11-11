@@ -27,9 +27,14 @@ func dataDir() string {
 //
 // WebviewUserDataPath 刻意指到临时目录：不指定时 WebView2 会把用户数据目录放在
 // %APPDATA%\<exe 名>，Roaming 属于 Defender 受控文件夹访问的保护范围。
+//
+// 目录名再按**进程完整性级别**分档（-u 普通 / -h 管理员，见 webviewProfileSuffix）：
+// Chromium 的 profile 单例是带完整性标签的命名互斥体，管理员进程建的 profile
+// 无法被普通进程复用，CreateCoreWebView2Controller 会报 0x800700AA 后直接退出，
+// 症状是"双击没反应，只能以管理员身份运行"。分档后两种方式互不干扰。
 func windowsOptions() application.WindowsOptions {
 	return application.WindowsOptions{
-		WebviewUserDataPath:   filepath.Join(os.TempDir(), "legado-desktop-webview"),
+		WebviewUserDataPath:   filepath.Join(os.TempDir(), "legado-desktop-webview"+webviewProfileSuffix()),
 		AdditionalBrowserArgs: webviewBrowserArgs(),
 	}
 }
@@ -69,3 +74,39 @@ func webviewBrowserArgs() []string {
 
 // safeAreaJSON 桌面端没有刘海屏/系统手势区，返回空串让前端跳过适配。
 func safeAreaJSON() string { return "" }
+
+// setFullscreen 切换主窗口全屏态，返回操作后的实际状态。
+//
+// 走 Wails 的 Window 接口（Fullscreen / UnFullscreen / IsFullscreen 三个方法都在
+// Window 接口上）。拿不到窗口（应用未就绪、窗口已销毁）时返回 false，
+// 前端据此判定"这次没切成功"，不会把界面留在错误的沉浸状态。
+func setFullscreen(on bool) bool {
+	w := currentWindow()
+	if w == nil {
+		return false
+	}
+	if on {
+		w.Fullscreen()
+	} else {
+		w.UnFullscreen()
+	}
+	return w.IsFullscreen()
+}
+
+// isFullscreen 查询主窗口是否全屏。
+func isFullscreen() bool {
+	w := currentWindow()
+	if w == nil {
+		return false
+	}
+	return w.IsFullscreen()
+}
+
+// currentWindow 取当前活动窗口；应用或窗口还不存在时返回 nil。
+func currentWindow() application.Window {
+	app := application.Get()
+	if app == nil || app.Window == nil {
+		return nil
+	}
+	return app.Window.Current()
+}

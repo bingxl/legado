@@ -322,23 +322,30 @@ onMounted(load);
 .ai-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--r-gap);
+  min-width: 0;
+  max-width: 100%;
 }
 .card {
   border: 1px solid #eef0f3;
-  border-radius: 8px;
-  padding: 12px 14px;
+  border-radius: var(--r-radius);
+  padding: var(--r-pad);
+  min-width: 0;
+  max-width: 100%;
   background: #fafbfc;
 }
 .card-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  margin-bottom: var(--r-pad-sm);
 }
 .card-title {
   font-size: 14px;
   font-weight: 600;
+  min-width: 0;
   color: rgba(0, 0, 0, 0.87);
 }
 .dot {
@@ -362,19 +369,27 @@ onMounted(load);
 }
 .muted {
   font-size: 12px;
+  min-width: 0;
   color: rgba(0, 0, 0, 0.45);
 }
+.card-head .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .hint {
-  margin: 6px 0 0;
+  margin: var(--r-pad-sm) 0 0;
   font-size: 12px;
   line-height: 1.6;
+  min-width: 0;
   color: rgba(0, 0, 0, 0.55);
 }
 .hint.warn {
   color: #e6a23c;
 }
 .progress-wrap {
-  margin-top: 8px;
+  margin-top: var(--r-pad-sm);
 }
 .progress-text {
   margin-top: 4px;
@@ -384,22 +399,27 @@ onMounted(load);
 .field-label {
   font-size: 13px;
   color: rgba(0, 0, 0, 0.7);
-  margin-bottom: 6px;
+  margin-bottom: var(--r-pad-sm);
 }
 .scopes {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  max-width: 100%;
 }
 .range-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 8px;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  margin-top: var(--r-pad-sm);
   flex-wrap: wrap;
 }
 .range-input {
-  width: 92px;
+  width: min(100%, 92px);
+  max-width: 100%;
+  min-width: 0;
 }
 .range-sep {
   font-size: 12px;
@@ -407,15 +427,25 @@ onMounted(load);
 }
 .actions {
   display: flex;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  margin-top: var(--r-pad);
   flex-wrap: wrap;
 }
 .summary {
-  margin: 6px 0 0;
+  margin: var(--r-pad-sm) 0 0;
   font-size: 13px;
   line-height: 1.75;
+  min-width: 0;
+  max-width: 100%;
   color: rgba(0, 0, 0, 0.75);
   white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 640px) {
+  .card {
+    padding: var(--r-pad-sm);
+  }
 }
 </style>

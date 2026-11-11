@@ -103,7 +103,7 @@ watch(
         @keydown.enter="run"
       >
         <template #append>
-          <el-select v-model="stage" style="width: 156px">
+          <el-select v-model="stage" class="r-fit" style="--r-fit-w: 156px">
             <el-option
               v-for="o in stageOptions"
               :key="o.value"
@@ -156,7 +156,7 @@ watch(
       </span>
     </div>
 
-    <div ref="outputEl" class="output">
+    <div ref="outputEl" class="output r-scroll-x">
       <div v-if="!store.hasOutput" class="output-empty">
         还没有输出。填一个入口后点「开始调试」。<br />
         调试会真发请求，命中不了的规则会在这一行标红。
@@ -187,26 +187,35 @@ watch(
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
 }
 .entry {
   flex: none;
+  min-width: 0;
+  max-width: 100%;
 }
 .entry-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 6px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  margin-top: var(--r-pad-sm);
 }
 .auto-scroll {
   margin-left: auto;
+  min-width: 0;
   font-size: 12px;
 }
 .hints {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  max-width: 100%;
+  margin-top: var(--r-pad-sm);
 }
 .hints-title {
   font-size: 12px;
@@ -217,7 +226,10 @@ watch(
 }
 .status {
   flex: none;
-  margin: 8px 0 4px;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  margin: var(--r-pad-sm) 0 4px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
   display: flex;
@@ -232,10 +244,12 @@ watch(
 .output {
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
   overflow-y: auto;
   background: var(--el-fill-color-lighter);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: var(--r-radius-sm);
+  padding: var(--r-pad-sm) var(--r-pad);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.55;
@@ -247,7 +261,8 @@ watch(
 }
 .line {
   display: flex;
-  gap: 6px;
+  gap: var(--r-gap-sm);
+  min-width: 0;
   align-items: flex-start;
   white-space: pre-wrap;
   word-break: break-all;
@@ -281,8 +296,14 @@ watch(
   cursor: pointer;
   color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
-  border-radius: 3px;
+  border-radius: var(--r-radius-sm);
   padding: 0 4px;
   font-size: 11px;
+}
+
+@media (max-width: 640px) {
+  .auto-scroll {
+    margin-left: 0;
+  }
 }
 </style>

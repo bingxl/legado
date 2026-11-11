@@ -1,976 +1,390 @@
 <script setup lang="ts">
 /**
- * 阅读器。
+ * 阅读器外壳。
  *
- * 按书籍格式选择渲染方式：
- *   - pdf   ：交给 WebView 内置的 PDF 能力（<iframe src="/raw/<base64url>[.pdf]">）
- *   - comic ：图片流（后端已把压缩包解压到缓存目录）
- *   - 其它  ：正文 HTML
+ * 一次「阅读会话」里与书无关的那部分都在这里：路由、离开守卫、全屏态、
+ * 词典浮层、快捷键归属。单本书的加载/渲染/进度/目录/朗读整块在
+ * `components/reader/ReaderPane.vue` 里——它才是可以被渲染两份的东西
+ * （M3 分屏就是再挂一个 pane，左栏 `:id`、右栏 `?split=`）。
+ *
+ * M2 只做拆分，**行为与拆分前逐字一致**：DOM 里 `.reader` 仍是根、
+ * pane 内部的 `.bar / .stage / .text / .comic / .pdf / .nav / .chapter-progress`
+ * 全部原样，所以 s3 / s6 / s13 / s22 / s23 / s24 的选择器都不需要改。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter, onBeforeRouteLeave } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 import { bookshelfApi } from "@/api/bookshelf";
-import { readerApi } from "@/api/reader";
-import { CacheScope, cacheApi } from "@/api/cache";
-import { rawFileURL } from "@/api/system";
-import { useBookDataStore } from "@/stores/bookData";
 import { useBookshelfStore } from "@/stores/bookshelf";
-import { jobPercent, useCacheStore } from "@/stores/cache";
-import { useTtsStore } from "@/stores/tts";
-import { domSegment } from "@/tts/domSegment";
-import { segmentHTML } from "@/tts/offlineSegment";
-import type { TtsSession } from "@/stores/tts";
-import { copyText } from "@/utils/clipboard";
-import { comicImageURL } from "@/utils/media";
-import { loadReaderPrefs, saveReaderPrefs } from "@/utils/readerPrefs";
-import { wrapPlainTextAsParagraphs } from "@/utils/plainText";
+import { useDictStore } from "@/stores/dict";
 import { usePlatformStore } from "@/stores/platform";
+import { useReaderLayoutStore } from "@/stores/readerLayout";
+import { useBreakpoint } from "@/utils/breakpoint";
+import { loadReaderPrefs } from "@/utils/readerPrefs";
 import { smartBack } from "@/utils/nav";
-import AskAIDrawer from "@/components/AskAIDrawer.vue";
-import type { BookDetail, ChapterContent, ChapterItem } from "@/types";
+import DictPopover from "@/components/DictPopover.vue";
+import ReaderPane from "@/components/reader/ReaderPane.vue";
+import SplitPicker from "@/components/reader/SplitPicker.vue";
+import type { BookDetail } from "@/types";
 
 const route = useRoute();
 const router = useRouter();
-const tts = useTtsStore();
-const cache = useCacheStore();
-const bookData = useBookDataStore();
+const dict = useDictStore();
 const platform = usePlatformStore();
+const layout = useReaderLayoutStore();
+const { width: viewportWidth } = useBreakpoint();
 
+/** 左栏（单栏）那本书：路由 `:id` 是它的唯一来源，深链与书签语义不变。 */
 const bookId = computed(() => Number(route.params.id || 0));
-const book = ref<BookDetail | null>(null);
-const chapters = ref<ChapterItem[]>([]);
-const content = ref<ChapterContent | null>(null);
-const index = ref(0);
-const loading = ref(false);
-const tocVisible = ref(false);
-/** 目录倒序开关：连载追更时看最新章常用倒序。 */
-const tocReversed = ref(false);
-/**
- * 移动端沉浸模式：顶栏/底栏可隐藏。
- * 桌面端恒显（chromeVisible 不参与判定），移动端点屏幕中间切换。
- */
-const chromeVisible = ref(true);
-const chromeShown = computed(() => !platform.isMobile || chromeVisible.value);
-const stageRef = ref<HTMLElement | null>(null);
-/** 「问 AI」抽屉开关。 */
-const askOpen = ref(false);
-/** 已缓存的章节序号，用于目录里打标记。 */
-const cachedIndexes = ref<Set<number>>(new Set());
-
-/**
- * 进入这本书时的稳定 id。
- *
- * `bookId` 来自路由参数，**离开阅读器后会变成 0**；而朗读会话在离开后仍要继续
- * 拉下一章、写进度，用它就会打出「参数不合法: 缺少书籍 ID」。所以所有
- * 「离开后仍可能执行」的操作都读这个值。
- */
-const boundBookId = ref(0);
-
-/** 正文/漫画的滚动容器（二者互斥渲染，PDF 由 iframe 自己管）。 */
-function scroller(): HTMLElement | null {
-  return stageRef.value?.querySelector<HTMLElement>(".text, .comic") ?? null;
-}
-
-// 阅读偏好：字号/行距跨会话记住（否则每次进阅读器都要重调）
-const prefs = loadReaderPrefs();
-const fontSize = ref(prefs.fontSize);
-const lineHeight = ref(prefs.lineHeight);
-watch([fontSize, lineHeight], ([size, height]) =>
-  saveReaderPrefs({ fontSize: size, lineHeight: height }),
-);
-
-const isPdf = computed(() => book.value?.format === "pdf");
-/** 漫画：本地漫画文件，或网络漫画源的章节图片流（后端已把 <img> 抽成 images）。 */
-const isComic = computed(
-  () => book.value?.format === "comic" || (content.value?.images?.length ?? 0) > 0,
-);
-
-/** 当前正在朗读的是不是这本书（含暂停）。 */
-const readingThisBook = computed(
-  () => tts.isActive && tts.bookId === boundBookId.value,
-);
-/** 只有纯文本类支持朗读；漫画无字、PDF 待 M2 的 pdf.js 文本层。 */
-const canRead = computed(() => !!book.value && !isPdf.value && !isComic.value);
-
-const cacheLabel = computed(() => {
-  const job = cacheJob.value;
-  if (job?.state === "running") return `缓存中 ${jobPercent(job)}%`;
-  return "缓存";
-});
-
-const readLabel = computed(() => {
-  if (!readingThisBook.value) return "▶ 朗读";
-  if (tts.status === "playing" || tts.status === "preparing") return "⏸ 暂停";
-  return "▶ 继续";
-});
-
-/** 复制书籍地址：网络书是详情页 URL，本地书是文件路径。 */
-async function copyBookURL() {
-  const url = book.value?.bookUrl;
-  if (!url) {
-    ElMessage.warning("这本书没有可复制的地址");
-    return;
-  }
-  if (await copyText(url)) ElMessage.success("已复制书籍地址");
-  else ElMessage.error("复制失败，请手动复制");
-}
-
-/**
- * 正文渲染用 HTML。
- *
- * 有的书源正文是一段带换行的纯文本（没有 `<p>`），直接 v-html 会折成一整面墙；
- * 这里按行补成段落（含标签的 HTML 原样通过，见 utils/plainText.ts）。
- */
-const displayHTML = computed(() =>
-  wrapPlainTextAsParagraphs(content.value?.html ?? ""),
-);
-
-/**
- * 高亮 AI 引用跳转带来的片段（`?hl=<片段开头>`）。
- *
- * 为什么不动 displayHTML：往 v-html 里插 `<mark>` 会与净化规则、TTS 切段
- * 相互干扰。这里在渲染完成后直接操作 DOM，只影响视觉，不改内容来源。
- * 切换章节时 DOM 会被整体替换，高亮自然消失，无需清理状态。
- *
- * 匹配时忽略空白：切片文本经过空白归一化（全角空格→普通空格、连续空白折叠），
- * 而正文渲染的是原始 HTML，同一句话两边的空白字符往往不同。
- * 直接 indexOf 会「明明有这段却高亮不上」，所以两边都去掉空白再比，
- * 再用下标映射还原真实位置。
- */
-function highlightQuery() {
-  // 复用朗读模块的 contentEl()：正文容器只有一个，别维护第二份选择器。
-  const root = contentEl();
-  if (!root) return;
-  const needle = compactSpace(String(route.query.hl || ""));
-  if (!needle) return;
-
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let node = walker.nextNode();
-  while (node) {
-    const text = node.nodeValue ?? "";
-    if (compactSpace(text).includes(needle)) {
-      const hit = locate(text, needle);
-      if (hit) {
-        const range = document.createRange();
-        range.setStart(node, hit.start);
-        range.setEnd(node, hit.end);
-        const mark = document.createElement("mark");
-        mark.className = "ai-hit";
-        range.surroundContents(mark);
-        // 即时滚动：平滑滚动在长章节里要滚好几秒，用户会以为没跳成功。
-        mark.scrollIntoView({ block: "center" });
-        return;
-      }
-    }
-    node = walker.nextNode();
-  }
-}
-
-/** 去掉全部空白字符（含全角空格、换行）。 */
-function compactSpace(s: string): string {
-  return s.replace(/\s+/g, "");
-}
-
-/** 在原始文本里定位「去空白后」的片段，返回原串下标区间。 */
-function locate(text: string, compactNeedle: string): { start: number; end: number } | null {
-  const map: number[] = [];
-  const chars: string[] = [];
-  for (let i = 0; i < text.length; i++) {
-    if (/\s/.test(text[i])) continue;
-    chars.push(text[i]);
-    map.push(i);
-  }
-  const at = chars.join("").indexOf(compactNeedle);
-  if (at < 0) return null;
-  return { start: map[at], end: map[at + compactNeedle.length - 1] + 1 };
-}
-
-watch(
-  () => content.value?.html,
-  async () => {
-    await nextTick();
-    highlightQuery();
-  },
-);
-
-/** 当前书的缓存任务（运行中时 toolbar 显示进度）。 */
-const cacheJob = computed(() => cache.jobOf(boundBookId.value));
-/** 本地书本身就是本地文件，缓存没有意义。 */
-const canCache = computed(() => !!book.value && book.value.kind !== "local");
-
-/** PDF 直读地址：本地路径经后端 /raw/ 路由暴露。 */
-const pdfURL = computed(() =>
-  book.value ? rawFileURL(book.value.bookUrl) : "",
-);
-
-async function loadMeta() {
-  boundBookId.value = bookId.value;
-  // 详情/目录走全局缓存：详情页刚拉过就直接复用，来回切换不重拉。
-  book.value = await bookData.getBook(bookId.value);
-  chapters.value = await bookData.getChapters(bookId.value);
-  await refreshCachedIndexes();
-  const p = await readerApi.getProgress(bookId.value);
-  // 详情页点某一章进来时带 ?index=N，优先于上次阅读进度。
+/** 详情页点某一章进来时带 `?index=N`，优先于上次阅读进度。 */
+const startIndex = computed(() => {
   const want = Number(route.query.index);
-  if (Number.isFinite(want) && want >= 0 && Math.trunc(want) < chapters.value.length) {
-    index.value = Math.trunc(want);
-    return;
-  }
-  index.value = p.chapterIndex >= 0 ? p.chapterIndex : 0;
-}
+  return Number.isFinite(want) && route.query.index !== undefined
+    ? Math.trunc(want)
+    : undefined;
+});
+/** AI 引用跳转带来的高亮片段（`?hl=`）。 */
+const highlight = computed(() => String(route.query.hl || ""));
 
-/** 重新拉取已缓存章节（缓存任务结束后目录标记要跟着变）。 */
-async function refreshCachedIndexes() {
-  if (!boundBookId.value) return;
-  try {
-    const list = await cacheApi.chapters(boundBookId.value);
-    cachedIndexes.value = new Set(list.map((c) => c.index));
-  } catch {
-    // 目录标记属于锦上添花，取不到就当没有缓存，不打断阅读。
-    cachedIndexes.value = new Set();
-  }
-}
+// ---------------- 分屏 ----------------
 
-/** 缓存菜单：本章 / 剩余 / 整本 / 去管理页。 */
-async function onCacheCommand(command: string) {
-  if (!book.value) return;
-  if (!canCache.value) {
-    ElMessage.warning("本地书无需缓存");
-    return;
-  }
-  if (command === "manage") {
-    router.push("/cache");
-    return;
-  }
-  try {
-    if (command === "chapter") {
-      await cache.start(boundBookId.value, CacheScope.Chapters, [index.value]);
-      ElMessage.success(`已开始缓存「${content.value?.title || "本章"}」`);
-      return;
-    }
-    const scope =
-      command === "all" ? CacheScope.All : CacheScope.Remaining;
-    await cache.start(boundBookId.value, scope);
-    ElMessage.success(command === "all" ? "已开始缓存整本" : "已开始缓存剩余章节");
-  } catch (e) {
-    ElMessage.error((e as Error).message);
-  }
-}
+/**
+ * 分屏状态完全由路由 query 表达：`?split=` 存在即分屏，`?split=0` 是「右栏空态」，
+ * `?split=<id>` 是右栏已选书。
+ *
+ * 为什么不放内存 ref：分屏开关要能熬过整页刷新（重启后回到同一个阅读现场），
+ * 而它一旦进路由就自动有了这个能力。**一律 replace**——分屏是视图状态，
+ * 不该在历史栈里留一步，否则返回键要按两次才回详情页（`smartBack` 也依赖
+ * `history.state.back`，replace 不会动它）。
+ */
+const splitRaw = computed(() => route.query.split);
+/**
+ * 分屏是否生效。移动端恒 false：两栏并排在手机上各剩不到 200px，
+ * 而且安卓端 UI 与桌面本就该一致（那边没有并排概念）。
+ */
+const splitOpen = computed(() => splitRaw.value !== undefined && !platform.isMobile);
+const splitBookId = computed(() => {
+  const n = Number(splitRaw.value);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+});
 
-/** 任务结束后刷新目录上的缓存标记。 */
-watch(
-  () => cacheJob.value?.state,
-  async (state, prev) => {
-    if (prev === "running" && state && state !== "running") {
-      await refreshCachedIndexes();
-    }
-  },
+/** 当前活动栏：只有它响应键盘、写进度、弹词典浮层。 */
+const activePane = ref<"left" | "right">("left");
+
+/**
+ * 左栏是否活动。
+ *
+ * 右栏还是空态（选书面板）时没有可交互的窗格，左栏必须继续算活动——
+ * 否则「开了分屏但还没选书」的阶段键盘方向键与 Esc 全是死的。
+ */
+const leftActive = computed(
+  () => !splitOpen.value || !splitBookId.value || activePane.value === "left",
 );
 
-/** 倒序只影响展示顺序，c.index 仍是真实章节号，跳转/高亮/缓存标记不受影响。 */
-const displayChapters = computed(() =>
-  tocReversed.value ? [...chapters.value].reverse() : chapters.value,
-);
+/** 左右分栏比例（左栏占的份数），拖动分隔条时改它。 */
+const splitRatio = ref(0.5);
 
-/** 切换排序后把当前章滚回可见区。 */
-async function toggleTocOrder() {
-  tocReversed.value = !tocReversed.value;
-  await nextTick();
-  stageRef.value
-    ?.querySelector<HTMLElement>(".toc-item.active")
-    ?.scrollIntoView({ block: "center" });
+/** 窗口太窄时两栏都没法读：自动收回单栏（设计里定的 900px 门槛）。 */
+const MIN_SPLIT_WIDTH = 900;
+
+function replaceQuery(patch: Record<string, string | undefined>) {
+  const q: Record<string, string> = {};
+  for (const [k, v] of Object.entries(route.query)) {
+    if (typeof v === "string") q[k] = v;
+  }
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === undefined) delete q[k];
+    else q[k] = v;
+  }
+  return router.replace({ path: route.path, query: q });
 }
 
-/** 底栏避让安卓手势条：Tab 栏已隐藏，安全区要自己补。 */
-const footerStyle = computed(() =>
-  platform.isMobile && platform.safeArea.bottom
-    ? { paddingBottom: `calc(8px + ${platform.safeArea.bottom}px)` }
-    : undefined,
-);
+/** 开分屏：右栏先空着，让用户自己挑书（不猜他想读哪本）。 */
+function openSplit() {
+  if (platform.isMobile) return;
+  // 窗口本身就不够宽时直接说清楚，别开了又立刻被自动收回（看起来像坏了）。
+  if (viewportWidth.value < MIN_SPLIT_WIDTH) {
+    ElMessage.info(`窗口太窄，并排阅读需要至少 ${MIN_SPLIT_WIDTH}px 宽`);
+    return;
+  }
+  activePane.value = "right";
+  void replaceQuery({ split: "0" });
+}
+
+/** 右栏选中一本书。 */
+function pickSplitBook(id: number) {
+  activePane.value = "right";
+  void replaceQuery({ split: String(id) });
+}
+
+/** 关掉右栏，回单栏。 */
+function closeSplit() {
+  if (!splitOpen.value) return;
+  activePane.value = "left";
+  void replaceQuery({ split: undefined });
+}
+
+// 窄窗口自动收：拖窗口变窄时右栏已经挤成一条缝，留着不如退出。
+watch(viewportWidth, (w) => {
+  if (splitOpen.value && !platform.isMobile && w < MIN_SPLIT_WIDTH) closeSplit();
+});
+
+// 换左栏那本书时分屏一并关掉：`?split` 是跟着这个阅读现场走的，
+// 换书后还挂着上一个现场的右栏会让人莫名其妙。
+watch(bookId, () => {
+  if (splitOpen.value) void replaceQuery({ split: undefined });
+  activePane.value = "left";
+});
+
+/**
+ * 拖分隔条改比例。
+ *
+ * 为什么不用 `setPointerCapture`：本机 WebView2 里它不生效（实测指针一离开
+ * 6px 的分隔条就收不到 pointermove，拖动只挪 2px 就"断线"）。
+ * 改成拖拽期间铺一层透明遮罩接管指针：遮罩在父文档里，能盖住正文，
+ * 也能盖住 PDF 那个 iframe（iframe 内的指针事件不会冒泡到父文档，
+ * 这正是当初想用 capture 的原因）。
+ */
+const readerRef = ref<HTMLElement | null>(null);
+const dragging = ref(false);
+let dragRect = { left: 0, width: 1 };
+
+function startDrag(e: PointerEvent) {
+  const host = readerRef.value;
+  if (!host) return;
+  const r = host.getBoundingClientRect();
+  dragRect = { left: r.left, width: r.width };
+  dragging.value = true;
+  e.preventDefault();
+}
+
+function onDragMove(e: PointerEvent) {
+  if (!dragging.value) return;
+  const ratio = (e.clientX - dragRect.left) / dragRect.width;
+  // 20% 下限：再窄正文就只剩几个字一行，拖不回来比拖不准更难受。
+  splitRatio.value = Math.min(0.8, Math.max(0.2, ratio));
+}
+
+function endDrag() {
+  dragging.value = false;
+}
+
+/** 各栏已加载的书（按 id 去重），离开时用来做「试读是否入架」的询问。 */
+const openedBooks = ref<BookDetail[]>([]);
+function onPaneLoaded(b: BookDetail) {
+  const at = openedBooks.value.findIndex((x) => x.id === b.id);
+  if (at >= 0) openedBooks.value[at] = b;
+  else openedBooks.value.push(b);
+}
+
+/**
+ * 换书时丢掉上一本的记录，避免离开时对已经不看的那本弹询问；
+ * 同时把分屏一并关掉——`?split` 属于这个阅读现场，换书后还挂着右栏会让人
+ * 莫名其妙（右栏还是上一本书，左栏已经换了）。
+ */
+watch(bookId, () => {
+  openedBooks.value = [];
+  if (splitOpen.value) void replaceQuery({ split: undefined });
+  activePane.value = "left";
+});
 
 /** 返回书籍详情页：阅读器的上一级恒为详情页，不能靠 history.back()
  * （一路切着 tab 进来时会退回上一个 tab）。 */
-function goBack() {
+async function goBack() {
+  // 先把 split 从 query 里摘掉再跳：否则从详情页前进回到阅读器时
+  // 右栏会拿一个"上一次会话"的书自己复活，看起来像幽灵窗格。
+  if (splitOpen.value) await closeSplit();
   smartBack(router, `/book/${bookId.value}`, {
     mustMatch: `/book/${bookId.value}`,
   });
 }
 
-/** 本地书源文件已被移动/删除：后端在 ListBooks/GetBook 时 stat 标注。 */
-const fileMissing = computed(() => book.value?.fileMissing === true);
-
-/** 载入某章。返回是否成功——朗读自动翻章要靠它判断能不能继续。 */
-async function loadChapter(i: number): Promise<boolean> {
-  // 文件已缺失时正文必然取不到：面板已在展示，别再弹 OS 原始报错。
-  if (fileMissing.value) return false;
-  loading.value = true;
+/**
+ * 离开阅读器时，若这本书只是试读（发现/搜索点开、从未加入书架），
+ * 询问一次是否加入书架——这就是「读完再问」的落点。
+ *
+ * 这套询问默认**关闭**（设置 → 阅读 → 返回时提示加入书架）：从搜索/发现
+ * 点开书大多只是随手看两章，退出时被拦一次属于打断。开关打开后才弹。
+ * 书籍与漫画共用这个阅读器，所以一处判定同时覆盖两者。
+ *
+ * 放在路由离开守卫里而不是 onBeforeUnmount：卸载时组件已经在拆，
+ * 弹不出对话框，也拿不到用户的选择。取消/关闭一律放行，
+ * 只表达「要不要入架」，不拦人。
+ */
+let shelfPrompting = false;
+onBeforeRouteLeave(async () => {
+  // 每次都现读：用户可能在设置页刚改完又回到这里，不必重启应用。
+  if (!loadReaderPrefs().promptAddToShelf) return true;
+  // 分屏时两栏可能都是试读，但每本最多问一次；分屏选书限定书架内，
+  // 所以实际上只会问左栏那本。
+  const pending = openedBooks.value.filter((b) => !b.inShelf);
+  if (!pending.length) return true;
+  // 连点返回时不要叠出多个对话框：后一次直接等前一次的结果。
+  if (shelfPrompting) return false;
+  shelfPrompting = true;
+  const added: BookDetail[] = [];
   try {
-    content.value = await bookData.getContent(boundBookId.value, i);
-    index.value = i;
-    // 换章后必须回到顶部，否则新章节会继承上一章的滚动位置。
-    await nextTick();
-    const sc = scroller();
-    if (sc) sc.scrollTop = 0;
-    await persistProgress(0);
-    return true;
-  } catch (e) {
-    ElMessage.error((e as Error).message);
-    return false;
+    for (const b of pending) {
+      try {
+        await ElMessageBox.confirm(
+          `《${b.name}》还不在书架中，要把它加入书架吗？`,
+          "加入书架",
+          {
+            confirmButtonText: "加入书架",
+            cancelButtonText: "暂不加入",
+            type: "info",
+            closeOnClickModal: false,
+          },
+        );
+        added.push(b);
+      } catch {
+        // 取消/关闭：只跳过这一本，不拦人
+      }
+    }
   } finally {
-    loading.value = false;
+    shelfPrompting = false;
   }
-}
+  if (!added.length) return true;
 
-/** 移除源文件已丢失的本地书：只删书架记录与进度，不动磁盘上的任何东西。 */
-async function removeMissingBook() {
-  const name = book.value?.name ?? "这本书";
-  try {
-    await ElMessageBox.confirm(
-      `将从书架移除《${name}》及其目录与阅读进度，源文件本身不会被删除。`,
-      "移除书籍",
-      { type: "warning", confirmButtonText: "移除", cancelButtonText: "取消" },
-    );
-  } catch {
-    return; // 用户取消
-  }
-  try {
-    await bookshelfApi.deleteBook(boundBookId.value);
-    bookData.invalidateBook(boundBookId.value);
-    await useBookshelfStore().loadBooks();
-    ElMessage.success("已从书架移除");
-    router.replace("/");
-  } catch (e) {
-    ElMessage.error((e as Error).message);
-  }
-}
-
-/**
- * 用户手动换章（上一章/下一章/目录）。
- * 朗读中要跟着换到新章，否则会出现「页面在第 5 章、声音还在念第 3 章」。
- */
-async function userLoadChapter(i: number) {
-  const ok = await loadChapter(i);
-  if (!ok || !readingThisBook.value) return;
-  await tts.start(session, { chapter: i, segIndex: 0 });
-}
-
-/**
- * 从目录选章：先收起抽屉再换章。
- * 不收的话移动端 62% 宽的抽屉会一直挡着正文，用户得再点一次「目录」。
- */
-async function pickChapter(i: number) {
-  tocVisible.value = false;
-  await userLoadChapter(i);
-}
-
-function prev() {
-  if (loading.value) return;
-  if (index.value > 0) void userLoadChapter(index.value - 1);
-}
-function next() {
-  if (loading.value) return;
-  if (content.value && content.value.nextIndex >= 0) {
-    void userLoadChapter(content.value.nextIndex);
-  }
-}
-
-/**
- * 阅读区点击翻页：左 1/3 上一章、右 1/3 下一章。
- * 中间 1/3 不响应，留给选词和滚轮，避免误翻页。
- */
-function onStageClick(e: MouseEvent) {
-  const el = stageRef.value;
-  if (!el) return;
-
-  const target = e.target as HTMLElement;
-  // 目录、链接、表单控件等交互元素不参与翻页。
-  if (target.closest("a, button, input, textarea, select, .toc")) return;
-  // 有选中文字时说明用户在选词，不要抢这一下点击。
-  if (window.getSelection()?.toString()) return;
-
-  // 朗读中：点正文 = 从这一段开始读（优先于左右三分之一的翻页）。
-  if (readingThisBook.value && target.closest(".content")) {
-    const idx = tts.findSegmentIndex(target);
-    if (idx >= 0) {
-      tts.jumpTo(idx);
-      return;
+  for (const b of added) {
+    try {
+      await bookshelfApi.putOnShelf(b.id);
+      b.inShelf = true;
+      ElMessage.success(`《${b.name}》已加入书架`);
+    } catch (e) {
+      // 入架失败不该扣住用户：书还在库里，下次从详情页也能加。
+      ElMessage.error((e as Error).message);
     }
   }
-
-  const rect = el.getBoundingClientRect();
-  if (rect.width === 0) return;
-  const ratio = (e.clientX - rect.left) / rect.width;
-  if (ratio < 1 / 3) prev();
-  else if (ratio > 2 / 3) next();
-  // 移动端：中间 1/3 切换顶栏/底栏，让正文占满整屏（桌面端中间留给选词）。
-  else if (platform.isMobile) chromeVisible.value = !chromeVisible.value;
-}
-
-/** 左右方向键翻章；输入框或带修饰键的按键不接管。 */
-function onKeydown(e: KeyboardEvent) {
-  if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) {
-    return;
-  }
-  const target = e.target as HTMLElement | null;
-  if (
-    target &&
-    (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)
-  ) {
-    return;
-  }
-  if (e.key === "ArrowLeft") {
-    e.preventDefault();
-    prev();
-  } else if (e.key === "ArrowRight") {
-    e.preventDefault();
-    next();
-  }
-}
-
-/** 保存进度；scrollPercent 由滚动位置计算。 */
-async function persistProgress(scrollPercent: number) {
-  const title = content.value?.title ?? chapters.value[index.value]?.title ?? "";
-  await readerApi.saveProgress(boundBookId.value, index.value, title, 0, scrollPercent);
-  // 进度变了，详情页展示的进度字段失效，下次进详情重新拉。
-  bookData.invalidateBook(boundBookId.value);
-}
-
-/** 滚动时记录百分比（节流由浏览器 rAF 自然合并）。 */
-function onScroll(e: Event) {
-  // 朗读期间进度由朗读器按「段」推进并落盘，这里让位，避免两处互相覆盖。
-  if (readingThisBook.value) return;
-  const el = e.target as HTMLElement;
-  const max = el.scrollHeight - el.clientHeight;
-  if (max <= 0) return;
-  const pct = Math.min(100, Math.round((el.scrollTop / max) * 100));
-  persistProgress(pct);
-}
-
-// ---------------- 朗读 ----------------
-
-/** 正文容器与标题元素（朗读切段的输入）。 */
-function contentEl(): HTMLElement | null {
-  return stageRef.value?.querySelector<HTMLElement>(".content") ?? null;
-}
-function titleEl(): HTMLElement | null {
-  return stageRef.value?.querySelector<HTMLElement>(".text h1") ?? null;
-}
-
-/**
- * 朗读会话：store 只跟这个接口打交道，DOM 细节全留在阅读器里。
- * M2 的 PDF 换成「页级」实现后，store 一行都不用改。
- */
-const session: TtsSession = {
-  get bookId() {
-    return boundBookId.value;
-  },
-  get bookName() {
-    return book.value?.name ?? "";
-  },
-  chapterTitle: (ch) => chapters.value[ch]?.title ?? "",
-  extract: async (ch) => {
-    if (ch !== index.value) {
-      const ok = await loadChapter(ch);
-      if (!ok) return [];
-    }
-    await nextTick();
-    const root = contentEl();
-    const title = content.value?.title ?? chapters.value[ch]?.title ?? "";
-    // 阅读器还挂着：直接在活 DOM 上切段，段落能带 el，高亮才生效。
-    if (root) return domSegment(root, { chapter: ch, title: titleEl() });
-    // 已经离开阅读器（组件卸载）：用同一份 HTML 离线切段，接着往下读。
-    return segmentHTML(content.value?.html ?? "", { chapter: ch, title });
-  },
-  advance: async (i) => {
-    // 后端给的 nextIndex 最权威（有的书章节不连续），退回 +1。
-    const ni = content.value?.nextIndex ?? -1;
-    const next = ni >= 0 ? ni : i + 1 < chapters.value.length ? i + 1 : -1;
-    if (next < 0) return null;
-    const ok = await loadChapter(next);
-    return ok ? next : null;
-  },
-  save: (ch, _segIndex, ratio) => {
-    const title = chapters.value[ch]?.title ?? "";
-    void readerApi
-      .saveProgress(
-        boundBookId.value,
-        ch,
-        title,
-        0,
-        Math.round(ratio * 100),
-      )
-      .then(() => bookData.invalidateBook(boundBookId.value));
-  },
-};
-
-/** 视口顶端的第一段：点「朗读」时从这里开始，而不是永远从章首。 */
-function visibleSegmentIndex(): number {
-  const root = contentEl();
-  const sc = scroller();
-  if (!root || !sc) return 0;
-  const list = domSegment(root, { chapter: index.value, title: titleEl() });
-  if (!list.length) return 0;
-  const top = sc.getBoundingClientRect().top;
-  for (let i = 0; i < list.length; i++) {
-    const r = (list[i].el as HTMLElement).getBoundingClientRect();
-    if (r.bottom > top + 4) return i;
-  }
-  return list.length - 1;
-}
-
-async function toggleRead() {
-  if (!canRead.value) {
-    ElMessage.warning(isComic.value ? "漫画没有文本，无法朗读" : "该格式暂不支持朗读");
-    return;
-  }
-  if (readingThisBook.value) {
-    tts.toggle();
-    return;
-  }
-  await tts.start(session, {
-    chapter: index.value,
-    segIndex: visibleSegmentIndex(),
-  });
-}
-
-/** 当前高亮元素（同一元素可能被多个段落共享，只需记住一个）。 */
-let activeEl: HTMLElement | null = null;
-
-function clearHighlight() {
-  if (!activeEl) return;
-  activeEl.classList.remove("tts-active");
-  activeEl = null;
-}
-
-watch(
-  () => tts.currentSegment,
-  (seg) => {
-    clearHighlight();
-    if (!seg || tts.bookId !== boundBookId.value) return;
-    const el = seg.el as HTMLElement | undefined;
-    if (!el || !el.isConnected) return;
-    const stage = stageRef.value;
-    if (!stage || !stage.contains(el)) return;
-    el.classList.add("tts-active");
-    activeEl = el;
-    // 只在段落跑出视口时才滚动，避免每段都把页面拽一下。
-    const box = stage.getBoundingClientRect();
-    const r = el.getBoundingClientRect();
-    if (r.top < box.top + 40 || r.bottom > box.bottom - 40) {
-      // 用即时滚动而不是 smooth：连续朗读时段间只有几秒，平滑滚动会一直排不上队，
-      // 观感是"高亮在跑、页面在追"，而且滚动过程中用户点击会点歪。
-      el.scrollIntoView({ block: "center" });
-    }
-  },
-);
-
-watch(bookId, async () => {
-  if (!bookId.value) return;
-  clearHighlight();
-  await loadMeta();
-  await loadChapter(index.value);
-  tts.attach(session);
+  void useBookshelfStore().loadBooks();
+  return true;
 });
 
-onMounted(async () => {
-  window.addEventListener("keydown", onKeydown);
-  if (!bookId.value) return;
-  await loadMeta();
-  await loadChapter(index.value);
-  // 绑定在正文渲染之后：store 若仍在读这本书，会重新切段以恢复高亮锚点。
-  tts.attach(session);
+onMounted(() => {
+  // 全屏态要跟窗口对账：用户可能用系统快捷键退出，那条路不经过我们的按钮。
+  layout.attach();
+  void layout.sync();
+  // 词库安装进度是全局的：用户可能停在阅读器里等汉英包下完。
+  dict.attach();
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener("keydown", onKeydown);
-  clearHighlight();
-  // 解绑但不停播：文本类离开阅读器后可以继续听（这是需求，不是遗漏）。
-  tts.detach(boundBookId.value);
+  layout.detach();
+  // 离开阅读器必须退出全屏，否则回到书架还是满屏、左侧栏也回不来。
+  // force=true：即使此刻正在切换也要把状态压回去，离场不留中间态。
+  void layout.setFullscreen(false, true);
+  // 浮层与取词模式属于本页状态，离开就复位；安装进度留在 store 里继续。
+  dict.close();
+  dict.setPicking(false);
 });
 </script>
 
 <template>
-  <div class="reader" v-loading="loading">
-    <header v-show="chromeShown" class="bar">
-      <el-button link @click="goBack">← 返回</el-button>
-      <span class="title">{{ book?.name }}</span>
-      <span class="chapter">{{ content?.title }}</span>
-      <div class="spacer" />
-      <el-tooltip content="复制书籍地址" placement="bottom">
-        <button class="icon-btn" :disabled="!book" @click="copyBookURL">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="9" y="9" width="11" height="11" rx="2" />
-            <path d="M5 15V6a2 2 0 0 1 2-2h9" />
-          </svg>
-        </button>
-      </el-tooltip>
-      <el-button link class="read-btn" :disabled="!canRead" @click="toggleRead">
-        {{ readLabel }}
-      </el-button>
-      <el-dropdown trigger="click" @command="onCacheCommand">
-        <el-button link class="cache-btn" :disabled="!canCache">
-          {{ cacheLabel }}
-        </el-button>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item command="chapter">缓存本章</el-dropdown-item>
-            <el-dropdown-item command="remaining">缓存剩余章节</el-dropdown-item>
-            <el-dropdown-item command="all">缓存整本</el-dropdown-item>
-            <el-dropdown-item command="manage" divided>管理缓存…</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
-      <el-button link data-ai="ask-ai" @click="askOpen = true">问 AI</el-button>
-      <el-button link @click="tocVisible = !tocVisible">目录</el-button>
-    </header>
+  <div ref="readerRef" class="reader" :class="{ 'is-split': splitOpen }">
+    <!-- 左栏：单栏时它是唯一窗格，分屏时是主栏。 -->
+    <ReaderPane
+      :book-id="bookId"
+      :start-index="startIndex"
+      :highlight="highlight"
+      :active="leftActive"
+      :compact="splitOpen"
+      :style="splitOpen ? { flex: String(splitRatio) } : undefined"
+      @back="goBack"
+      @loaded="onPaneLoaded"
+      @activate="activePane = 'left'"
+      @split="openSplit"
+      @escape="closeSplit"
+    />
 
-    <div class="stage" ref="stageRef" @click="onStageClick">
-      <!-- 目录抽屉 -->
-      <aside v-show="tocVisible" class="toc">
-        <div class="toc-head">
-          <span>目录</span>
-          <button class="toc-order" @click="toggleTocOrder">
-            {{ tocReversed ? "正序 ↑" : "倒序 ↓" }}
-          </button>
-        </div>
-        <div
-          v-for="c in displayChapters"
-          :key="c.index"
-          class="toc-item"
-          :class="{ active: c.index === index }"
-          @click="pickChapter(c.index)"
-        >
-          <span class="toc-title">{{ c.title }}</span>
-          <span
-            v-if="cachedIndexes.has(c.index)"
-            class="toc-cached"
-            title="已缓存，可离线阅读"
-            >●</span
-          >
-        </div>
-      </aside>
-
-      <!-- 本地书源文件缺失：明确的状态页，代替每次进来的 OS 原始报错 -->
-      <div v-if="fileMissing" class="file-missing">
-        <p class="fm-title">找不到书籍文件</p>
-        <p class="fm-desc">《{{ book?.name }}》的源文件可能已被移动、重命名或删除。</p>
-        <p class="fm-path" :title="book?.bookUrl">{{ book?.bookUrl }}</p>
-        <div class="fm-actions">
-          <el-button @click="goBack">返回</el-button>
-          <el-button type="danger" plain @click="removeMissingBook">从书架移除</el-button>
-        </div>
-      </div>
-
-      <!-- PDF：交给 WebView 内置 PDF 能力 -->
-      <iframe v-else-if="isPdf" class="pdf" :src="pdfURL" />
-
-      <!-- 漫画：图片流 -->
-      <div v-else-if="isComic" class="comic" @scroll="onScroll">
-        <img
-          v-for="(src, i) in content?.images || []"
-          :key="i"
-          :src="comicImageURL(src, book?.origin)"
-          loading="lazy"
-        />
-      </div>
-
-      <!-- 文本类：正文 HTML -->
-      <article
-        v-else
-        class="text"
-        :style="{ fontSize: fontSize + 'px', lineHeight: lineHeight }"
-        @scroll="onScroll"
-      >
-        <h1>{{ content?.title }}</h1>
-        <!--
-          正文来自书源或本地文件，属受控内容。
-          后续可接入净化规则（替换/去广告）后再渲染，进一步降低风险。
-        -->
-        <div class="content" v-html="displayHTML" />
-      </article>
-    </div>
-
-    <footer v-show="chromeShown" class="nav" :style="footerStyle">
-      <el-button :disabled="index <= 0" @click="prev">上一章</el-button>
-      <span class="pos">
-        {{ index + 1 }} / {{ content?.totalChapters || chapters.length }}
-      </span>
-      <el-button
-        :disabled="!content || content.nextIndex < 0"
-        @click="next"
-      >
-        下一章
-      </el-button>
-      <div class="spacer" />
-      <span class="setting">字号</span>
-      <el-slider
-        v-model="fontSize"
-        :min="14"
-        :max="28"
-        style="width: 120px"
+    <template v-if="splitOpen">
+      <div
+        class="splitter"
+        data-reader="splitter"
+        role="separator"
+        aria-orientation="vertical"
+        @pointerdown="startDrag"
       />
-    </footer>
+      <!-- 右栏默认空着（不猜用户想读哪本），由选书面板填上。 -->
+      <SplitPicker
+        v-if="!splitBookId"
+        :style="{ flex: String(1 - splitRatio) }"
+        @pick="pickSplitBook"
+        @cancel="closeSplit"
+      />
+      <ReaderPane
+        v-else
+        :key="splitBookId"
+        :book-id="splitBookId"
+        :active="activePane === 'right'"
+        compact
+        :style="{ flex: String(1 - splitRatio) }"
+        @close="closeSplit"
+        @loaded="onPaneLoaded"
+        @activate="activePane = 'right'"
+        @escape="closeSplit"
+      />
+    </template>
 
-    <!-- 问 AI 抽屉：读到一半有疑问时不必离开正文 -->
-    <AskAIDrawer
-      v-model="askOpen"
-      :book-id="boundBookId"
-      :book-name="book?.name || ''"
+    <!-- 拖分隔条时的透明遮罩：接管指针，兼防止拖动中选中正文/点到 iframe -->
+    <div
+      v-if="dragging"
+      class="split-veil"
+      data-reader="split-veil"
+      @pointermove="onDragMove"
+      @pointerup="endDrag"
+      @pointercancel="endDrag"
+    />
+
+    <!-- 取词浮层：桌面端贴在选区旁，移动端是底部卡片（由组件内部判定）。
+         放在外壳里而不是窗格里：全局只有一个，分屏时也不该出现两份。 -->
+    <DictPopover
+      :visible="dict.visible"
+      :loading="dict.loading"
+      :error="dict.error"
+      :result="dict.result"
+      :anchor="dict.anchor"
+      :mobile="platform.isMobile"
+      @close="dict.close()"
+      @lookup="(w: string) => dict.lookup(w)"
+      @play="(w: string) => dict.speak(w)"
     />
   </div>
 </template>
 
 <style scoped>
+/* 外壳只负责「窗格往哪儿摆」：单栏是一列（由 .pane 自己 flex:1 撑满），
+   分屏时改成一行两列 + 中间可拖的分隔条。 */
 .reader {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
-}
-.bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 16px;
-  background: #fff;
-  border-bottom: 1px solid #e5e7eb;
-}
-.title {
-  font-weight: 600;
-  /* 窄屏下书名/章节名必须能收缩加省略号：否则逐字折行会把顶栏撑成竖排大块。 */
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chapter {
-  font-size: 12px;
-  color: #6b7280;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.spacer {
-  flex: 1;
-}
-.icon-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  cursor: pointer;
-}
-.icon-btn:hover:not(:disabled) {
-  background: rgba(0, 0, 0, 0.06);
-}
-.icon-btn:disabled {
-  cursor: default;
-  opacity: 0.4;
-}
-.icon-btn svg {
-  width: 17px;
-  height: 17px;
-  fill: none;
-  stroke: rgba(0, 0, 0, 0.7);
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.stage {
-  flex: 1;
-  display: flex;
   min-height: 0;
 }
-/* 本地书源文件缺失的状态页 */
-.file-missing {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 24px;
-  text-align: center;
+.reader.is-split {
+  flex-direction: row;
 }
-.file-missing .fm-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #303133;
-}
-.file-missing .fm-desc {
-  color: #606266;
-}
-.file-missing .fm-path {
-  max-width: 80%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: #909399;
-  font-family: monospace;
-}
-.file-missing .fm-actions {
-  margin-top: 8px;
-  display: flex;
-  gap: 12px;
-}
-.toc {
-  width: 240px;
+.splitter {
   flex: none;
-  overflow: auto;
-  background: #fff;
+  width: 6px;
+  cursor: col-resize;
+  background: #eef0f3;
+  border-left: 1px solid #e5e7eb;
   border-right: 1px solid #e5e7eb;
-  padding: 8px 0;
+  touch-action: none;
 }
-.toc-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 2px 14px 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #374151;
-  border-bottom: 1px solid #f3f4f6;
+.splitter:hover {
+  background: #d8dde4;
 }
-.toc-order {
-  border: none;
+/* 拖拽期间盖住整个阅读区：接管指针 + 阻止拖动中选中正文 */
+.split-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  cursor: col-resize;
   background: transparent;
-  padding: 2px 4px;
-  font-size: 12px;
-  font-weight: 400;
-  color: #4f46e5;
-  cursor: pointer;
-}
-.toc-order:hover {
-  text-decoration: underline;
-}
-.toc-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
-  font-size: 13px;
-  cursor: pointer;
-  color: #374151;
-}
-.toc-title {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.toc-cached {
-  flex: none;
-  font-size: 8px;
-  color: #16a34a;
-}
-.toc-item:hover {
-  background: #f3f4f6;
-}
-.toc-item.active {
-  color: #4338ca;
-  font-weight: 600;
-  background: #eef2ff;
-}
-.pdf {
-  flex: 1;
-  border: none;
-}
-.comic {
-  flex: 1;
-  overflow: auto;
-  background: #1f2328;
-}
-.comic img {
-  display: block;
-  width: 100%;
-}
-.text {
-  flex: 1;
-  overflow: auto;
-  padding: 32px 16px 64px;
-  background: #fffdf7;
-}
-.text h1 {
-  font-size: 1.4em;
-  margin: 0 0 20px;
-}
-.content {
-  max-width: 760px;
-  margin: 0 auto;
-}
-.content :deep(p) {
-  margin: 0 0 1em;
-  text-indent: 2em;
-}
-.content :deep(img) {
-  max-width: 100%;
-}
-/*
- * 正在朗读的段落。用 box-decoration-break 让跨行的底色连成一片，
- * 否则多行段落会显示成一截一截的。
- */
-.content :deep(.tts-active),
-.content :deep(.tts-seg.tts-active) {
-  background: rgba(99, 102, 241, 0.16);
-  border-radius: 3px;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
-  transition: background 0.2s ease;
-}
-.nav {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 16px;
-  background: #fff;
-  border-top: 1px solid #e5e7eb;
-}
-.pos {
-  font-size: 13px;
-  color: #6b7280;
-}
-.setting {
-  font-size: 13px;
-  color: #6b7280;
-}
-
-/* AI 引用跳转的高亮：淡黄底而非高饱和色，避免打断阅读节奏 */
-:deep(mark.ai-hit) {
-  background: #fff3c4;
-  color: inherit;
-  padding: 0 1px;
-  border-radius: 2px;
-}
-
-/* 移动端：顶栏去掉章节名（正文里已有 h1），压缩内边距，抽屉加宽好点按 */
-@media (max-width: 640px) {
-  .bar {
-    gap: 8px;
-    padding: 6px 10px;
-  }
-  .chapter {
-    display: none;
-  }
-  /* 复制书籍地址在手机上几乎不用，让位给书名 */
-  .icon-btn {
-    display: none;
-  }
-  .nav {
-    gap: 8px;
-    padding: 6px 10px;
-  }
-  .toc {
-    width: 62%;
-  }
+  touch-action: none;
 }
 </style>

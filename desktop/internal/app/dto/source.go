@@ -26,6 +26,20 @@ type SourceView struct {
 	Raw          string     `json:"raw"`
 	LastUpdateAt *time.Time `json:"lastUpdateAt"`
 	CreatedAt    time.Time  `json:"createdAt"`
+
+	// ── 以下字段从 Raw 派生，不落库 ──────────────────────────
+	// 书源管理界面需要按「是否有发现 / 是否需登录 / 响应时间 / 权重 / 类型」
+	// 做筛选、排序与徽标展示，这些值都在原始 JSON 里。派生值随列表一起下发，
+	// 前端就不必为每个源各拉一次完整 Raw（上千源时那是几十 MB）。
+	// 派生规则见 domain.ParseSourceMeta，默认值与 Legado 原生实体一致。
+	Type            int    `json:"type"`             // 0 文本 / 1 音频 / 2 图片 / 3 文件
+	EnabledExplore  bool   `json:"enabledExplore"`   // 是否在发现页展示
+	HasExploreURL   bool   `json:"hasExploreUrl"`    // 是否配置了 exploreUrl
+	HasLoginURL     bool   `json:"hasLoginUrl"`      // 是否配置了 loginUrl
+	EnabledCookie   bool   `json:"enabledCookieJar"` // 是否自动保存 Cookie
+	Weight          int    `json:"weight"`           // 智能排序权重
+	RespondTime     int64  `json:"respondTime"`      // 响应时间（毫秒）
+	VariableComment string `json:"variableComment"`  // 源变量说明
 }
 
 // NewSourceView 从领域实体转换书源视图（含 Raw，仅限单条接口使用）。
@@ -42,17 +56,58 @@ func NewSourceBriefView(s *domain.BookSource) SourceView {
 		t := s.LastUpdateAt
 		last = &t
 	}
+	meta := s.Meta()
 	return SourceView{
-		ID:           s.ID,
-		Name:         s.Name,
-		Group:        s.Group,
-		URL:          s.URL,
-		Enabled:      s.Enabled,
-		Order:        s.Order,
-		Comment:      s.Comment,
-		LastUpdateAt: last,
-		CreatedAt:    s.CreatedAt,
+		ID:              s.ID,
+		Name:            s.Name,
+		Group:           s.Group,
+		URL:             s.URL,
+		Enabled:         s.Enabled,
+		Order:           s.Order,
+		Comment:         s.Comment,
+		LastUpdateAt:    last,
+		CreatedAt:       s.CreatedAt,
+		Type:            meta.Type,
+		EnabledExplore:  meta.EnabledExplore,
+		HasExploreURL:   meta.HasExploreURL,
+		HasLoginURL:     meta.HasLoginURL,
+		EnabledCookie:   meta.EnabledCookie,
+		Weight:          meta.Weight,
+		RespondTime:     meta.RespondTime,
+		VariableComment: meta.VariableComment,
 	}
+}
+
+// SourceGroupView 是书源管理界面的一个分组条目。
+//
+// Count 是组内书源数量：分组菜单要显示「分组名 (12)」，
+// 分组管理对话框也要靠它判断哪些组是空的。
+type SourceGroupView struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// SourceVariableView 是「设置源变量」对话框的数据。
+//
+// 原生把源变量存在缓存里、书源实体不持久化；桌面端存在独立表
+// （source_variables），按书源地址作为主键。
+type SourceVariableView struct {
+	SourceID int64  `json:"sourceId"`
+	Name     string `json:"name"`
+	URL      string `json:"url"`
+	Variable string `json:"variable"`
+	// Comment 是书源的 variableComment 字段（原生把它作为对话框提示文本），
+	// 为空时前端显示一句通用说明。
+	Comment string `json:"comment"`
+}
+
+// NewSourceGroupViews 转换分组列表。
+func NewSourceGroupViews(in []domain.SourceGroup) []SourceGroupView {
+	out := make([]SourceGroupView, 0, len(in))
+	for _, g := range in {
+		out = append(out, SourceGroupView{Name: g.Name, Count: g.Count})
+	}
+	return out
 }
 
 // NewSourceViews 批量转换书源视图（含 Raw，仅限单条语义的调用方）。

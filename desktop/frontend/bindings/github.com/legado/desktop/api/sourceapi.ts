@@ -15,6 +15,23 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 import * as dto$0 from "../internal/app/dto/models.js";
 
 /**
+ * AddGroupToNoGroup 新建分组：把所有无分组的书源归入该分组。
+ * 
+ * 分组不是独立实体（只是书源上的一个字段），所以「建空分组」没有意义；
+ * 原生也是同样的语义。
+ */
+export function AddGroupToNoGroup(group: string): $CancellablePromise<number> {
+    return $Call.ByID(3282153924, group);
+}
+
+/**
+ * AddToGroup 把选中书源加入分组。
+ */
+export function AddToGroup(ids: number[] | null, group: string): $CancellablePromise<void> {
+    return $Call.ByID(2546641760, ids, group);
+}
+
+/**
  * AddToShelf 把搜索结果加入书架。
  * 
  * name/author 来自列表页（搜索或发现）已经解析到的信息：书源的详情页规则
@@ -28,10 +45,33 @@ export function AddToShelf(sourceID: number, bookURL: string, name: string, auth
 }
 
 /**
+ * ClearCookie 清除书源站点的 Cookie。
+ * 
+ * 登录态异常（站点改版、会话残留）时先清再重登，是原生编辑页的同名菜单。
+ */
+export function ClearCookie(id: number): $CancellablePromise<void> {
+    return $Call.ByID(921316852, id);
+}
+
+/**
  * Delete 删除书源。
  */
 export function Delete(id: number): $CancellablePromise<void> {
     return $Call.ByID(435001278, id);
+}
+
+/**
+ * DeleteBatch 批量删除书源。
+ */
+export function DeleteBatch(ids: number[] | null): $CancellablePromise<void> {
+    return $Call.ByID(726178378, ids);
+}
+
+/**
+ * DeleteGroup 删除分组（书源本身保留）。
+ */
+export function DeleteGroup(name: string): $CancellablePromise<void> {
+    return $Call.ByID(242265297, name);
 }
 
 /**
@@ -77,6 +117,13 @@ export function GetSubscription(id: number): $CancellablePromise<dto$0.Subscript
 }
 
 /**
+ * GetVariable 读取书源变量（「设置源变量」对话框）。
+ */
+export function GetVariable(id: number): $CancellablePromise<dto$0.SourceVariableView> {
+    return $Call.ByID(2478155527, id);
+}
+
+/**
  * Import 导入书源 JSON。
  * 
  * 入参为字符串而非字节切片：Wails 绑定对 string 的传递更直观。
@@ -113,10 +160,63 @@ export function ListExploreSources(): $CancellablePromise<dto$0.ExploreSourceBri
 }
 
 /**
+ * ListGroups 列出全部分组及组内书源数量。
+ */
+export function ListGroups(): $CancellablePromise<dto$0.SourceGroupView[] | null> {
+    return $Call.ByID(1638862349);
+}
+
+/**
  * ListSubscriptions 列出全部书源订阅。
  */
 export function ListSubscriptions(): $CancellablePromise<dto$0.SubscriptionView[] | null> {
     return $Call.ByID(2072325317);
+}
+
+/**
+ * MoveBottom 把选中书源置底。
+ */
+export function MoveBottom(ids: number[] | null): $CancellablePromise<void> {
+    return $Call.ByID(250773675, ids);
+}
+
+/**
+ * MoveTop 把选中书源置顶（仅在手动排序下有意义）。
+ */
+export function MoveTop(ids: number[] | null): $CancellablePromise<void> {
+    return $Call.ByID(2266768851, ids);
+}
+
+/**
+ * PreviewBook 打开一本书用于查看详情或试读，不会加入书架。
+ * 
+ * 发现/搜索点开书籍时调用：先把书入库拿到 id（详情、目录、进度都按 id 存），
+ * 但标记为不在书架；用户明确点「加入书架」（或退出阅读器时确认）才转正。
+ * name/author/variable 的约定与 AddToShelf 相同。
+ */
+export function PreviewBook(sourceID: number, bookURL: string, name: string, author: string, variable: string): $CancellablePromise<dto$0.BookBrief> {
+    return $Call.ByID(2611389486, sourceID, bookURL, name, author, variable);
+}
+
+/**
+ * RemoveFromGroup 把选中书源移出分组。
+ */
+export function RemoveFromGroup(ids: number[] | null, group: string): $CancellablePromise<void> {
+    return $Call.ByID(2317950040, ids, group);
+}
+
+/**
+ * RenameGroup 重命名分组；newName 为空表示清空该分组。
+ */
+export function RenameGroup(oldName: string, newName: string): $CancellablePromise<void> {
+    return $Call.ByID(2866291390, oldName, newName);
+}
+
+/**
+ * Reorder 按给定顺序重排书源（拖拽排序结束后调用）。
+ */
+export function Reorder(ids: number[] | null): $CancellablePromise<void> {
+    return $Call.ByID(279069300, ids);
 }
 
 /**
@@ -155,10 +255,31 @@ export function SetEnabled(id: number, enabled: boolean): $CancellablePromise<vo
 }
 
 /**
+ * SetEnabledBatch 批量启停书源。
+ */
+export function SetEnabledBatch(ids: number[] | null, enabled: boolean): $CancellablePromise<void> {
+    return $Call.ByID(2190434140, ids, enabled);
+}
+
+/**
+ * SetEnabledExploreBatch 批量开/关「发现」。
+ */
+export function SetEnabledExploreBatch(ids: number[] | null, enabled: boolean): $CancellablePromise<void> {
+    return $Call.ByID(1918584477, ids, enabled);
+}
+
+/**
  * SetSubscriptionEnabled 启停订阅；停用的订阅不参与全部刷新。
  */
 export function SetSubscriptionEnabled(id: number, enabled: boolean): $CancellablePromise<void> {
     return $Call.ByID(1831637599, id, enabled);
+}
+
+/**
+ * SetVariable 写入书源变量；空串表示清除。
+ */
+export function SetVariable(id: number, variable: string): $CancellablePromise<void> {
+    return $Call.ByID(481683907, id, variable);
 }
 
 /**
@@ -183,4 +304,14 @@ export function SyncSubscription(id: number): $CancellablePromise<dto$0.SourceIm
  */
 export function Validate(ids: number[] | null): $CancellablePromise<dto$0.SourceCheckResult[] | null> {
     return $Call.ByID(4119977415, ids);
+}
+
+/**
+ * ValidateWith 校验书源，并指定搜索校验用的关键词。
+ * 
+ * 关键词不是可有可无的装饰：部分书源只在特定词下才返回结果，用默认词校验会
+ * 误报「搜索规则失效」。原生在开始校验前弹框让用户填，这里同样接受关键词。
+ */
+export function ValidateWith(ids: number[] | null, keyword: string): $CancellablePromise<dto$0.SourceCheckResult[] | null> {
+    return $Call.ByID(3971558863, ids, keyword);
 }

@@ -92,6 +92,13 @@ type Book struct {
 	CreatedAt  time.Time `json:"createdAt"`
 	UpdatedAt  time.Time `json:"updatedAt"`
 	LastReadAt time.Time `json:"lastReadAt"`
+
+	// Previewing 表示这本书只是「试读」：已入库供详情页与阅读器使用，
+	// 但不出现在书架列表里（发现/搜索点开书时不会自动入架）。
+	//
+	// 零值 false 表示正常在架——本地导入、WebDAV、命令行等既有创建路径
+	// 都不需要显式设置就保持原语义。
+	Previewing bool `json:"previewing"`
 }
 
 // IsLocal 报告该书是否为本地导入书籍。

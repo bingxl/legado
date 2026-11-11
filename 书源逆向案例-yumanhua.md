@@ -419,3 +419,12 @@ if (isSearch) bookSource.bookUrlPattern?.let {
 5. Python 里先跑通算法，再考虑移植
 6. 移植时按 ES5 写，手写 base64，避开 `##` / `{{`
 7. 用「多本书 × 多章节 × 边界」矩阵验收，而不是看一条成功
+
+---
+
+## 10. 2026-11-10 桌面端复验与加固
+
+- 站点 **HTTPS 证书已过期**（`SEC_E_CERT_EXPIRED`），`bookSourceUrl` 必须保持 `http://`；`http://yumanhua.com/` 返回 200 且不跳转。
+- 同一章节 URL 每次请求的 packer 字典数量与 `data-id` 都会变（实测 `62,319` / `data-id=9` 与 `62,73` / `data-id=4`），10 个 key 表仍未变。正文规则因此去掉了写死的 `__c0rst96`，改为 `var __\w+` + 长 base64 串特征匹配；`sources/` 与 `legado-go/testdata/sources/` 两份副本保持完全一致。
+- 桌面端复验全绿：JVM CLI 搜索/详情/314 章目录/正文（第 1、150、314 章分别 4、13、90 张签名直链）；Go 引擎 `validate -online` 命中 42 条搜索、145 章目录、正文图片正常；`debug` 链路（详情 → POST /morechapter → 314 章）可逐步打印。
+- 图片直链 `x-expires` 约 4~7 天后失效，章节正文需实时解析，不要长期缓存。

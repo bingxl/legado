@@ -156,6 +156,42 @@ LEGADO_DESKTOP_HOME=C:\<repo>\.devdata task dev:mcp
 Note this starts with an empty library; the existing one lives in
 `%LOCALAPPDATA%\legado-desktop\legado.db`.
 
+### Troubleshooting: 双击 exe 没反应，只有"以管理员身份运行"才能启动
+
+症状：资源管理器双击 `desktop\bin\legado-desktop.exe` **什么都没发生**（进程根本没起来，
+没有报错、没有事件日志、没有弹窗）；但"以管理员身份运行"却能正常打开。
+
+根因不在应用：仓库位于 `C:\Users\<用户>\work` 下，而 `work` 目录被施加了
+`Mandatory Label\Low Mandatory Level`（低完整性标签，另有 `Everyone:(CI)(DENY)(DC)`）。
+Windows 的 MIC 规则要求**镜像的完整性级别不低于调用进程**，于是普通权限的资源管理器
+（Medium IL）无法执行 Low 标签的 exe，只有管理员进程（High IL）可以。
+
+对照实验（与本应用无关）：把系统 `notepad.exe` 复制进 `work` 子目录双击，同样起不来；
+把本应用的 exe 复制到 `C:\Users\<用户>\` 下双击，正常启动。
+
+```powershell
+# 验证标签：icacls "C:\Users\<用户>\work"   → 看到 Mandatory Label\Low Mandatory Level
+# 解决：发布到工作区之外（默认 %LOCALAPPDATA%\Programs\legado\）
+task publish
+# 或把目录标签改回 Medium（会削弱工作区写保护，谨慎）
+icacls "C:\Users\<用户>\work" /setintegritylevel (OI)(CI)M
+```
+
+排查这类"双击无反应"时的通用手法：`icacls <exe>` 看完整性标签；`Get-WinEvent` 查
+CodeIntegrity / AppLocker / Defender 日志；再用**别的 exe**（如 notepad）做对照，
+先分清是环境问题还是应用问题。
+
+### Troubleshooting: 启动失败静默（没有任何提示）
+
+生产构建是 `-H windowsgui`（GUI 子系统，无控制台），且 Wails 在非 debug 模式下默认
+日志器是 `io.Discard` —— 任何启动失败都是彻底静默的。应用侧已加保护：日志落
+`%LOCALAPPDATA%\legado-desktop\app.log`，致命错误弹原生 MessageBox
+（`main.go` 的 `setupLogging` / `fatalSniffer`）。排查启动问题先看这个日志文件。
+
+另注：`bin\legado-desktop.exe` 若是用 `task ui:mcp` 构建的，那是**带 MCP 标签的开发构建**，
+会额外监听 127.0.0.1:9099；端口被占时应用会立刻退出（同样只写 stderr、双击看不到）。
+分发请用 `task build` 的生产构建。
+
 ### Troubleshooting: dev 模式白屏（`task dev:mcp` 窗口全白，MCP 探针全部超时）
 
 症状：应用进程活着、窗口正常显示且标题正确、`MCP server started` 也打印了，但窗口内容全白；

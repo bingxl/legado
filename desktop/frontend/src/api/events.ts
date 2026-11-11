@@ -26,6 +26,7 @@ export const BackendEvents = {
   AIIndexProgress: "ai:index:progress",
   AIAnswerChunk: "ai:answer:chunk",
   AIAnswerDone: "ai:answer:done",
+  DictInstallProgress: "dict:install:progress",
 } as const;
 
 /** 章节缓存进度载荷（对应 Go 侧 dto.CacheProgress）。 */
@@ -123,8 +124,20 @@ export interface ProgressPayload {
   message?: string;
 }
 
-/** 全局运行时暴露的事件接口（只用到 On）。 */
-interface WailsEventsApi {
+/**
+ * 书源校验进度（对应 Go 侧 dto.SourceCheckProgress）。
+ *
+ * 除整体进度外还带**单条结论**：书源管理页在每行显示自己的「成功/失败」，
+ * 不是只有一根总进度条。sourceId 为 0 表示纯进度事件。
+ */
+export interface SourceCheckProgressPayload extends ProgressPayload {
+  sourceId: number;
+  ok: boolean;
+  /** 行内短消息，形如「成功」「失败：搜索无结果」 */
+  message: string;
+}
+
+/** 全局运行时暴露的事件接口（只用到 On）。 */interface WailsEventsApi {
   On(name: string, callback: (event: { data: unknown }) => void): () => void;
 }
 
@@ -200,7 +213,7 @@ export function onImportProgress(handler: (data: ProgressPayload) => void) {
 
 /** 订阅书源校验进度。 */
 export function onSourceCheckProgress(
-  handler: (data: ProgressPayload) => void,
+  handler: (data: SourceCheckProgressPayload) => void,
 ) {
   return subscribe(BackendEvents.SourceCheckProgress, handler);
 }
@@ -253,4 +266,34 @@ export function onSourceDebugDone(
   handler: (data: SourceDebugDonePayload) => void,
 ) {
   return subscribe(BackendEvents.SourceDebugDone, handler);
+}
+
+/**
+ * 词典扩展包安装进度（对应 Go 侧 dto.DictInstallProgress）。
+ *
+ * seq 单调递增：事件异步投递，迟到很常见，前端必须按 seq 丢弃过期事件，
+ * 否则「已完成」会被一条迟到的「下载中」打回进行中。
+ */
+export interface DictInstallProgressPayload {
+  packId: string;
+  /** download / verify / convert / done / failed / canceled */
+  phase: string;
+  done: number;
+  total: number;
+  bytes: number;
+  totalBytes: number;
+  sourceId?: string;
+  sourceName?: string;
+  /** 非空表示刚从哪个源切过来，界面必须明示。 */
+  switchedFrom?: string;
+  message?: string;
+  entries?: number;
+  seq: number;
+}
+
+/** 订阅词典扩展包安装进度。 */
+export function onDictInstallProgress(
+  handler: (data: DictInstallProgressPayload) => void,
+) {
+  return subscribe(BackendEvents.DictInstallProgress, handler);
 }

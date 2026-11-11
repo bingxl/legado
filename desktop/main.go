@@ -8,11 +8,16 @@ package main
 import (
 	"embed"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
+	"strings"
+	"sync"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -30,8 +35,100 @@ var assets embed.FS
 
 func main() {
 	if err := run(); err != nil {
-		log.Fatal(err)
+		log.Printf("启动失败: %v", err)
+		showFatalDialog("Legado 启动失败", err.Error()+logHint())
+		os.Exit(1)
 	}
+}
+
+// appLogPath 启动日志的绝对路径（数据目录下的 app.log），空串表示还没建好。
+var appLogPath string
+
+// logHint 返回给用户的日志位置提示。
+func logHint() string {
+	if appLogPath == "" {
+		return ""
+	}
+	return "\n\n详细日志：" + appLogPath
+}
+
+// setupLogging 把日志同时写到 stderr 与数据目录下的 app.log，并返回可复用的
+// 写入器（Wails 系统日志也走它）。
+//
+// 为什么必须落文件：Wails 的致命错误（WebView2 控制器创建失败、宿主初始化失败等）
+// 在库内部直接 os.Exit(1)，错误只经标准库 log 输出到 stderr。而从资源管理器双击
+// 启动的进程**没有控制台**，stderr 无处可去 —— 用户只看到"双击没反应"，既不知道
+// 原因也没法自救。落盘后可以在弹窗里告知路径，也便于自动化测试断言失败原因。
+//
+// 另外生产构建下 Wails 默认日志器是 io.Discard（见 wails application.go：
+// Options.Logger 为空且非 debug 模式时直接丢弃），宿主层错误一个字都不会留下。
+func setupLogging(root string) io.Writer {
+	appLogPath = filepath.Join(root, "app.log")
+	f, err := os.OpenFile(appLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.SetOutput(os.Stderr)
+		return os.Stderr
+	}
+	w := io.MultiWriter(os.Stderr, &fatalSniffer{w: f})
+	log.SetOutput(w)
+	log.SetFlags(log.LstdFlags)
+	return w
+}
+
+// fatalSniffer 在写日志的同时识别致命错误标记并弹出原生错误框。
+//
+// Wails 的致命错误是库内部 os.Exit(1)，main 里的错误处理根本走不到，
+// 只能在日志输出这一层拦截。同一错误只弹一次，避免刷屏。
+type fatalSniffer struct {
+	w     io.Writer
+	mu    sync.Mutex
+	buf   []byte
+	shown bool
+}
+
+// fatalMarkers 是"启动即致命"的日志特征 → 面向用户的中文说明。
+var fatalMarkers = []struct{ mark, hint string }{
+	{"[WebView2 Error]", "WebView 渲染内核初始化失败。"},
+	{"mcp: failed to listen", "调试端口 9099 已被占用（可能已有一个实例在运行）。"},
+}
+
+// Write 实现 io.Writer：先落盘，再判断是否需要弹窗。
+func (f *fatalSniffer) Write(p []byte) (int, error) {
+	n, err := f.w.Write(p)
+
+	f.mu.Lock()
+	f.buf = append(f.buf, p...)
+	if len(f.buf) > 8192 {
+		f.buf = f.buf[len(f.buf)-8192:]
+	}
+	for _, m := range fatalMarkers {
+		if f.shown || !strings.Contains(string(f.buf), m.mark) {
+			continue
+		}
+		f.shown = true
+		line := firstLineWith(f.buf, m.mark)
+		f.mu.Unlock()
+		// 同步弹窗：宿主紧接着就会 os.Exit，异步执行会来不及显示。
+		showFatalDialog("Legado 启动失败", m.hint+"\n"+line+logHint())
+		f.mu.Lock()
+		break
+	}
+	f.mu.Unlock()
+	return n, err
+}
+
+// firstLineWith 返回包含 mark 的那一行（去掉前缀时间戳）。
+func firstLineWith(buf []byte, mark string) string {
+	s := string(buf)
+	i := strings.Index(s, mark)
+	if i < 0 {
+		return mark
+	}
+	rest := s[i:]
+	if j := strings.IndexByte(rest, '\n'); j >= 0 {
+		rest = rest[:j]
+	}
+	return strings.TrimSpace(rest)
 }
 
 // run 装配并启动应用，把错误统一收敛到 main。
@@ -43,6 +140,7 @@ func run() error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return fmt.Errorf("创建数据目录失败: %w", err)
 	}
+	appLog := setupLogging(root)
 
 	// ── 事件总线 ────────────────────────────────────────────────
 	// 先创建占位实例，Wails App 就绪后再 Attach。
@@ -56,7 +154,7 @@ func run() error {
 	defer biz.Close()
 
 	// ── Wails 绑定层 ────────────────────────────────────────────
-	systemAPI := api.NewSystemAPI(platformName, safeAreaJSON)
+	systemAPI := api.NewSystemAPI(platformName, safeAreaJSON, setFullscreen, isFullscreen)
 	bookshelfAPI := api.NewBookshelfAPI(biz.Bookshelf)
 	libraryAPI := api.NewLibraryAPI(biz.Library)
 	readerAPI := api.NewReaderAPI(biz.Reader)
@@ -67,10 +165,14 @@ func run() error {
 	replaceRuleAPI := api.NewReplaceRuleAPI(biz.ReplaceRule)
 	sourceDebugAPI := api.NewSourceDebugAPI(biz.SourceDebug)
 	sourceLoginAPI := api.NewSourceLoginAPI(biz.SourceLogin)
+	dictAPI := api.NewDictAPI(biz.Dict)
 
 	wailsApp := application.New(application.Options{
 		Name:        "legado-desktop",
 		Description: "Legado 桌面阅读器",
+		// 显式给日志器：生产构建下 Wails 默认丢弃全部系统日志，
+		// 宿主层错误将无处可查（见 setupLogging 的说明）。
+		Logger: slog.New(slog.NewTextHandler(appLog, &slog.HandlerOptions{Level: slog.LevelInfo})),
 		Services: []application.Service{
 			application.NewService(bookshelfAPI),
 			application.NewService(libraryAPI),
@@ -82,6 +184,7 @@ func run() error {
 			application.NewService(sourceDebugAPI),
 			application.NewService(sourceLoginAPI),
 			application.NewService(aiAPI),
+			application.NewService(dictAPI),
 			application.NewService(systemAPI),
 		},
 		Assets: application.AssetOptions{

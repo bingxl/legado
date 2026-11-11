@@ -116,7 +116,7 @@ onMounted(() => {
   <div class="webdav">
     <el-tabs v-model="activeTab" class="tabs">
       <el-tab-pane label="连接配置" name="config">
-        <el-form label-width="100px" style="max-width: 520px; padding: 16px">
+        <el-form label-width="100px" style="max-width: min(100%, 520px); padding: var(--r-pad); box-sizing: border-box">
           <el-form-item label="服务地址">
             <el-input v-model="form.url" placeholder="https://dav.example.com" />
           </el-form-item>
@@ -144,11 +144,11 @@ onMounted(() => {
         </el-form>
       </el-tab-pane>
 
-      <el-tab-pane label="备份文件" name="files">        <div class="toolbar">
+      <el-tab-pane label="备份文件" name="files" class="r-scroll-x">        <div class="toolbar">
           <el-button type="primary" @click="uploadBackup">上传备份</el-button>
           <el-button @click="list" :loading="loading">刷新</el-button>
           <div class="spacer" />
-          <span v-if="progress" class="progress">{{ progress.message }}</span>
+          <span v-if="progress" class="progress r-ellipsis">{{ progress.message }}</span>
         </div>
         <el-table :data="entries" size="small" v-loading="loading">
           <el-table-column prop="name" label="名称" min-width="220" />
@@ -178,23 +178,29 @@ onMounted(() => {
 
 <style scoped>
 .webdav {
-  padding: 8px 16px;
+  padding: var(--r-pad-sm) var(--r-pad);
   height: 100%;
+  min-width: 0;
 }
 .tabs {
   height: 100%;
+  min-width: 0;
 }
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 0;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  padding: var(--r-pad-sm) 0;
+  min-width: 0;
 }
 .spacer {
   flex: 1;
+  min-width: 0;
 }
 .progress {
   font-size: 12px;
   color: #9a3412;
+  min-width: 0;
 }
 </style>

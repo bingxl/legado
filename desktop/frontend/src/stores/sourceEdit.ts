@@ -90,6 +90,10 @@ export const useSourceEditStore = defineStore("sourceEdit", () => {
   const history = shallowRef<string[]>([]);
   const historyCursor = ref(-1);
   let snapshotTimer: number | null = null;
+  /** 当前正在连续编辑的字段（`a.b` 形式）；null 表示 JSON 视图。 */
+  let sessionKey: string | null = null;
+  /** 本次编辑会话写入历史的栈顶位置，-1 表示还没写过。 */
+  let sessionTop = -1;
 
   /** 是否有未保存的修改。 */
   const dirty = computed(() => serialize() !== baseline.value);
@@ -112,24 +116,43 @@ export const useSourceEditStore = defineStore("sourceEdit", () => {
     return JSON.stringify(json.value, null, 2);
   }
 
-  /** 把当前状态压进历史栈。debounce 由调用方控制。 */
-  function snapshot(): void {
+  /**
+   * 把当前状态压进历史栈。debounce 由调用方控制。
+   *
+   * `editKey` 是同一次编辑会话的标识（字段路径）。同一个字段连着改时只保留
+   * 最终结果：输入框「先清空再输入」会先产生一个空值中间态，不合并的话一次
+   * 撤销只回到「空」而不是原值，用户会以为撤销坏了。
+   */
+  function snapshot(editKey: string | null = null): void {
     const text = serialize();
     const cur = history.value[historyCursor.value];
     if (cur === text) return;
+    if (editKey !== null && editKey === sessionKey && sessionTop === historyCursor.value && sessionTop >= 0) {
+      const merged = history.value.slice();
+      merged[sessionTop] = text;
+      history.value = merged;
+      return;
+    }
     const next = history.value.slice(0, historyCursor.value + 1);
     next.push(text);
     if (next.length > HISTORY_LIMIT) next.shift();
     history.value = next;
     historyCursor.value = next.length - 1;
+    sessionKey = editKey;
+    sessionTop = editKey === null ? -1 : historyCursor.value;
   }
 
   /** 输入类改动合并压栈：连续打字只在停下 500ms 后记一步。 */
-  function scheduleSnapshot(): void {
+  function scheduleSnapshot(editKey: string | null = null): void {
+    if (editKey !== sessionKey) {
+      // 换了字段（或从字段换到 JSON 视图）= 新的一次编辑，重新开一个合并窗口。
+      sessionKey = editKey;
+      sessionTop = -1;
+    }
     if (snapshotTimer !== null) window.clearTimeout(snapshotTimer);
     snapshotTimer = window.setTimeout(() => {
       snapshotTimer = null;
-      snapshot();
+      snapshot(editKey);
     }, 500);
   }
 
@@ -156,6 +179,8 @@ export const useSourceEditStore = defineStore("sourceEdit", () => {
     loading.value = false;
     history.value = [];
     historyCursor.value = -1;
+    sessionKey = null;
+    sessionTop = -1;
     snapshot();
   }
 
@@ -180,7 +205,7 @@ export const useSourceEditStore = defineStore("sourceEdit", () => {
   function setField(path: string[], value: unknown): void {
     writePath(json.value, path, value);
     rawText.value = serialize();
-    scheduleSnapshot();
+    scheduleSnapshot(path.join("."));
   }
 
   /** 应用 JSON 视图里的文本。返回是否成功，失败时 rawError 有原因。 */
@@ -202,11 +227,28 @@ export const useSourceEditStore = defineStore("sourceEdit", () => {
     }
   }
 
+  /** 撤销/重做后历史位置变了，后续编辑要重新开一个合并窗口。 */
+  function resetSession(): void {
+    sessionKey = null;
+    sessionTop = -1;
+  }
+
+  /**
+   * 丢弃 JSON 视图的语法错误。
+   *
+   * 「重新载入」是把输入框换回草稿原文，用户已经放弃那段非法文本了；
+   * 那个错误还留着的话，保存会一直被拦（提示 JSON 有语法错误）。
+   */
+  function discardRawError(): void {
+    rawError.value = "";
+  }
+
   function undo(): void {
     if (!canUndo.value) return;
     historyCursor.value -= 1;
     json.value = JSON.parse(history.value[historyCursor.value]) as SourceJson;
     rawText.value = serialize();
+    resetSession();
   }
 
   function redo(): void {
@@ -214,6 +256,7 @@ export const useSourceEditStore = defineStore("sourceEdit", () => {
     historyCursor.value += 1;
     json.value = JSON.parse(history.value[historyCursor.value]) as SourceJson;
     rawText.value = serialize();
+    resetSession();
   }
 
   /** 保存到库。返回保存后的视图；校验不通过时抛出可直接展示的错误。 */
@@ -276,6 +319,7 @@ export const useSourceEditStore = defineStore("sourceEdit", () => {
     getField,
     setField,
     applyRawText,
+    discardRawError,
     undo,
     redo,
     save,

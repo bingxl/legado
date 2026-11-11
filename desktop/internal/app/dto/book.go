@@ -35,6 +35,9 @@ type BookBrief struct {
 	// FileMissing 仅对本地书有意义：源文件已被移动/重命名/删除。
 	// 网络书恒为 false；由服务层 stat 后填充（DTO 不做 I/O）。
 	FileMissing bool `json:"fileMissing"`
+	// InShelf 表示这本书已在书架中。false 表示只是试读（发现/搜索点开后
+	// 读过几章，但没点「加入书架」），书架列表不会展示它。
+	InShelf bool `json:"inShelf"`
 }
 
 // NewBookBrief 从领域实体构造书架摘要。
@@ -60,6 +63,8 @@ func NewBookBrief(b *domain.Book) BookBrief {
 		Percent:         b.ReadPercent(),
 		LastReadAt:      lastRead,
 		UpdatedAt:       b.UpdatedAt,
+		FileMissing:     false, // 由服务层 stat 后填充
+		InShelf:         !b.Previewing,
 	}
 }
 

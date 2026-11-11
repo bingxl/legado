@@ -12,6 +12,18 @@ import (
 // safeAreaFunc 返回当前平台的安全区 JSON。由 main 注入，避免本层出现平台分支。
 type safeAreaFunc func() string
 
+// setFullscreenFunc 切换主窗口全屏态，返回操作后的实际状态。
+//
+// 与 safeAreaFunc 同样由 main 注入：桌面端操作窗口，安卓端没有"窗口宿主"这一层
+// （全屏沉浸由阅读器的栏位开关负责），返回 false 即可。这样本层零平台分支。
+type setFullscreenFunc func(on bool) bool
+
+// isFullscreenFunc 查询主窗口当前是否全屏。
+//
+// 需要单独一个函数而不是复用 set 的返回值：系统级退出（Win+↓、mac 绿灯）
+// 不经过我们的按钮，前端只能主动查一次来对账。
+type isFullscreenFunc func() bool
+
 // SystemAPI 提供与操作系统交互的能力（文件对话框、平台信息等）。
 //
 // 之所以把这些放在绑定层而非 app 层：它们本质上是 UI 交互，
@@ -23,11 +35,24 @@ type SystemAPI struct {
 	platform string
 	// safeArea 返回刘海屏/系统手势区尺寸，桌面端恒为空串。
 	safeArea safeAreaFunc
+	// setFullscreen / isFullscreen 是主窗口全屏能力，由 main 按平台注入。
+	setFullscreen setFullscreenFunc
+	isFullscreen  isFullscreenFunc
 }
 
 // NewSystemAPI 创建系统服务。使用前需调用 Attach 绑定应用实例。
-func NewSystemAPI(platform string, safeArea safeAreaFunc) *SystemAPI {
-	return &SystemAPI{platform: platform, safeArea: safeArea}
+func NewSystemAPI(
+	platform string,
+	safeArea safeAreaFunc,
+	setFullscreen setFullscreenFunc,
+	isFullscreen isFullscreenFunc,
+) *SystemAPI {
+	return &SystemAPI{
+		platform:      platform,
+		safeArea:      safeArea,
+		setFullscreen: setFullscreen,
+		isFullscreen:  isFullscreen,
+	}
 }
 
 // Attach 绑定 Wails 应用实例。
@@ -50,6 +75,29 @@ func (a *SystemAPI) SafeArea() string {
 		return ""
 	}
 	return a.safeArea()
+}
+
+// SetFullscreen 切换主窗口全屏，返回操作后的实际状态。
+//
+// 返回实际值而不是回显入参：窗口可能因为平台限制或时序没切成，
+// 前端拿真实状态回填，避免界面显示"已全屏"而窗口其实没有。
+// 安卓端没有窗口层，注入的实现恒返回 false，前端会退回「只收起栏位」的沉浸。
+func (a *SystemAPI) SetFullscreen(on bool) bool {
+	if a.setFullscreen == nil {
+		return false
+	}
+	return a.setFullscreen(on)
+}
+
+// IsFullscreen 查询主窗口当前是否全屏。
+//
+// 用户可以用系统快捷键退出全屏（Win+↓、mac 绿灯），那条路不经过前端按钮，
+// 前端靠这个接口把状态捞回来。
+func (a *SystemAPI) IsFullscreen() bool {
+	if a.isFullscreen == nil {
+		return false
+	}
+	return a.isFullscreen()
 }
 
 // OpenFiles 打开选择文件对话框，返回选中的文件路径列表。

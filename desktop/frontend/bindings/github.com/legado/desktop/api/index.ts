@@ -4,6 +4,7 @@
 import * as AIAPI from "./aiapi.js";
 import * as BookshelfAPI from "./bookshelfapi.js";
 import * as CacheAPI from "./cacheapi.js";
+import * as DictAPI from "./dictapi.js";
 import * as LibraryAPI from "./libraryapi.js";
 import * as ReaderAPI from "./readerapi.js";
 import * as ReplaceRuleAPI from "./replaceruleapi.js";
@@ -16,6 +17,7 @@ export {
     AIAPI,
     BookshelfAPI,
     CacheAPI,
+    DictAPI,
     LibraryAPI,
     ReaderAPI,
     ReplaceRuleAPI,

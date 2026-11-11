@@ -109,6 +109,66 @@ func TestBookRepo_CRUD(t *testing.T) {
 	}
 }
 
+// 试读书（发现/搜索点开但没入架）不能出现在书架列表里，
+// 但按 id 仍要能取到，否则详情页和阅读器都没法用。
+func TestBookRepo_ShelfFilter(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	repo := NewBookRepo(db)
+
+	shelf := &domain.Book{
+		Name: "在架的", Kind: domain.BookKindWeb, Format: domain.BookFormatUnknown,
+		Origin: "https://src.example", BookURL: "https://src.example/1",
+	}
+	preview := &domain.Book{
+		Name: "试读的", Kind: domain.BookKindWeb, Format: domain.BookFormatUnknown,
+		Origin: "https://src.example", BookURL: "https://src.example/2",
+		Previewing: true,
+	}
+	for _, b := range []*domain.Book{shelf, preview} {
+		if err := repo.Create(ctx, b); err != nil {
+			t.Fatalf("创建书籍失败: %v", err)
+		}
+	}
+
+	list, err := repo.List(ctx, 0)
+	if err != nil {
+		t.Fatalf("列出书架失败: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != shelf.ID {
+		t.Fatalf("书架列表应只有已入架的书，实际: %+v", list)
+	}
+
+	all, err := repo.ListAll(ctx)
+	if err != nil {
+		t.Fatalf("列出全部书籍失败: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("ListAll 应包含试读书，实际 %d 本", len(all))
+	}
+
+	got, err := repo.Get(ctx, preview.ID)
+	if err != nil {
+		t.Fatalf("试读书应能按 id 取到: %v", err)
+	}
+	if !got.Previewing {
+		t.Fatal("试读书的 Previewing 标记丢了")
+	}
+
+	// 试读转正后立刻出现在书架里，章节与进度不受影响。
+	if err := repo.SetInShelf(ctx, preview.ID, true); err != nil {
+		t.Fatalf("加入书架失败: %v", err)
+	}
+	list, _ = repo.List(ctx, 0)
+	if len(list) != 2 {
+		t.Fatalf("转正后书架应有 2 本，实际 %d", len(list))
+	}
+	got, _ = repo.Get(ctx, preview.ID)
+	if got.Previewing {
+		t.Fatal("转正后 Previewing 应为 false")
+	}
+}
+
 func TestChapterRepo_ReplaceAll(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)

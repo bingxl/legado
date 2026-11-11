@@ -301,7 +301,7 @@ onMounted(async () => {
         </div>
 
         <!-- 章节明细 -->
-        <div v-if="expandedId === book.bookId" class="detail" v-loading="chaptersLoading">
+        <div v-if="expandedId === book.bookId" class="detail r-scroll-x" v-loading="chaptersLoading">
           <div class="detail-bar">
             <span class="detail-count">{{ chapters.length }} 章已缓存</span>
             <div class="spacer" />
@@ -350,14 +350,17 @@ onMounted(async () => {
 
 <style scoped>
 .cache-view {
-  padding: 20px 24px 40px;
+  padding: var(--r-pad) var(--r-pad) 40px;
   overflow: auto;
+  min-width: 0;
 }
 .head {
   display: flex;
   align-items: flex-start;
-  gap: 16px;
-  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: var(--r-gap);
+  margin-bottom: var(--r-gap);
+  min-width: 0;
 }
 .title {
   margin: 0 0 4px;
@@ -373,28 +376,32 @@ onMounted(async () => {
 .head-actions {
   margin-left: auto;
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
 }
 
 .jobs {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-bottom: 16px;
+  gap: var(--r-gap-sm);
+  margin-bottom: var(--r-gap);
 }
 .job {
-  padding: 10px 14px;
+  padding: var(--r-pad-sm) var(--r-pad);
   border: 1px solid #e0e7ff;
-  border-radius: 8px;
+  border-radius: var(--r-radius-sm);
   background: #f5f7ff;
 }
 .job-line {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
   margin-bottom: 6px;
   font-size: 13px;
   color: #374151;
+  min-width: 0;
 }
 .job-name {
   font-weight: 600;
@@ -425,24 +432,27 @@ onMounted(async () => {
 .list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--r-gap-sm);
 }
 .row {
   border: 1px solid #eef0f3;
-  border-radius: 10px;
+  border-radius: var(--r-radius);
   background: #fff;
+  min-width: 0;
 }
 .row-main {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 12px 14px;
+  flex-wrap: wrap;
+  gap: var(--r-gap);
+  padding: var(--r-pad-sm) var(--r-pad);
+  min-width: 0;
 }
 .cover {
   flex: none;
   width: 40px;
   height: 56px;
-  border-radius: 4px;
+  border-radius: var(--r-radius-sm);
   object-fit: cover;
   background: #f2f3f5;
 }
@@ -487,18 +497,23 @@ onMounted(async () => {
 .actions {
   flex: none;
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
 }
 
 .detail {
   border-top: 1px dashed #eef0f3;
-  padding: 8px 14px 12px;
+  padding: var(--r-pad-sm) var(--r-pad) var(--r-pad-sm);
+  min-width: 0;
 }
 .detail-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  margin-bottom: var(--r-gap-sm);
+  min-width: 0;
 }
 .detail-count {
   font-size: 12px;
@@ -506,6 +521,7 @@ onMounted(async () => {
 }
 .spacer {
   flex: 1;
+  min-width: 0;
 }
 .link {
   padding: 0;
@@ -517,5 +533,17 @@ onMounted(async () => {
 }
 .link.danger {
   color: #dc2626;
+}
+
+@media (max-width: 640px) {
+  .head-actions {
+    margin-left: 0;
+  }
+  .actions {
+    flex: 1 1 100%;
+  }
+  .job-line .link {
+    margin-left: 0;
+  }
 }
 </style>

@@ -30,6 +30,22 @@ export const systemApi = {
   openSourceFile: () =>
     callList(binding.OpenFiles("选择书源文件", false, ["*.json", "*.txt"])),
 
+  /**
+   * 选择词典源文件（上游原始数据）。
+   *
+   * 允许 csv / u8 / txt / gz：用户从镜像站下到的文件名五花八门，
+   * 过滤太严会让人以为「我下的明明是这个格式」。
+   */
+  openDictFile: () =>
+    callList(
+      binding.OpenFiles("选择词典源文件", false, [
+        "*.csv",
+        "*.u8",
+        "*.txt",
+        "*.gz",
+      ]),
+    ),
+
   /** 选择目录（漫画图片目录）。 */
   openDirectory: (title = "选择目录") => call(binding.OpenDirectory(title)),
 
@@ -43,6 +59,19 @@ export const systemApi = {
 
   /** 当前运行平台：决定用桌面侧边栏还是移动端底部 Tab。 */
   platform: () => call(binding.Platform()) as Promise<PlatformName>,
+
+  /**
+   * 切换主窗口全屏，**返回操作后的实际状态**。
+   *
+   * 不要回显入参：窗口可能因平台限制或时序没切成，用返回值回填才不会出现
+   * 「界面显示已全屏、窗口其实没切」。安卓端没有窗口层，恒返回 false，
+   * 调用方据此退回「只收起栏位」的沉浸。
+   */
+  setFullscreen: (on: boolean) =>
+    call(binding.SetFullscreen(on)) as Promise<boolean>,
+
+  /** 查询主窗口当前是否全屏（用于系统级退出后的状态对账）。 */
+  isFullscreen: () => call(binding.IsFullscreen()) as Promise<boolean>,
 
   /**
    * 安全区尺寸 JSON。安卓刘海屏/挖孔屏/系统手势条需要据此避让；

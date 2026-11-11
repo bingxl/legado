@@ -256,21 +256,27 @@ defineExpose({ focus: () => chatId.value });
   display: flex;
   height: 100%;
   min-height: 0;
-  gap: 12px;
+  min-width: 0;
+  gap: var(--r-gap);
 }
 .side {
-  width: 180px;
+  width: clamp(120px, 30vw, 180px);
   flex: none;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
   border-right: 1px solid #eef0f3;
-  padding-right: 8px;
+  padding-right: var(--r-pad-sm);
 }
 .side-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 6px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  margin-bottom: var(--r-pad-sm);
 }
 .side-title {
   font-size: 13px;
@@ -285,14 +291,16 @@ defineExpose({ focus: () => chatId.value });
   list-style: none;
   margin: 0;
   padding: 0;
+  min-width: 0;
   overflow-y: auto;
 }
 .side-item {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 8px;
-  border-radius: 6px;
+  gap: var(--r-gap-sm);
+  padding: var(--r-pad-sm);
+  border-radius: var(--r-radius-sm);
+  min-width: 0;
   font-size: 13px;
   color: rgba(0, 0, 0, 0.7);
   cursor: pointer;
@@ -306,6 +314,7 @@ defineExpose({ focus: () => chatId.value });
 }
 .side-name {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -330,7 +339,8 @@ defineExpose({ focus: () => chatId.value });
 }
 .messages {
   flex: 1;
-  min-height: 120px;
+  min-width: 0;
+  min-height: min(120px, 30vh);
   overflow-y: auto;
   padding: 4px 2px;
 }
@@ -343,6 +353,7 @@ defineExpose({ focus: () => chatId.value });
 .msg {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   margin-bottom: 12px;
 }
 .msg.user {
@@ -353,8 +364,9 @@ defineExpose({ focus: () => chatId.value });
 }
 .bubble {
   max-width: 86%;
-  padding: 8px 12px;
-  border-radius: 10px;
+  min-width: 0;
+  padding: var(--r-pad-sm) var(--r-pad);
+  border-radius: var(--r-radius);
   font-size: 13px;
   line-height: 1.75;
   white-space: pre-wrap;
@@ -385,8 +397,9 @@ defineExpose({ focus: () => chatId.value });
 .refs {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  margin-top: var(--r-pad-sm);
   max-width: 86%;
 }
 .ref {
@@ -397,6 +410,11 @@ defineExpose({ focus: () => chatId.value });
   font-size: 12px;
   color: #409eff;
   cursor: pointer;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ref:hover {
   background: #ecf5ff;
@@ -405,6 +423,8 @@ defineExpose({ focus: () => chatId.value });
   margin: 0 0 6px;
   font-size: 12px;
   line-height: 1.6;
+  min-width: 0;
+  word-break: break-word;
 }
 .status.error {
   color: #f56c6c;
@@ -414,15 +434,32 @@ defineExpose({ focus: () => chatId.value });
 }
 .composer {
   flex: none;
+  min-width: 0;
   border-top: 1px solid #eef0f3;
-  padding-top: 8px;
+  padding-top: var(--r-pad-sm);
 }
 .composer-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
-  margin-top: 6px;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  margin-top: var(--r-pad-sm);
 }
 .compact .messages {
   max-height: 46vh;
+}
+
+@media (max-width: 640px) {
+  .chat {
+    gap: var(--r-gap-sm);
+  }
+  .side {
+    width: clamp(88px, 26vw, 120px);
+  }
+  .bubble,
+  .refs {
+    max-width: 100%;
+  }
 }
 </style>

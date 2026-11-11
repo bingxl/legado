@@ -7,9 +7,11 @@ import { useAIChatStore } from "@/stores/aiChat";
 import { useAIIndexStore } from "@/stores/aiIndex";
 import { useCacheStore, jobPercent } from "@/stores/cache";
 import { usePlatformStore } from "@/stores/platform";
+import { useReaderLayoutStore } from "@/stores/readerLayout";
 import { useSourceDebugStore } from "@/stores/sourceDebug";
 import { useSourcesStore } from "@/stores/sources";
 import { useTtsStore } from "@/stores/tts";
+import { useBreakpoint } from "@/utils/breakpoint";
 import { onImportProgress } from "@/api/events";
 import type { ProgressPayload } from "@/api/events";
 import TtsBar from "@/components/TtsBar.vue";
@@ -19,7 +21,10 @@ const shelf = useBookshelfStore();
 const tts = useTtsStore();
 const cache = useCacheStore();
 const platform = usePlatformStore();
+const readerLayout = useReaderLayoutStore();
 const progress = ref<ProgressPayload | null>(null);
+/** 当前视口档位，写进 data-layout 供 CSS 兜底与自动化断言读取。 */
+const { size: layoutSize } = useBreakpoint();
 
 /**
  * 阅读页是沉浸式页面，不属于五个 Tab：底部 Tab 栏不渲染。
@@ -132,9 +137,18 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div v-if="platform.ready" class="app-shell" :class="{ 'is-mobile': platform.isMobile }">
-    <aside v-if="!platform.isMobile" class="sidebar">
-      <div class="brand"><img class="brand-icon" src="/appicon.svg" alt="" />Legado</div>
+  <div
+    v-if="platform.ready"
+    class="app-shell"
+    :class="{ 'is-mobile': platform.isMobile }"
+    :data-layout="layoutSize"
+  >
+    <!-- 全屏阅读时侧栏让位：整屏只剩正文，这才是"全屏"的意思 -->
+    <aside v-if="!platform.isMobile && !readerLayout.fullscreen" class="sidebar">
+      <div class="brand">
+        <img class="brand-icon" src="/appicon.svg" alt="" />
+        <span class="brand-text">Legado</span>
+      </div>
       <nav>
         <button
           v-for="m in menus"
@@ -144,11 +158,11 @@ onMounted(async () => {
           @click="router.push(m.path)"
         >
           <span class="icon">{{ m.icon }}</span>
-          <span>{{ m.label }}</span>
+          <span class="nav-label" :title="m.label">{{ m.label }}</span>
         </button>
       </nav>
       <div class="sidebar-footer">
-        <div>共 {{ shelf.books.length }} 本</div>
+        <div class="book-count">共 {{ shelf.books.length }} 本</div>
         <!--
           布局预览开关：默认只在桌面端出现。
           安卓端 UI 的适配要在 Windows 上看效果，每次装 APK 太慢，
@@ -198,7 +212,10 @@ onMounted(async () => {
         <!--
           发现页、书源页缓存起来：进详情/编辑器再返回时，展开的书源、分类书单、
           滚动位置与筛选词都还在。书源数据变更（编辑/导入/删除）都走 sources
-          store 就地更新，缓存不会过期。其它页面不缓存，避免显示过期数据。
+          store：书源页/搜索页就地更新，发现页按 store.revision 重拉自己的
+          ListExploreSources 简表（过滤条件在 Go 侧），所以缓存不会显示过期数据。
+          别把「发现页也读 store」当前提——曾经正因这个误会漏了通知。
+          其它页面不缓存，避免显示过期数据。
         -->
         <router-view v-slot="{ Component }">
           <keep-alive :include="['ExploreView', 'SourceView']">
@@ -256,6 +273,7 @@ body {
 .app-shell {
   display: flex;
   height: 100%;
+  min-width: 0;
 }
 .sidebar {
   width: 180px;
@@ -426,36 +444,91 @@ body {
   line-height: 1.2;
   white-space: nowrap;
 }
-/* ── 移动端横切适配 ─────────────────────────────────────────
-   现有视图最初按桌面 1200px 宽写，逐个改一遍成本很高。
-   这里只收两类最常见的窄屏溢出：内联固定宽度的控件、不换行的工具栏。
-   更细的差异仍由各视图自己的 @media 处理，避免全局规则越写越宽。
+/* ── 响应式外壳 ────────────────────────────────────────────
+   全局的断点 token、工具栏换行、弹层窄屏降级统一放在
+   src/styles/responsive.css；这里只处理「侧栏」这一处外壳特有的布局。
 
-   之所以用 !important：视图里大量 `style="width: 300px"` 是内联样式，
-   优先级高于任何选择器，只能靠 !important 覆盖。
-   这里只压 max-width（上限），不影响小尺寸控件。 */
+   桌面窄窗口 / 平板时侧栏收成图标栏：DOM、.sidebar/.nav-item 类名、
+   导航项数量都不变，只隐藏文字，因此两端回归脚本的选择器仍然成立。 */
+@media (max-width: 1024px) {
+  .sidebar {
+    width: 72px;
+    padding: 12px 6px;
+  }
+  .brand {
+    gap: 4px;
+    padding-left: 2px;
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+  .brand-text {
+    font-size: 12px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .nav-item {
+    gap: 4px;
+    padding: 10px 4px;
+  }
+  /* 文字只做视觉省略，绝不用 display:none：
+     s1_shell / s7_cache / s8_ui_parity 靠 .nav-item 与 .sidebar-footer 的
+     innerText 定位入口，隐藏文字会让这些回归在任何窄窗口下静默失效。 */
+  .nav-label {
+    font-size: 11px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .icon {
+    font-size: 16px;
+  }
+  .sidebar-footer {
+    padding-left: 2px;
+    font-size: 10px;
+  }
+  .book-count,
+  .layout-switch {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .layout-switch {
+    font-size: 10px;
+  }
+  .override-bar,
+  .progress-bar {
+    padding: 6px var(--r-pad);
+  }
+}
 @media (max-width: 640px) {
-  /* 工具栏换行：不换行的话 flex 会把按钮压成几十像素宽，文字截断到看不清。
-     这些类是各视图 scoped 样式里的，但全局规则仍按类名命中——
-     scoped 只影响视图自己那份样式的作用域。 */
-  .toolbar,
-  .bar,
-  .head {
-    flex-wrap: wrap;
+  .sidebar {
+    width: 64px;
+    padding: 10px 4px;
   }
-  .el-input,
-  .el-select,
-  .el-input-number {
-    max-width: 100% !important;
+  .brand {
+    justify-content: center;
+    padding-left: 0;
   }
-  /* 弹窗默认带固定宽与外边距，窄屏下会露出两侧空白且按钮被挤出可视区 */
-  .el-dialog {
-    width: 100% !important;
-    margin: 0 !important;
+  .brand-text {
+    display: none; /* 没有回归脚本读 .brand 文案 */
   }
-  /* 触控目标：桌面 12px 的行高在手机上点不准 */
-  .el-button {
-    min-height: 32px;
+  /* 图标在上、文字在下：innerText 变成 "📚\n书架"，
+     脚本里的 replace(/\s+/g,' ') 归一化后仍是 "📚 书架"。 */
+  .nav-item {
+    flex-direction: column;
+    gap: 1px;
+    padding: 7px 2px;
+  }
+  .nav-label {
+    font-size: 10px;
+    text-align: center;
+  }
+  .sidebar-footer {
+    font-size: 9px;
   }
 }
 /* 内容区在移动端交给系统滚动惯性，避免卡顿 */

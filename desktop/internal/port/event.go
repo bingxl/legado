@@ -35,4 +35,6 @@ const (
 	EventAIAnswerChunk = "ai:answer:chunk"
 	// EventAIAnswerDone 流式回答结束，payload 为 dto.AIAnswerDone。
 	EventAIAnswerDone = "ai:answer:done"
+	// EventDictInstallProgress 词典扩展包安装进度，payload 为 dto.DictInstallProgress。
+	EventDictInstallProgress = "dict:install:progress"
 )

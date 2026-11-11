@@ -57,6 +57,17 @@ func (f *fakeBooks) List(_ context.Context, groupID int64) ([]*domain.Book, erro
 	return out, nil
 }
 
+// ListAll 含试读书：缓存管理页按 book id 维护缓存，不能用书架列表过滤。
+func (f *fakeBooks) ListAll(context.Context) ([]*domain.Book, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*domain.Book, 0, len(f.books))
+	for _, b := range f.books {
+		out = append(out, b)
+	}
+	return out, nil
+}
+
 // fakeChapters 是内存版目录仓储。
 type fakeChapters struct {
 	port.ChapterRepository

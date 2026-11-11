@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { ElMessage } from "element-plus";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 
 import { sourceApi } from "@/api/source";
 import { coverURL } from "@/utils/media";
@@ -9,10 +9,12 @@ import { useSourcesStore } from "@/stores/sources";
 import type { SearchResultView, SourceView } from "@/types";
 
 const router = useRouter();
+const route = useRoute();
 const keyword = ref("");
 const results = ref<SearchResultView[]>([]);
 const loading = ref(false);
-const sourceId = ref(0);
+// 从书源管理页「搜索本书源」跳进来时预选该书源（路由 query）。
+const sourceId = ref(Number(route.query.sourceId ?? 0) || 0);
 // 复用全局 sources store（启动已预载、列表已精简），不再单独全量拉一遍。
 const sourceStore = useSourcesStore();
 const sources = computed<SourceView[]>(() => sourceStore.sources);
@@ -50,20 +52,19 @@ async function addToShelf(r: SearchResultView) {
   }
 }
 
-/** 点结果行 → 先入库拿到 book id，再进详情页（与发现页一致）。 */
+/** 点结果行 → 先入库拿到 book id，再进详情页（试读，不加入书架）。 */
 const opening = ref("");
 async function openBook(r: SearchResultView) {
   if (opening.value) return;
   opening.value = r.bookUrl;
   try {
     const sid = await resolveSourceId(r);
-    const brief = await sourceApi.addToShelf(
+    const brief = await sourceApi.previewBook(
       sid,
       r.bookUrl,
       r.name,
       r.author,
       r.variable ?? "",
-      0,
     );
     if (!brief) return;
     router.push({ name: "book", params: { id: String(brief.id) } });
@@ -89,10 +90,11 @@ async function resolveSourceId(r: SearchResultView): Promise<number> {
       <el-input
         v-model="keyword"
         placeholder="输入书名或作者"
-        style="width: 300px"
+        class="r-fit"
+        style="--r-fit-w: 300px"
         @keyup.enter="search"
       />
-      <el-select v-model="sourceId" style="width: 200px">
+      <el-select v-model="sourceId" class="r-fit" style="--r-fit-w: 200px">
         <el-option :value="0" label="全部书源" />
         <el-option
           v-for="s in sources"
@@ -143,21 +145,26 @@ async function resolveSourceId(r: SearchResultView): Promise<number> {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  padding: var(--r-pad-sm) var(--r-pad);
+  min-width: 0;
 }
 .spacer {
   flex: 1;
 }
 .results {
   flex: 1;
+  min-width: 0;
   overflow: auto;
-  padding: 0 16px 16px;
+  padding: 0 var(--r-pad) var(--r-pad);
 }
 .result {
   display: flex;
-  gap: 12px;
-  padding: 12px;
+  flex-wrap: wrap;
+  gap: var(--r-gap);
+  padding: var(--r-pad-sm);
+  min-width: 0;
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
@@ -173,6 +180,7 @@ async function resolveSourceId(r: SearchResultView): Promise<number> {
 }
 .cover {
   width: 72px;
+  max-width: 100%;
   height: 100px;
   flex: none;
   background: #f3f4f6;
@@ -196,6 +204,8 @@ async function resolveSourceId(r: SearchResultView): Promise<number> {
   font-size: 12px;
   color: #6b7280;
   margin-top: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .intro {
   font-size: 12px;
@@ -209,5 +219,7 @@ async function resolveSourceId(r: SearchResultView): Promise<number> {
 .ops {
   display: flex;
   align-items: center;
+  flex: none;
+  min-width: 0;
 }
 </style>

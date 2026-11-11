@@ -52,6 +52,10 @@ tasks:
         vars:
           ARCH: '{{.ARCH}}'
       - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.APP_NAME}}.exe"'
+      # 仓库所在的 work 目录带 Low 完整性标签，新编译出的 exe 会继承它，导致
+      # 普通权限双击启动即以 Low IL 运行而失败。每次产物落地后立刻改回 Medium。
+      - cmd: pwsh -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}/build/windows/fix-integrity.ps1" -Exe "{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe"
+        platforms: [windows]
       - cmd: pwsh -NoProfile -Command "Remove-Item *.syso -ErrorAction SilentlyContinue"
         platforms: [windows]
       - cmd: rm -f *.syso

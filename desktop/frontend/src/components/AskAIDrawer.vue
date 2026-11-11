@@ -64,5 +64,8 @@ function openCite(ref: AIRefPayload) {
 <style scoped>
 .panel {
   height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
 }
 </style>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/legado/desktop/internal/domain"
@@ -137,6 +138,65 @@ func (r *BookSourceRepo) ListEnabled(ctx context.Context) ([]*domain.BookSource,
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// UpdateOrders 批量更新排序号。
+//
+// 已在事务内（ctx 带 tx）时直接复用，否则自己开一个：拖拽排序一次要改几十行，
+// 逐条自动提交既慢又可能留下半套顺序。
+func (r *BookSourceRepo) UpdateOrders(ctx context.Context, orders map[int64]int) error {
+	if len(orders) == 0 {
+		return nil
+	}
+	if _, ok := ctx.Value(txKey{}).(*sql.Tx); ok {
+		return r.updateOrders(ctx, orders)
+	}
+	return r.db.Do(ctx, func(ctx context.Context) error {
+		return r.updateOrders(ctx, orders)
+	})
+}
+
+func (r *BookSourceRepo) updateOrders(ctx context.Context, orders map[int64]int) error {
+	for id, order := range orders {
+		if _, err := r.db.q(ctx).ExecContext(ctx,
+			`UPDATE book_sources SET sort_order = ? WHERE id = ?`, order, id); err != nil {
+			return fmt.Errorf("更新书源排序失败: %w", err)
+		}
+	}
+	return nil
+}
+
+// Groups 汇总全部分组及组内书源数量。
+//
+// group_name 允许逗号分隔多分组，SQL 里没有拆分函数，这里取一列到 Go 侧拆分
+// 再计数——只读一列，几千条书源也就几百 KB，比在 SQL 里拼递归 CTE 划算得多。
+func (r *BookSourceRepo) Groups(ctx context.Context) ([]domain.SourceGroup, error) {
+	rows, err := r.db.q(ctx).QueryContext(ctx, `SELECT group_name FROM book_sources`)
+	if err != nil {
+		return nil, fmt.Errorf("查询书源分组失败: %w", err)
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var group string
+		if err := rows.Scan(&group); err != nil {
+			return nil, err
+		}
+		for _, name := range domain.SplitGroups(group) {
+			counts[name]++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]domain.SourceGroup, 0, len(counts))
+	for name, n := range counts {
+		out = append(out, domain.SourceGroup{Name: name, Count: n})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
 }
 
 func scanSource(s scanner) (*domain.BookSource, error) {

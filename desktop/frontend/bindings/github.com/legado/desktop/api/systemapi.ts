@@ -25,6 +25,16 @@ export function Attach(app: application$0.App | null): $CancellablePromise<void>
 }
 
 /**
+ * IsFullscreen 查询主窗口当前是否全屏。
+ * 
+ * 用户可以用系统快捷键退出全屏（Win+↓、mac 绿灯），那条路不经过前端按钮，
+ * 前端靠这个接口把状态捞回来。
+ */
+export function IsFullscreen(): $CancellablePromise<boolean> {
+    return $Call.ByID(1015271808);
+}
+
+/**
  * OpenDirectory 打开选择目录对话框，用于导入漫画图片目录。
  */
 export function OpenDirectory(title: string): $CancellablePromise<string> {
@@ -72,4 +82,15 @@ export function SaveFile(title: string, defaultName: string): $CancellablePromis
  */
 export function SaveTextFile(path: string, content: string): $CancellablePromise<void> {
     return $Call.ByID(437217513, path, content);
+}
+
+/**
+ * SetFullscreen 切换主窗口全屏，返回操作后的实际状态。
+ * 
+ * 返回实际值而不是回显入参：窗口可能因为平台限制或时序没切成，
+ * 前端拿真实状态回填，避免界面显示"已全屏"而窗口其实没有。
+ * 安卓端没有窗口层，注入的实现恒返回 false，前端会退回「只收起栏位」的沉浸。
+ */
+export function SetFullscreen(on: boolean): $CancellablePromise<boolean> {
+    return $Call.ByID(1583794714, on);
 }

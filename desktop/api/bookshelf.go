@@ -33,6 +33,8 @@ type bookshelfService interface {
 	ListGroups(ctx context.Context) ([]dto.BookGroupView, error)
 	ListBooks(ctx context.Context, groupID int64) ([]dto.BookBrief, error)
 	GetBook(ctx context.Context, id int64) (dto.BookDetail, error)
+	// PutOnShelf 把已在库中的书加入书架（试读转正）。
+	PutOnShelf(ctx context.Context, bookID int64) error
 	DeleteBook(ctx context.Context, id int64) error
 	MoveToGroup(ctx context.Context, bookID, groupID int64) error
 	SaveProgress(ctx context.Context, bookID int64, chapterIndex int, chapterTitle string, chapterPos int, scrollPercent float64) error
@@ -60,6 +62,16 @@ func (a *BookshelfAPI) ListBooks(groupID int64) ([]dto.BookBrief, error) {
 // GetBook 获取书籍详情。
 func (a *BookshelfAPI) GetBook(id int64) (dto.BookDetail, error) {
 	return a.svc.GetBook(newCtx(), id)
+}
+
+// PutOnShelf 把书籍加入书架（试读书转正）。
+//
+// 只需要 book id：试读已经抓过详情与目录，不必再经书源。
+func (a *BookshelfAPI) PutOnShelf(bookID int64) error {
+	if bookID == 0 {
+		return errBadRequest("缺少书籍 ID")
+	}
+	return a.svc.PutOnShelf(newCtx(), bookID)
 }
 
 // DeleteBook 从书架移除书籍。

@@ -42,8 +42,15 @@ type SyncProgress struct {
 
 // SourceCheckProgress 通过事件推送的书源校验进度。
 // 对应 port.EventSourceCheckProgress。
+//
+// 除了整体进度（Total/Done/Current），还带**单条结论**：原生书源管理页在
+// 校验时每行显示自己的「成功/失败」文字与转圈，而不是只有一个总进度条。
+// SourceID 为空（0）表示这是一条纯进度事件。
 type SourceCheckProgress struct {
-	Total   int    `json:"total"`
-	Done    int    `json:"done"`
-	Current string `json:"current"`
+	Total    int    `json:"total"`
+	Done     int    `json:"done"`
+	Current  string `json:"current"`
+	SourceID int64  `json:"sourceId"`
+	OK       bool   `json:"ok"`
+	Message  string `json:"message"`
 }

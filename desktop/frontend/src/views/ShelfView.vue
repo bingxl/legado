@@ -114,7 +114,8 @@ function openBook(book: BookBrief) {
         v-model="shelf.keyword"
         placeholder="搜索书名或作者"
         clearable
-        style="width: 240px"
+        class="r-fit"
+        style="--r-fit-w: 240px"
       />
       <div class="spacer" />
       <el-button @click="groupDialog = true">新建分组</el-button>
@@ -221,8 +222,10 @@ function openBook(book: BookBrief) {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  padding: var(--r-pad-sm) var(--r-pad);
+  min-width: 0;
   background: #fff;
   border-bottom: 1px solid #e5e7eb;
 }
@@ -233,18 +236,20 @@ function openBook(book: BookBrief) {
   flex: 1;
   display: flex;
   min-height: 0;
+  min-width: 0;
 }
 .groups {
   width: 140px;
+  max-width: 100%;
   flex: none;
-  padding: 12px 8px;
+  padding: var(--r-pad-sm);
   border-right: 1px solid #e5e7eb;
   background: #fff;
   overflow: auto;
 }
 .group-item {
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--r-radius-sm);
   cursor: pointer;
   font-size: 14px;
   color: #374151;
@@ -259,18 +264,20 @@ function openBook(book: BookBrief) {
 }
 .grid-wrap {
   flex: 1;
-  padding: 16px;
+  min-width: 0;
+  padding: var(--r-pad);
   overflow: auto;
 }
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--r-card-min)), 1fr));
+  gap: var(--r-gap);
+  min-width: 0;
 }
 .card {
   background: #fff;
   border: 1px solid #e5e7eb;
-  border-radius: 10px;
+  border-radius: var(--r-radius);
   overflow: hidden;
   cursor: pointer;
   transition: box-shadow 0.15s;
@@ -279,7 +286,7 @@ function openBook(book: BookBrief) {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
 }
 .cover {
-  height: 190px;
+  height: var(--r-cover-h);
   background: #f3f4f6;
   display: flex;
   align-items: center;
@@ -315,6 +322,7 @@ function openBook(book: BookBrief) {
 .name {
   font-size: 14px;
   font-weight: 600;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -327,30 +335,64 @@ function openBook(book: BookBrief) {
 .tags {
   display: flex;
   align-items: center;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
   margin-top: 6px;
+  min-width: 0;
   font-size: 11px;
   color: #6b7280;
 }
 .tag {
+  flex: none;
   background: #f3f4f6;
   padding: 1px 6px;
   border-radius: 4px;
 }
 .read-to {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
+  gap: var(--r-gap-sm);
   padding: 0 6px 6px;
 }
 .failures {
-  max-height: 200px;
+  max-height: min(200px, 90vh);
   overflow: auto;
   font-size: 12px;
   color: #b91c1c;
+}
+
+/* 平板/窄窗口：分组侧栏收成横向可滚动的 chip 条，主区独占一行（保留 DOM 与类名） */
+@media (max-width: 1024px) {
+  .body {
+    flex-direction: column;
+  }
+  .groups {
+    width: auto;
+    max-width: 100%;
+    flex: none;
+    display: flex;
+    flex-direction: row;
+    gap: var(--r-gap-sm);
+    padding: var(--r-pad-sm);
+    border-right: none;
+    border-bottom: 1px solid #e5e7eb;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+  .group-item {
+    flex: none;
+    white-space: nowrap;
+  }
+  .grid-wrap {
+    min-height: 0;
+  }
 }
 </style>

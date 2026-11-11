@@ -2,8 +2,8 @@
 /**
  * 书籍详情页。
  *
- * 入口有两个：发现/搜索列表点击书籍行（后端会先把它加入书架，再带着 id 进来），
- * 以及书架里已有的书。数据全部走 `stores/bookData.ts` 的按书缓存
+ * 入口有两个：发现/搜索列表点击书籍行（后端以「试读」入库并带着 id 进来，
+ * 不会自动加入书架），以及书架里已有的书。数据全部走 `stores/bookData.ts` 的按书缓存
  * （详情/目录/正文，思路同书源缓存），来回切换不重拉；
  * 工具栏的刷新按钮绕过缓存强制重拉。
  * 页面不直接访问绑定层（ARCHITECTURE.md R4）。
@@ -14,8 +14,10 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 
+import { bookshelfApi } from "@/api/bookshelf";
 import { CacheScope, cacheApi } from "@/api/cache";
 import { useBookDataStore } from "@/stores/bookData";
+import { useBookshelfStore } from "@/stores/bookshelf";
 import { jobPercent, useCacheStore } from "@/stores/cache";
 import AIPanel from "@/components/AIPanel.vue";
 import { copyText } from "@/utils/clipboard";
@@ -69,6 +71,23 @@ async function toggleTocOrder() {
     ?.scrollIntoView({ block: "center" });
 }
 const hasMoreChapters = computed(() => chapters.value.length > chapterLimit.value);
+
+/** 是否已在书架：false 表示只是从发现/搜索点开的试读书。 */
+const inShelf = computed(() => book.value?.inShelf !== false);
+
+/** 把试读书加入书架：只改书架标记，已抓过的目录与进度都保留。 */
+async function addToShelf() {
+  if (!book.value || inShelf.value) return;
+  try {
+    await bookshelfApi.putOnShelf(book.value.id);
+    book.value.inShelf = true;
+    bookData.invalidateBook(book.value.id);
+    await useBookshelfStore().loadBooks();
+    ElMessage.success(`《${book.value.name}》已加入书架`);
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  }
+}
 
 /** 后端记录的章节序号；-1 表示没读过。 */
 const progressIndex = computed(() => {
@@ -285,6 +304,9 @@ onMounted(load);
                 v-if="chapters.length"
                 @click="openReader(0)"
               >从第一章开始</el-button>
+              <el-button v-if="!inShelf" type="primary" plain @click="addToShelf">
+                加入书架
+              </el-button>
               <el-button v-if="canCache" @click="openCacheDialog">
                 <template v-if="cacheRunning">
                   缓存中 {{ jobPercent(cacheJob) }}%
@@ -412,20 +434,24 @@ onMounted(load);
 .bar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
   flex: none;
+  min-width: 0;
   height: 56px;
-  padding: 0 16px;
+  padding: 0 var(--r-pad);
   border-bottom: 1px solid #eef0f3;
 }
 .bar-title {
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: 16px;
   font-weight: 600;
   color: rgba(0, 0, 0, 0.87);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 420px;
+  max-width: min(100%, 420px);
 }
 .bar-fill {
   flex: 1;
@@ -492,9 +518,9 @@ onMounted(load);
   overflow-y: auto;
 }
 .inner {
-  max-width: 960px;
+  max-width: min(100%, 960px);
   margin: 0 auto;
-  padding: 20px 24px 32px;
+  padding: var(--r-pad) var(--r-pad) var(--r-pad);
 }
 .missing-alert {
   margin-bottom: 16px;
@@ -503,13 +529,15 @@ onMounted(load);
 /* ---- 头部信息 ---- */
 .hero {
   display: flex;
-  gap: 20px;
+  gap: var(--r-gap);
+  min-width: 0;
 }
 .cover {
   flex: none;
-  width: 150px;
+  width: min(100%, 150px);
   height: 206px;
-  border-radius: 6px;
+  max-height: min(206px, 90vh);
+  border-radius: var(--r-radius-sm);
   overflow: hidden;
   background: #f2f3f5;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
@@ -550,7 +578,8 @@ onMounted(load);
 .labels {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--r-gap-sm);
+  min-width: 0;
 }
 .label.cached {
   background: #e8f5e9;
@@ -567,6 +596,7 @@ onMounted(load);
 .line {
   font-size: 12px;
   color: rgba(0, 0, 0, 0.55);
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -574,8 +604,10 @@ onMounted(load);
 .progress {
   display: flex;
   align-items: center;
-  gap: 10px;
-  max-width: 420px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
+  max-width: min(100%, 420px);
 }
 .progress :deep(.el-progress) {
   flex: 1;
@@ -588,7 +620,9 @@ onMounted(load);
 .hero-actions {
   margin-top: auto;
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
 }
 
 /* ---- 区块 ---- */
@@ -645,8 +679,9 @@ onMounted(load);
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 2px 16px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  gap: 2px var(--r-gap);
+  min-width: 0;
 }
 .toc-item {
   display: flex;
@@ -706,8 +741,32 @@ onMounted(load);
   margin-top: 6px;
   font-size: 12px;
   color: rgba(0, 0, 0, 0.5);
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 两栏 hero 在平板/窄窗口收成单栏（保留 DOM 与类名） */
+@media (max-width: 1024px) {
+  .hero {
+    flex-direction: column;
+  }
+  .hero-main {
+    flex: none;
+    width: 100%;
+  }
+}
+
+/* 手机：标题栏换行后解除固定高度 */
+@media (max-width: 640px) {
+  .bar {
+    height: auto;
+    min-height: 56px;
+    padding: var(--r-pad-sm) var(--r-pad);
+  }
+  .inner {
+    padding: var(--r-pad);
+  }
 }
 </style>

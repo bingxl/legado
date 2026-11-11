@@ -112,6 +112,18 @@ func localFileExists(path string) bool {
 	return err == nil
 }
 
+// PutOnShelf 把已在库中的书加入书架（试读转正）。
+//
+// 与 SourceService.AddToShelf 的区别：这里不需要书源信息，也不抓取任何东西，
+// 只改 books.in_shelf。阅读器/详情页手里只有 book id，退出时询问「加入书架」
+// 走的就是这条路——章节、缓存、阅读进度原样保留。
+func (s *BookshelfService) PutOnShelf(ctx context.Context, bookID int64) error {
+	if bookID == 0 {
+		return fmt.Errorf("%w: 缺少书籍 ID", domain.ErrInvalidArgument)
+	}
+	return s.books.SetInShelf(ctx, bookID, true)
+}
+
 // DeleteBook 从书架移除书籍（章节、进度与内容缓存一并清理）。
 func (s *BookshelfService) DeleteBook(ctx context.Context, id int64) error {
 	if id == 0 {

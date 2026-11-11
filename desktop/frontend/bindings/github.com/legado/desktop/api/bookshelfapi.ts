@@ -64,6 +64,15 @@ export function MoveToGroup(bookID: number, groupID: number): $CancellablePromis
 }
 
 /**
+ * PutOnShelf 把书籍加入书架（试读书转正）。
+ * 
+ * 只需要 book id：试读已经抓过详情与目录，不必再经书源。
+ */
+export function PutOnShelf(bookID: number): $CancellablePromise<void> {
+    return $Call.ByID(3530230491, bookID);
+}
+
+/**
  * UpdateGroup 更新分组。
  */
 export function UpdateGroup(id: number, name: string, show: boolean, order: number): $CancellablePromise<void> {

@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "comment": "扩展包清单。哈希与体积来自上游**源文件**（不是我们重新打包的产物），因为扩展包是在用户机器上由源文件转换出来的。ref 一律钉死提交号：用 master 会让哈希随上游每天变化。",
+  "packs": [
+    {
+      "id": "en-zh-full",
+      "name": "英文完整词库",
+      "fileName": "en-zh.full.db",
+      "kind": "ecdict",
+      "tier": "full",
+      "entries": 770238,
+      "builtAt": "2026-11-02",
+      "sourceLabel": "ECDICT 76 万词条（MIT 许可）",
+      "downloadBytes": 66009548,
+      "installedBytes": 48963200,
+      "source": {
+        "repo": "skywind3000/ECDICT",
+        "ref": "39cfb9672c0906b63569e0453c2e6abfb9ab182a",
+        "path": "ecdict.csv",
+        "form": "raw",
+        "size": 66009548,
+        "sha256": "d1ecbdf9ee2b920afb6f430ca6b6bb9f559588cf0dff86e04bd255f9390843cc"
+      }
+    },
+    {
+      "id": "zh-en",
+      "name": "汉英词典",
+      "fileName": "zh-en.db",
+      "kind": "cedict",
+      "tier": "",
+      "entries": 124000,
+      "builtAt": "2019-04-23",
+      "sourceLabel": "CC-CEDICT 12 万词条（CC BY-SA 4.0）",
+      "downloadBytes": 8991565,
+      "installedBytes": 14584000,
+      "source": {
+        "repo": "cjhoward/cedict-tts",
+        "ref": "0155512096a645dd0cfbd88f8d135648c7beb286",
+        "path": "cedict_ts.u8",
+        "form": "raw",
+        "size": 8991565,
+        "sha256": "248875a94fb885a0f4340a73e005ef96500b9fceb2a335ecab83888667daa206"
+      }
+    }
+  ]
+}

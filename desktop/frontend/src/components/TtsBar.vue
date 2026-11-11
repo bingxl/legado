@@ -60,21 +60,21 @@ function backToBook() {
     <button class="tts-btn tts-next" title="下一段" @click="tts.step(1)">⏭</button>
 
     <el-select
-      class="tts-rate"
+      class="tts-rate r-fit"
       :model-value="tts.rate"
       size="small"
-      style="width: 86px"
+      style="--r-fit-w: 86px"
       @update:model-value="(v: number) => tts.setRate(v)"
     >
       <el-option v-for="r in RATES" :key="r" :label="r / 100 + '×'" :value="r" />
     </el-select>
 
     <el-select
-      class="tts-voice"
+      class="tts-voice r-fit"
       :model-value="tts.voiceId"
       size="small"
       placeholder="默认音色"
-      style="width: 190px"
+      style="--r-fit-w: 190px"
       @update:model-value="(v: string) => tts.setVoice(v)"
     >
       <el-option
@@ -94,10 +94,14 @@ function backToBook() {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
   flex: none;
-  height: 52px;
-  padding: 0 14px;
+  min-height: 52px;
+  padding: var(--r-pad-sm) var(--r-pad);
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   background: #fff;
   border-top: 1px solid #e5e7eb;
   box-shadow: 0 -2px 10px rgba(15, 23, 42, 0.04);
@@ -107,17 +111,22 @@ function backToBook() {
   top: -1px;
   left: 0;
   right: 0;
+  min-width: 0;
+  max-width: 100%;
   height: 2px;
   background: #eef2ff;
 }
 .tts-progress i {
   display: block;
+  min-width: 0;
+  max-width: 100%;
   height: 100%;
   background: #4338ca;
   transition: width 0.25s linear;
 }
 .tts-book {
   max-width: 180px;
+  min-width: 0;
   padding: 0;
   border: none;
   background: none;
@@ -134,6 +143,7 @@ function backToBook() {
 }
 .tts-chapter {
   max-width: 220px;
+  min-width: 0;
   font-size: 12px;
   color: #6b7280;
   overflow: hidden;
@@ -149,19 +159,21 @@ function backToBook() {
   font-size: 12px;
   color: #b91c1c;
   max-width: 320px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .spacer {
   flex: 1;
+  min-width: 0;
 }
 .tts-btn {
   min-width: 34px;
   height: 30px;
-  padding: 0 10px;
+  padding: 0 var(--r-pad-sm);
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--r-radius-sm);
   background: #fff;
   font-size: 13px;
   color: #374151;
@@ -189,5 +201,14 @@ function backToBook() {
 }
 .is-error .tts-count {
   display: none;
+}
+
+/* 窄屏：播放条换行，按钮不再把整行撑宽 */
+@media (max-width: 640px) {
+  .tts-bar {
+    flex-wrap: wrap;
+    gap: var(--r-gap-sm);
+    padding: var(--r-pad-sm);
+  }
 }
 </style>

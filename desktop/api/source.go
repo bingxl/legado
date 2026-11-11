@@ -24,12 +24,30 @@ type sourceService interface {
 	ImportFromURL(ctx context.Context, url string, overwrite bool) (*dto.SourceImportResult, error)
 	Export(ctx context.Context, ids []int64) ([]byte, error)
 	Validate(ctx context.Context, ids []int64, items port.CheckItems) ([]dto.SourceCheckResult, error)
+	// ── 批量管理（对应原生书源管理页的批量操作与排序）──────────
+	ListGroups(ctx context.Context) ([]dto.SourceGroupView, error)
+	AddGroupToNoGroup(ctx context.Context, group string) (int, error)
+	RenameGroup(ctx context.Context, oldName, newName string) error
+	DeleteGroup(ctx context.Context, name string) error
+	AddToGroup(ctx context.Context, ids []int64, group string) error
+	RemoveFromGroup(ctx context.Context, ids []int64, group string) error
+	SetEnabledBatch(ctx context.Context, ids []int64, enabled bool) error
+	SetEnabledExploreBatch(ctx context.Context, ids []int64, enabled bool) error
+	DeleteBatch(ctx context.Context, ids []int64) error
+	MoveTop(ctx context.Context, ids []int64) error
+	MoveBottom(ctx context.Context, ids []int64) error
+	Reorder(ctx context.Context, ids []int64) error
+	GetVariable(ctx context.Context, id int64) (dto.SourceVariableView, error)
+	SetVariable(ctx context.Context, id int64, variable string) error
+	ClearCookie(ctx context.Context, id int64) error
 	Search(ctx context.Context, sourceID int64, keyword string, page int) ([]dto.SearchResultView, error)
 	SearchAll(ctx context.Context, keyword string, page int) ([]dto.SearchResultView, error)
 	ListExploreSources(ctx context.Context) ([]dto.ExploreSourceBrief, error)
 	ExploreKinds(ctx context.Context, sourceID int64) ([]dto.ExploreKindView, error)
 	Explore(ctx context.Context, sourceID int64, url string, page int) ([]dto.SearchResultView, error)
 	AddToShelf(ctx context.Context, sourceID int64, bookURL string, name string, author string, variable string, groupID int64) (dto.BookBrief, error)
+	// PreviewBook 打开书籍用于查看/试读，不加入书架。
+	PreviewBook(ctx context.Context, sourceID int64, bookURL string, name string, author string, variable string) (dto.BookBrief, error)
 	// ── 书源订阅 ────────────────────────────────────────────
 	ListSubscriptions(ctx context.Context) ([]dto.SubscriptionView, error)
 	GetSubscription(ctx context.Context, id int64) (dto.SubscriptionView, error)
@@ -114,6 +132,138 @@ func (a *SourceAPI) Validate(ids []int64) ([]dto.SourceCheckResult, error) {
 	return a.svc.Validate(newCtx(), ids, port.CheckAll())
 }
 
+// ValidateWith 校验书源，并指定搜索校验用的关键词。
+//
+// 关键词不是可有可无的装饰：部分书源只在特定词下才返回结果，用默认词校验会
+// 误报「搜索规则失效」。原生在开始校验前弹框让用户填，这里同样接受关键词。
+func (a *SourceAPI) ValidateWith(ids []int64, keyword string) ([]dto.SourceCheckResult, error) {
+	return a.svc.Validate(newCtx(), ids, port.CheckAll().WithKeyword(strings.TrimSpace(keyword)))
+}
+
+// ── 批量管理 ────────────────────────────────────────────────
+
+// ListGroups 列出全部分组及组内书源数量。
+func (a *SourceAPI) ListGroups() ([]dto.SourceGroupView, error) {
+	return a.svc.ListGroups(newCtx())
+}
+
+// AddGroupToNoGroup 新建分组：把所有无分组的书源归入该分组。
+//
+// 分组不是独立实体（只是书源上的一个字段），所以「建空分组」没有意义；
+// 原生也是同样的语义。
+func (a *SourceAPI) AddGroupToNoGroup(group string) (int, error) {
+	if strings.TrimSpace(group) == "" {
+		return 0, errBadRequest("分组名不能为空")
+	}
+	return a.svc.AddGroupToNoGroup(newCtx(), group)
+}
+
+// RenameGroup 重命名分组；newName 为空表示清空该分组。
+func (a *SourceAPI) RenameGroup(oldName string, newName string) error {
+	if strings.TrimSpace(oldName) == "" {
+		return errBadRequest("分组名不能为空")
+	}
+	return a.svc.RenameGroup(newCtx(), oldName, newName)
+}
+
+// DeleteGroup 删除分组（书源本身保留）。
+func (a *SourceAPI) DeleteGroup(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return errBadRequest("分组名不能为空")
+	}
+	return a.svc.DeleteGroup(newCtx(), name)
+}
+
+// AddToGroup 把选中书源加入分组。
+func (a *SourceAPI) AddToGroup(ids []int64, group string) error {
+	if len(ids) == 0 {
+		return errBadRequest("未选择书源")
+	}
+	return a.svc.AddToGroup(newCtx(), ids, group)
+}
+
+// RemoveFromGroup 把选中书源移出分组。
+func (a *SourceAPI) RemoveFromGroup(ids []int64, group string) error {
+	if len(ids) == 0 {
+		return errBadRequest("未选择书源")
+	}
+	return a.svc.RemoveFromGroup(newCtx(), ids, group)
+}
+
+// SetEnabledBatch 批量启停书源。
+func (a *SourceAPI) SetEnabledBatch(ids []int64, enabled bool) error {
+	if len(ids) == 0 {
+		return errBadRequest("未选择书源")
+	}
+	return a.svc.SetEnabledBatch(newCtx(), ids, enabled)
+}
+
+// SetEnabledExploreBatch 批量开/关「发现」。
+func (a *SourceAPI) SetEnabledExploreBatch(ids []int64, enabled bool) error {
+	if len(ids) == 0 {
+		return errBadRequest("未选择书源")
+	}
+	return a.svc.SetEnabledExploreBatch(newCtx(), ids, enabled)
+}
+
+// DeleteBatch 批量删除书源。
+func (a *SourceAPI) DeleteBatch(ids []int64) error {
+	if len(ids) == 0 {
+		return errBadRequest("未选择书源")
+	}
+	return a.svc.DeleteBatch(newCtx(), ids)
+}
+
+// MoveTop 把选中书源置顶（仅在手动排序下有意义）。
+func (a *SourceAPI) MoveTop(ids []int64) error {
+	if len(ids) == 0 {
+		return errBadRequest("未选择书源")
+	}
+	return a.svc.MoveTop(newCtx(), ids)
+}
+
+// MoveBottom 把选中书源置底。
+func (a *SourceAPI) MoveBottom(ids []int64) error {
+	if len(ids) == 0 {
+		return errBadRequest("未选择书源")
+	}
+	return a.svc.MoveBottom(newCtx(), ids)
+}
+
+// Reorder 按给定顺序重排书源（拖拽排序结束后调用）。
+func (a *SourceAPI) Reorder(ids []int64) error {
+	if len(ids) == 0 {
+		return errBadRequest("未选择书源")
+	}
+	return a.svc.Reorder(newCtx(), ids)
+}
+
+// GetVariable 读取书源变量（「设置源变量」对话框）。
+func (a *SourceAPI) GetVariable(id int64) (dto.SourceVariableView, error) {
+	if id == 0 {
+		return dto.SourceVariableView{}, errBadRequest("缺少书源 ID")
+	}
+	return a.svc.GetVariable(newCtx(), id)
+}
+
+// SetVariable 写入书源变量；空串表示清除。
+func (a *SourceAPI) SetVariable(id int64, variable string) error {
+	if id == 0 {
+		return errBadRequest("缺少书源 ID")
+	}
+	return a.svc.SetVariable(newCtx(), id, variable)
+}
+
+// ClearCookie 清除书源站点的 Cookie。
+//
+// 登录态异常（站点改版、会话残留）时先清再重登，是原生编辑页的同名菜单。
+func (a *SourceAPI) ClearCookie(id int64) error {
+	if id == 0 {
+		return errBadRequest("缺少书源 ID")
+	}
+	return a.svc.ClearCookie(newCtx(), id)
+}
+
 // Search 在单个书源内搜索。
 func (a *SourceAPI) Search(sourceID int64, keyword string, page int) ([]dto.SearchResultView, error) {
 	if sourceID == 0 {
@@ -175,6 +325,21 @@ func (a *SourceAPI) AddToShelf(sourceID int64, bookURL string, name string, auth
 		return dto.BookBrief{}, errBadRequest("缺少书籍链接")
 	}
 	return a.svc.AddToShelf(newCtx(), sourceID, bookURL, name, author, variable, groupID)
+}
+
+// PreviewBook 打开一本书用于查看详情或试读，不会加入书架。
+//
+// 发现/搜索点开书籍时调用：先把书入库拿到 id（详情、目录、进度都按 id 存），
+// 但标记为不在书架；用户明确点「加入书架」（或退出阅读器时确认）才转正。
+// name/author/variable 的约定与 AddToShelf 相同。
+func (a *SourceAPI) PreviewBook(sourceID int64, bookURL string, name string, author string, variable string) (dto.BookBrief, error) {
+	if sourceID == 0 {
+		return dto.BookBrief{}, errBadRequest("缺少书源 ID")
+	}
+	if bookURL == "" {
+		return dto.BookBrief{}, errBadRequest("缺少书籍链接")
+	}
+	return a.svc.PreviewBook(newCtx(), sourceID, bookURL, name, author, variable)
 }
 
 // ── 书源订阅 ────────────────────────────────────────────────

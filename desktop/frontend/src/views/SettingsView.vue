@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 
 import { aiApi } from "@/api/ai";
 import { toMessage } from "@/api/client";
@@ -17,17 +17,28 @@ import {
 import type { PermissionKind, PermissionState } from "@/api/permissions";
 import { usePlatformStore } from "@/stores/platform";
 import { useTtsStore } from "@/stores/tts";
+import { useDictStore } from "@/stores/dict";
+import type { DictPackageView } from "@/api/dict";
 import { loadReaderPrefs, saveReaderPrefs } from "@/utils/readerPrefs";
+import DictSourceDialog from "@/components/DictSourceDialog.vue";
 
 const router = useRouter();
 const platform = usePlatformStore();
 const tts = useTtsStore();
+const dict = useDictStore();
 
 // ── 阅读排版 ────────────────────────────────────────────────
 // 与阅读器共用同一份偏好：这里的改动立刻生效，
 // 因为阅读器读取的是同一份 localStorage 值。
 const fontSize = ref(17);
 const lineHeight = ref(1.9);
+/**
+ * 退出阅读器时是否询问加入书架。
+ *
+ * 书籍与漫画共用同一个阅读器（ReaderView 按格式切渲染分支），所以一个开关
+ * 同时管两者。默认关闭——弹窗拦人，只留给确实想要这个提醒的人。
+ */
+const shelfPrompt = ref(false);
 
 // ── 朗读 ────────────────────────────────────────────────────
 const rate = ref(100);
@@ -143,6 +154,99 @@ function clearAIKey() {
   aiKeyHint.value = "";
 }
 
+// ── 词典（英汉互译取词） ────────────────────────────────────
+// 取词偏好与阅读器共用同一份 localStorage：这里改，阅读器立刻生效。
+const dictEnabled = ref(dict.enabled);
+const dictAutoLookup = ref(dict.autoLookup);
+const dictDialog = ref(false);
+/** 当前对话框针对的包。下载源的可选项要按包过滤（jsDelivr 20 MB 上限）。 */
+const dictPack = ref({ id: "en-zh-full", name: "英文完整词库", bytes: 0 });
+
+function onDictEnabled(v: boolean) {
+  dictEnabled.value = v;
+  dict.setEnabled(v);
+}
+function onDictAutoLookup(v: boolean) {
+  dictAutoLookup.value = v;
+  dict.setAutoLookup(v);
+}
+
+const dictPacks = computed(() => dict.status?.packages ?? []);
+const builtinPack = computed(() => dictPacks.value.find((p) => p.builtin) ?? null);
+const extPacks = computed(() => dictPacks.value.filter((p) => !p.builtin));
+
+function openDictDialog(p: DictPackageView) {
+  dictPack.value = { id: p.id, name: p.name, bytes: p.downloadBytes ?? 0 };
+  dictDialog.value = true;
+}
+
+async function removeDictPack(p: DictPackageView) {
+  try {
+    await ElMessageBox.confirm(
+      `删除「${p.name}」？删除后相关方向的查询会退回内置核心词库。`,
+      "删除词库",
+      { confirmButtonText: "删除", cancelButtonText: "取消", type: "warning" },
+    );
+  } catch {
+    return;
+  }
+  try {
+    await dict.remove(p.id);
+    ElMessage.success("已删除");
+  } catch (err) {
+    ElMessage.error(toMessage(err));
+  }
+}
+
+/** 体积格式化。 */
+function fmtBytes(n: number): string {
+  if (!n || n <= 0) return "—";
+  return n < 1 << 20 ? `${Math.round(n / 1024)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`;
+}
+
+/** 安装阶段的中文文案。 */
+function phaseLabel(phase: string): string {
+  switch (phase) {
+    case "download":
+      return "下载中";
+    case "verify":
+      return "校验中";
+    case "convert":
+      return "转换中";
+    case "done":
+      return "已完成";
+    case "failed":
+      return "失败";
+    case "canceled":
+      return "已取消";
+    default:
+      return "";
+  }
+}
+
+/**
+ * 一行进度摘要。
+ *
+ * 下载阶段带「已下 / 总量」：只给百分比的话，63 MB 的包卡在 12%
+ * 时用户无法判断是慢还是死了。
+ */
+function installSummary(packId: string): string {
+  const v = dict.installs[packId];
+  if (!v) return "";
+  const pct = v.percent === null ? "" : ` ${v.percent}%`;
+  const head = `${phaseLabel(v.phase)}${pct}`;
+  if (v.phase === "download" && v.totalBytes > 0) {
+    return `${head} · ${fmtBytes(v.bytes)} / ${fmtBytes(v.totalBytes)}`;
+  }
+  return v.message ? `${head} · ${v.message}` : head;
+}
+
+/** 换源提示必须显示出来：速度突然变了不能没有解释。 */
+function switchedNote(packId: string): string {
+  const v = dict.installs[packId];
+  return v?.switchedFrom ? `已从「${v.switchedFrom}」切换` : "";
+}
+
 // ── 权限（仅安卓端有） ──────────────────────────────────────
 // 存储 / 相机的授权状态来自 Java 侧（见 api/permissions.ts）：桌面端这些
 // 方法不存在，permAvailable 为 false，整张卡片不渲染。
@@ -182,10 +286,16 @@ onMounted(() => {
   const prefs = loadReaderPrefs();
   fontSize.value = prefs.fontSize;
   lineHeight.value = prefs.lineHeight;
+  shelfPrompt.value = prefs.promptAddToShelf;
   rate.value = tts.rate;
   voiceId.value = tts.voiceId;
   autoNext.value = tts.autoNext;
   loadAIConfig();
+  // 词典：订阅安装进度并刷新包状态（用户可能刚在别处下完一个包）。
+  dict.attach();
+  dictEnabled.value = dict.enabled;
+  dictAutoLookup.value = dict.autoLookup;
+  void dict.loadStatus();
   // 权限卡片只在安卓端出现；从系统设置页返回时 onResume 会重读状态并发事件，
   // 这里订阅后界面就能自动从「未开启」翻成「已授权」，不用手动刷新。
   refreshPermissions();
@@ -199,6 +309,10 @@ onUnmounted(() => {
 
 function onFontChange() {
   saveReaderPrefs({ fontSize: fontSize.value, lineHeight: lineHeight.value });
+}
+
+function onShelfPromptChange() {
+  saveReaderPrefs({ promptAddToShelf: shelfPrompt.value });
 }
 
 function onRateChange() {
@@ -263,10 +377,129 @@ function resetReader() {
       >
         这里是正文预览。风急天高猿啸哀，渚清沙白鸟飞回。
       </div>
+      <!-- 书籍与漫画共用同一个阅读器，这一个开关同时管两者；默认关闭 -->
+      <div class="row">
+        <div class="row-label">返回时提示加入书架</div>
+        <div class="row-control">
+          <el-switch
+            v-model="shelfPrompt"
+            data-setting="shelf-prompt"
+            @change="onShelfPromptChange"
+          />
+        </div>
+      </div>
+      <div class="hint">
+        阅读书籍或漫画离开阅读器时，若这本书还不在书架，询问一次是否加入。
+        默认关闭——只是随手看两章时，这个询问会拦人一下。
+      </div>
       <div class="row-actions">
         <el-button link @click="resetReader">恢复默认</el-button>
       </div>
     </div>
+
+    <h2 class="section-title">词典</h2>
+    <div class="card">
+      <div class="row">
+        <div class="row-label">启用取词</div>
+        <div class="row-control">
+          <el-switch
+            v-model="dictEnabled"
+            data-setting="dict-enabled"
+            @change="onDictEnabled"
+          />
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-label">选中后自动查询</div>
+        <div class="row-control">
+          <el-switch
+            v-model="dictAutoLookup"
+            data-setting="dict-auto-lookup"
+            @change="onDictAutoLookup"
+          />
+        </div>
+      </div>
+      <div class="hint">
+        阅读时选中文字会弹出词典浮层；关闭取词后选中不再弹窗。
+        移动端用底栏的「词典」按钮进入取词模式，点正文里的词即可查。
+      </div>
+
+      <div class="row">
+        <div class="row-label">
+          内置核心词库
+          <span class="row-value">
+            {{ builtinPack ? `${builtinPack.entries.toLocaleString()} 词条 · ${fmtBytes(builtinPack.size)}` : "解压中…" }}
+          </span>
+        </div>
+        <div class="row-control">
+          <span class="row-value">随应用分发，不可删除</span>
+        </div>
+      </div>
+
+      <template v-for="p in extPacks" :key="p.id">
+        <div class="row dict-pack" :data-pack="p.id">
+          <div class="row-label">
+            {{ p.name }}
+            <span class="row-value">
+              {{ p.installed ? `${p.entries.toLocaleString()} 词条 · ${fmtBytes(p.size)}` : "未安装" }}
+            </span>
+          </div>
+          <div class="row-control">
+            <template v-if="dict.installs[p.id] && !dict.installs[p.id].finished">
+              <el-progress
+                :percentage="dict.installs[p.id].percent ?? 0"
+                :indeterminate="dict.installs[p.id].percent === null"
+                :stroke-width="8"
+                class="r-fit"
+                style="--r-fit-w: 130px"
+              />
+            </template>
+            <template v-else>
+              <el-button size="small" :data-dict="`install-${p.id}`" @click="openDictDialog(p)">
+                {{ p.installed ? "重装" : "下载" }}
+              </el-button>
+              <el-button
+                v-if="p.installed"
+                link
+                type="danger"
+                :data-dict="`remove-${p.id}`"
+                @click="removeDictPack(p)"
+              >
+                删除
+              </el-button>
+            </template>
+          </div>
+        </div>
+        <div v-if="dict.installs[p.id]" class="hint" :data-pack-status="p.id">
+          {{ installSummary(p.id) }}
+          <span v-if="switchedNote(p.id)" class="warn">{{ switchedNote(p.id) }}</span>
+          <el-button
+            v-if="!dict.installs[p.id].finished"
+            link
+            size="small"
+            @click="dict.cancel(p.id)"
+          >
+            取消
+          </el-button>
+        </div>
+      </template>
+
+      <div class="hint">
+        下载源在下载时选择：自动依次尝试 / 指定某个源 / 自建地址。
+        所有镜像都不可用时，也可以用「导入本地文件」直接选上游数据文件（ecdict.csv / cedict_ts.u8）。
+      </div>
+      <div class="hint">
+        词库数据：ECDICT（MIT 许可）、CC-CEDICT（CC BY-SA 4.0）。
+        词库存放在数据目录的 dict/ 下，与阅读数据互不影响。
+      </div>
+    </div>
+
+    <DictSourceDialog
+      v-model="dictDialog"
+      :pack-id="dictPack.id"
+      :pack-name="dictPack.name"
+      :download-bytes="dictPack.bytes"
+    />
 
     <h2 class="section-title">朗读</h2>
     <div class="card">
@@ -549,9 +782,10 @@ function resetReader() {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 12px 16px 24px;
+  padding: var(--r-pad) var(--r-pad) 24px;
   max-width: 720px;
   width: 100%;
+  min-width: 0;
 }
 .section-title {
   margin: 16px 0 8px;
@@ -562,22 +796,26 @@ function resetReader() {
 .card {
   background: #fff;
   border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  padding: 4px 14px 12px;
+  border-radius: var(--r-radius);
+  padding: var(--r-pad-sm) var(--r-pad) var(--r-pad-sm);
+  min-width: 0;
 }
 .row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 0;
+  flex-wrap: wrap;
+  gap: var(--r-gap);
+  padding: var(--r-pad-sm) 0;
   border-bottom: 1px solid #f3f4f6;
+  min-width: 0;
 }
 .row:last-child {
   border-bottom: none;
 }
 .row-label {
   flex: none;
-  width: 110px;
+  width: min(100%, 110px);
+  min-width: 0;
   font-size: 14px;
   color: #374151;
 }
@@ -589,17 +827,20 @@ function resetReader() {
   flex: 1;
   min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
 }
 .row-actions {
   display: flex;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
   justify-content: flex-end;
 }
 /* 预览区随字号变化，给一个最小高度避免滑块跳动 */
 .preview {
   margin-top: 8px;
-  padding: 12px;
-  border-radius: 8px;
+  padding: var(--r-pad-sm);
+  border-radius: var(--r-radius-sm);
   background: #fffdf7;
   color: #1f2328;
   min-height: 60px;
@@ -610,15 +851,25 @@ function resetReader() {
   font-size: 12px;
   color: #9ca3af;
 }
+/* 换源提示：这里的"为什么变慢了"必须看得见，不能用灰色弱化 */
+.warn {
+  color: #e6a23c;
+  margin-left: 6px;
+}
 /* 权限状态文案 + 授权按钮：窄屏下按钮不能被挤掉 */
 .perm-control {
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
 }
 .perm-state {
   font-size: 13px;
   color: #9ca3af;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .perm-state.granted {
   color: #16a34a;
@@ -629,13 +880,15 @@ function resetReader() {
 }
 .entries {
   padding: 0;
+  min-width: 0;
 }
 .entry {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--r-gap);
   width: 100%;
-  padding: 12px 14px;
+  min-width: 0;
+  padding: var(--r-pad-sm) var(--r-pad);
   border: none;
   border-bottom: 1px solid #f3f4f6;
   background: transparent;
@@ -674,7 +927,7 @@ function resetReader() {
 /* ── AI 分区 ─────────────────────────────────────────────── */
 .sub-title {
   margin: 14px 0 0;
-  padding-top: 12px;
+  padding-top: var(--r-pad-sm);
   border-top: 1px dashed #f3f4f6;
   font-size: 13px;
   font-weight: 600;
@@ -682,7 +935,7 @@ function resetReader() {
 }
 .ai-status {
   align-items: center;
-  gap: 8px;
+  gap: var(--r-gap-sm);
 }
 /* 状态点：用色块而不是文字标签，窄屏下也不占横向空间 */
 .dot {
@@ -701,7 +954,9 @@ function resetReader() {
 }
 .ai-key {
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  min-width: 0;
 }
 .ai-key :deep(.el-input) {
   flex: 1;
@@ -713,33 +968,36 @@ function resetReader() {
 .ai-result {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--r-gap-sm);
   margin-top: 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
+  padding: var(--r-pad-sm) var(--r-pad);
+  border-radius: var(--r-radius-sm);
   background: #f9fafb;
   font-size: 13px;
   color: #374151;
+  min-width: 0;
 }
 .ai-result > div {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--r-gap-sm);
+  min-width: 0;
 }
 .ai-actions {
-  gap: 8px;
-  margin-top: 12px;
+  flex-wrap: wrap;
+  gap: var(--r-gap-sm);
+  margin-top: var(--r-gap);
 }
 
 @media (max-width: 640px) {
   .settings-view {
-    padding: 12px 12px 24px;
+    padding: var(--r-pad-sm) var(--r-pad) calc(var(--r-pad) * 2);
   }
   /* 窄屏下标签不再占固定宽度，改为上下堆叠给滑块留出完整操作区 */
   .row {
     flex-direction: column;
     align-items: stretch;
-    gap: 6px;
+    gap: var(--r-gap-sm);
   }
   .row-label {
     width: auto;
@@ -749,6 +1007,12 @@ function resetReader() {
   }
   .row-value {
     text-align: right;
+  }
+  .card {
+    padding: var(--r-pad-sm) var(--r-pad);
+  }
+  .ai-result {
+    padding: var(--r-pad-sm);
   }
 }
 </style>

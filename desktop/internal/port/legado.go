@@ -12,10 +12,22 @@ type CheckItems struct {
 	Info    bool // 书籍详情
 	TOC     bool // 目录
 	Content bool // 正文
+	// Keyword 是校验搜索时使用的关键词。
+	//
+	// 原生书源管理页在校验前会弹框让用户填（默认取上次的值），因为有些站点
+	// 对特定关键词才返回结果，用固定词会误判成「搜索规则失效」。为空时由
+	// 引擎取默认关键词。
+	Keyword string
 }
 
 // CheckAll 返回一个检查全部项目的 CheckItems。
 func CheckAll() CheckItems { return CheckItems{Search: true, Info: true, TOC: true, Content: true} }
+
+// WithKeyword 返回带校验关键词的「全部项目」。
+func (c CheckItems) WithKeyword(keyword string) CheckItems {
+	c.Keyword = keyword
+	return c
+}
 
 // NeedNetwork 报告是否需要发起网络请求。
 // 全部为 false 时只需做静态规则校验，不必联网。
@@ -37,6 +49,15 @@ type ValidationIssue struct {
 	Level   IssueLevel `json:"level"`
 	Field   string     `json:"field"`   // 相关字段，可为空
 	Message string     `json:"message"` // 面向用户的中文描述
+}
+
+// SourceSession 管理书源的会话状态（Cookie）。
+//
+// 单列一个接口而不是塞进 SourceFetcher：清 Cookie 只需要引擎的 CookieStore，
+// 与「抓取/解析」没有任何关系，混在一起会让替身实现多背一份无关职责。
+type SourceSession interface {
+	// ClearCookie 清除某个书源站点保存的 Cookie（键为书源地址，内部按域名归并）。
+	ClearCookie(sourceURL string) error
 }
 
 // SourceFetcher 屏蔽底层书源引擎（legado-go）的实现细节，

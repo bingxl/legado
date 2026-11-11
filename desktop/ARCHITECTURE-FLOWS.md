@@ -157,8 +157,10 @@ flowchart TB
 
 ## 4. 网络书：发现 / 搜索 / 入架
 
-搜索与发现共用 `SourceService` 与 `legado` 抓取器。**点击结果行会先自动入架，
-拿到本地 book id 后再跳详情页**；「加入书架」按钮则留在原页。
+搜索与发现共用 `SourceService` 与 `legado` 抓取器。**点击结果行只「试读」**：
+后端以 `in_shelf=0` 入库（详情、目录、进度都要 book id），拿到 id 后跳详情页，
+但书架列表看不到它；只有点「加入书架」（或在阅读器退出时确认）才把
+`in_shelf` 置 1。两条路都按 `origin + bookUrl` 去重，已存在的试读书会就地转正。
 
 ```mermaid
 flowchart TB
@@ -180,16 +182,26 @@ flowchart TB
   ENG --> RES["[]SearchResultView<br/>name / author / cover / bookUrl / origin / variable"]
 
   RES --> ACT{"用户操作"}
-  ACT -->|"点击结果行"| ADD["SourceService.AddToShelf"]
-  ACT -->|"加入书架按钮"| ADD
-  ADD --> DUP{"origin + bookUrl 已存在？"}
-  DUP -->|"是"| BRIEF["直接返回已有 BookBrief"]
+  ACT -->|"点击结果行"| PRE["SourceService.PreviewBook<br/>试读：in_shelf=0"]
+  ACT -->|"加入书架按钮"| ADD["SourceService.AddToShelf<br/>入架：in_shelf=1"]
+  PRE --> DUP{"origin + bookUrl 已存在？"}
+  ADD --> DUP
+  DUP -->|"是"| BRIEF["返回已有 BookBrief<br/>（试读转正时 SetInShelf(true)）"]
   DUP -->|"否"| INFO["Fetcher.GetBookInfo<br/>抓详情 + 目录"]
   INFO --> TX["books.Create + chapters.ReplaceAll"]
   TX --> BRIEF
-  BRIEF -->|"点击结果行"| NAV["router.push /book/:id"]
+  BRIEF -->|"点击结果行"| NAV["router.push /book/:id<br/>书架列表不含此书"]
   BRIEF -->|"加入书架按钮"| TOAST["提示已加入，停留在原页"]
 ```
+
+> 试读书与书架书只差 `books.in_shelf` 一列：读过的章节、缓存、进度都保留。
+> 阅读器 `onBeforeRouteLeave` 发现 `inShelf=false` 时会问一次「要不要加入书架」，
+> 确认后走 `BookshelfAPI.PutOnShelf(bookId)`（不需要书源信息）。
+>
+> 这次询问**默认关闭**，由「设置 → 阅读 → 返回时提示加入书架」控制
+> （`utils/readerPrefs.ts` 的 `promptAddToShelf`）。书籍与漫画共用同一个
+> `ReaderView`（`isComic` 只是模板渲染分支），所以一个开关同时管两者；
+> 关掉时退出阅读器直接放行，详情页的「加入书架」按钮仍然可用。
 
 > 发现页的「书源列表 → 分类 → 书单」是页内状态切换，不产生路由；
 > `ExploreView` 被 `keep-alive` 缓存，进详情再返回时展开状态与滚动位置仍在。
@@ -582,8 +594,8 @@ flowchart TB
   UNKNOWN["未知路径"] -->|"redirect"| SHELF
 
   SHELF -->|"点击书卡"| READER["阅读器<br/>/reader/:id"]
-  EXPLORE -->|"点击结果行<br/>自动入架后 push"| BOOK["书籍详情<br/>/book/:id"]
-  SEARCH -->|"点击结果行<br/>自动入架后 push"| BOOK
+  EXPLORE -->|"点击结果行<br/>试读后 push（不入架）"| BOOK["书籍详情<br/>/book/:id"]
+  SEARCH -->|"点击结果行<br/>试读后 push（不入架）"| BOOK
   SEARCH -->|"管理书源"| SOURCES
 
   BOOK -->|"继续阅读 / 开始阅读<br/>点击目录章节 ?index=N"| READER
@@ -634,21 +646,31 @@ flowchart LR
 flowchart TB
   subgraph EXPLORE["发现 /explore（keep-alive）"]
     E1["书源手风琴列表"] -->|"展开"| E2["加载分类"]
-    E2 -->|"点分类胶囊"| E3["分类书单"]
+    E2 -->|"点分类胶囊<br/>push /explore?sid=&k="| E3["分类书单"]
     E3 -->|"滚动到底"| E4["自动加载下一页"]
-    E3 -->|"点结果行"| E5["自动入架 → /book/:id"]
+    E3 -->|"点结果行"| E5["试读（不进书架）→ /book/:id"]
     E3 -->|"加入书架"| E6["留在当前书单"]
-    E3 -->|"返回发现"| E1
+    E3 -->|"页面内「返回发现」/ 系统返回键<br/>back 消费 ?sid=&k= 记录"| E1
+    E5 -->|"系统返回键"| E3
   end
 
   subgraph SEARCH["搜索 /search"]
     S1["关键词 + 书源选择"] --> S2["搜索全部 / 单源搜索"]
     S2 --> S3["结果列表"]
-    S3 -->|"点结果行"| S4["自动入架 → /book/:id"]
+    S3 -->|"点结果行"| S4["试读（不进书架）→ /book/:id"]
     S3 -->|"加入书架"| S5["留在结果列表"]
     S1 -->|"管理书源"| S6["/sources"]
   end
 ```
+
+> **页面内二级页也要压历史**：分类书单不是路由组件，但 `openKind()` 会
+> `router.push({name:"explore", query:{sid,k}})` 记一条历史，安卓
+> `WebView.goBack()` / 桌面 Alt+← 才能先回到「展开分类的书源列表」，而不是
+> 直接退到上一个 tab。`watch(route.query.k)` 在标记消失时收起书单，
+> keep-alive 保留 expanded / 分类缓存 / 滚动位置；从书籍详情返回时标记不变，
+> 书单原样保留。WebDAV 导入的目录层级用 `?p=` 同理，AI 页选书用 `push`
+> 而非 `replace`。规则：**凡是整页替换内容的页面内二级视图，进入时都要让
+> vue-router 记一条历史**，否则系统返回键会越过它。
 
 ### 12.3 书籍详情页
 
@@ -766,7 +788,8 @@ flowchart TB
 | 行为 | 真实路径 |
 | --- | --- |
 | 书架点书 | 直接进 `/reader/:id`，不进详情 |
-| 搜索/发现点结果 | 先 `AddToShelf` 入架，再 `/book/:id` |
+| 搜索/发现点结果 | 先 `PreviewBook` 试读入库（`in_shelf=0`），再 `/book/:id`；书架不展示 |
+| 试读转正 | 详情页「加入书架」或阅读器退出确认 → `PutOnShelf(bookId)` → `in_shelf=1` |
 | 详情页继续阅读 | `/reader/:id?index=<durChapterIndex>` |
 | 阅读正文 | `ReaderAPI.GetContent` → `ContentProvider` → 缓存优先 |
 | 本地书 | 读原文件，不缓存、不联网 |
