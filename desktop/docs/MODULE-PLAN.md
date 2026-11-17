@@ -12,6 +12,7 @@
 | 1 | 非 UI 功能的代码**全部转 Go**，除非有性能问题 | Dart 层收缩为「渲染 + 平台 API 调用」；大量原本会写进 Dart 的业务逻辑改为 Go 模块 |
 | 2 | 模块划分要支持 **worktree 多模型并行** | 目录必须**按模块隔离**，共享文件必须极少且冻结；依赖必须分层（下层先冻结契约） |
 | 3 | UI 基准 = 原版 legado（`app/`） | UI 模块按原版功能域切，不按 desktop 的页面切 |
+| 4 | **headless 能直接完成书源解析与调试验证** | 业务能力先经 CLI 验证再给 UI；调试数据必须是结构化事件，CLI 与 UI 消费同一份（`ARCHITECTURE-V2` §5） |
 
 ---
 
@@ -92,6 +93,7 @@
 
 | 域 | Go 侧现状 | 结论 |
 |---|---|---|
+| **headless 调试链路** | `legado-go/cmd/legado` 已有 9 个子命令（含 `debug`：4 种入口 + `-stage` + `--json` JSONL + `-save-dir`） | 🟡 **能力已有，待升级为结构化 Trace**（`ARCHITECTURE-V2` §5.4） |
 | 规则引擎 / JS / 网络 / 源解析 | `legado-go/pkg/*` 12.3k 行 | ✅ 已完成，冻结 |
 | 书源管理 / 登录 / 调试 / 订阅 / 替换规则 | `app/source*.go`、`subscription.go`、`replacerule.go`（约 2.4k 行） | ✅ 已有，补少量方法 |
 | 书架 / 正文 / 阅读器语义 | `bookshelf.go`、`library.go`、`content.go`、`reader.go` | ✅ 已有 |
@@ -112,73 +114,81 @@
 
 ## 3. 目标目录结构
 
-**不做大重构**（不移动 `desktop/`，避免 Wave 0 变成搬砖）。用逻辑分层 + 新增目录达成隔离：
+> 与 `ARCHITECTURE-V2.md` 对齐：业务实现收敛到 `core/`，宿主放 `hosts/`，UI 放 `client/`。
+> 迁移按 ARCHITECTURE-V2 §9 的 5 步执行（M1 搬骨架 → M2 换装配 → M3 逐模块 → M4 CLI → M5 FFI/HTTP）。
 
 ```
 legado/
 ├── app/                          # 原版 Kotlin —— 只读参照（UI 基准）
-├── legado-go/                    # 规则引擎 —— 冻结，只接受 bugfix
-├── desktop/                      # 现有 Go 后端（名字保留，E 阶段再改名 engine/）
-│   ├── internal/
-│   │   ├── port/                 # ★接口契约（冻结，§5）
-│   │   ├── domain/               # ★领域模型（冻结）
-│   │   ├── app/                  # 业务服务（按域分文件，模块各自新增）
-│   │   │   ├── dto/              # ★传输契约（冻结）
-│   │   │   └── <域>_*.go         # 各模块独占自己的文件
-│   │   ├── adapter/              # 纯 Go 适配器（sqlite/epub/词典…）
-│   │   └── bridge/               # 【新增】LegadoCall 分发 + 数据面 HTTP
-│   └── ffi/                      # 【新增】c-shared / gomobile 入口
-└── client/                       # 【新增】Flutter 工程
-    ├── lib/
-    │   ├── core/                 # ★壳层：桥客户端、路由表、主题、i18n、通用组件
-    │   └── features/<域>/        # 各 UI 模块独占目录
-    ├── native/                   # 平台插件（音频服务、TTS、InAppWebView）
-    └── test/
+├── legado-go/                    # 规则引擎 —— 冻结，core 依赖它
+├── core/                         # ★ 唯一业务实现
+│   ├── kernel/                   # ★模块注册 · Trace 总线 · 错误码 · 环境
+│   ├── domain/                   # ★领域模型（冻结）
+│   ├── ports/                    # ★出站接口（冻结）
+│   ├── usecase/                  # 跨模块编排
+│   ├── modules/<域>/             # 各模块独占目录（service / migrate / commands）
+│   ├── adapters/                 # sqlite / httpx / epub / rssparse / …
+│   └── engine/                   # legado-go 边界封装
+├── hosts/
+│   ├── cli/                      # headless：probe / trace / bench / repl / serve / schema
+│   ├── ffi/                      # c-shared / gomobile
+│   └── http/                     # /content /img /stream /events /debug/*
+├── client/                       # ★Flutter UI
+│   ├── lib/core/                 # ★壳层：桥客户端、路由表、主题、i18n、通用组件
+│   └── lib/features/<域>/        # 各 UI 模块独占目录
+└── desktop/                      # 过渡期 Wails 壳（M5 后冻结）
 ```
 
-★ = 冻结共享区（§6.3）。**除这 5 处，任何模块只碰自己的目录。**
+★ = 冻结共享区（§6.3）。**除这些位置，任何模块只碰自己的目录。**
 
-> 命名债：`desktop/` 其实是「Go 后端 + Wails 壳」。E 阶段删除 Wails 壳后 `git mv desktop engine`，import 路径统一改一次。
-> 现在改名会让所有并行分支的 import 路径全冲突，得不偿失。
+> 迁移期的额外冻结项：`desktop/internal/app/dto/` 在 M3 完成前仍是共享区
+> （它逐模块搬去 `core/modules/<域>/dto.go`，搬完一个才解冻一个）。
 
 ---
 
 ## 4. 模块划分
 
-### 4.1 Go 业务模块（`desktop/internal/`）
+### 4.1 Go 业务模块（`core/modules/`）
 
-| ID | 模块 | 独占文件/目录 | 依赖 | 人日 |
+| ID | 模块 | 独占目录 | 依赖 | 人日 |
 |---|---|---|---|---|
-| **G00** | 桥与数据面 | `internal/bridge/`、`ffi/` | 无 | 8 |
-| **G01** | 书源域 | `app/source*.go`、`app/subscription.go`、`app/replacerule.go`、`app/sourcedebug.go` | G00 | 4 |
-| **G02** | 书籍与正文域 | `app/bookshelf.go`、`app/library.go`、`app/content.go`、`app/reader.go`、`adapter/bookparser/` | G00 | 6 |
-| **G03** | 缓存与下载 | `app/cache.go`、**新增** `app/download.go`、`app/download_queue.go` | G02 | 6 |
-| **G04** | 书签·记录·进度 | **新增** `app/bookmark.go`、`app/readrecord.go`、`app/progress.go` | G02 | 5 |
-| **G05** | RSS 域 | **新增** `app/rss_*.go`、`internal/domain/rss.go`、`adapter/rssparse/` | G00 | 10 |
-| **G06** | TTS 引擎 | **新增** `app/tts_*.go`（分段、规则、HTTP TTS、缓存） | G00 | 6 |
-| **G07** | 词典域 | `app/dict*.go`、`adapter/dictsqlite/` | G00 | 3 |
-| **G08** | AI 域 | `app/ai*.go` | G00 | 4 |
-| **G09** | 设置·备份·文件·Web 服务 | **新增** `app/settings.go`、`app/backup.go`、`app/filemanage.go`、`app/webservice.go` | G00 | 8 |
-| **G10** | 平台能力适配 | `app/audio*.go`、`adapter/imagefetch/`、`legado-go/pkg/net/challenge.go` 对接 | G00 | 4 |
+| **G00** | 内核与桥 | `core/kernel/`、`hosts/ffi/`、`hosts/http/` | 无 | 10 |
+| **G01** | 书源域 | `core/modules/source/` | G00 | 4 |
+| **G02** | 书籍与正文 | `core/modules/book/`、`core/modules/chapter/` | G00 | 6 |
+| **G03** | 缓存与下载 | `core/modules/cache/` | G02 | 6 |
+| **G04** | 书签·记录·进度 | `core/modules/bookmark/`、`core/modules/shelf/` | G02 | 5 |
+| **G05** | RSS 域 | `core/modules/rss/`、`core/adapters/rssparse/` | G00 | 10 |
+| **G06** | TTS 引擎 | `core/modules/tts/` | G00 | 6 |
+| **G07** | 词典域 | `core/modules/dict/`、`core/adapters/dictsqlite/` | G00 | 3 |
+| **G08** | AI 域 | `core/modules/ai/` | G00 | 4 |
+| **G09** | 设置·备份·文件·Web 服务 | `core/modules/settings/` | G00 | 8 |
+| **G10** | 数据与网络适配 | `core/adapters/sqlite/`、`httpx/`、`epub/`、`core/modules/platform/` | G00 | 4 |
+| **G11** | **headless CLI** | `hosts/cli/` | G00 | 6 |
 
-Go 侧合计 **64 人日**。
+Go 侧合计 **72 人日**。
+
+> G00 从 8 升到 10、并新增 G11，是因为 `ARCHITECTURE-V2` 把「模块注册表 + Trace 总线 + 命令行」提升为一等公民 ——
+> 这部分投入换来的是「新增模块零改宿主」和「CLI 可直接验证书源」。
 
 ### 4.2 Flutter UI 模块（`client/lib/features/`）
 
 | ID | 模块 | 独占目录 | 依赖 | 人日 |
 |---|---|---|---|---|
-| **U00** | 壳与基础设施 | `core/`（路由、主题、i18n、桥客户端、通用组件、**桌面交互层**） | G00 | 12 |
-| **U01** | 主框架 + 书架 | `features/shelf/`、`features/shell/` | U00, G02 | 9 |
-| **U02** | 详情·目录·换源 | `features/book/` | U00, G02 | 6 |
-| **U03** | 阅读器 | `features/reader/`（分页、5 种翻页、23 项菜单、配置面板） | U00, G02, G04, G06 | 22 |
-| **U04** | 书源管理·编辑·调试 | `features/source/` | U00, G01 | 11 |
-| **U05** | 发现 + 搜索 | `features/explore/`、`features/search/` | U00, G01, G09 | 8 |
-| **U06** | RSS UI | `features/rss/` | U00, G05 | 8 |
-| **U07** | 设置 + 我的 | `features/settings/`、`features/me/` | U00, G09 | 8 |
-| **U08** | 音频 + 朗读 UI | `features/audio/`、`features/tts/` | U00, G06, G10 | 8 |
-| **U09** | 工具页 | `features/tools/`（缓存/书签/记录/文件/导入/登录/关于） | U00, G03, G04, G09 | 9 |
+| **U00** | 壳与基础设施 | `client/lib/core/`（路由、主题、i18n、桥客户端、通用组件、**桌面交互层**） | G00 | 12 |
+| **U01** | 主框架 + 书架 | `client/lib/features/shelf/`、`features/shell/` | U00, G02 | 9 |
+| **U02** | 详情·目录·换源 | `client/lib/features/book/` | U00, G02 | 6 |
+| **U03** | 阅读器 | `client/lib/features/reader/`（分页、5 种翻页、23 项菜单、配置面板） | U00, G02, G04, G06 | 22 |
+| **U04** | 书源管理·编辑·调试 | `client/lib/features/source/` | U00, G01 | 11 |
+| **U05** | 发现 + 搜索 | `client/lib/features/explore/`、`features/search/` | U00, G01, G09 | 8 |
+| **U06** | RSS UI | `client/lib/features/rss/` | U00, G05 | 8 |
+| **U07** | 设置 + 我的 | `client/lib/features/settings/`、`features/me/` | U00, G09 | 8 |
+| **U08** | 音频 + 朗读 UI | `client/lib/features/audio/`、`features/tts/` | U00, G06, G10 | 8 |
+| **U09** | 工具页 | `client/lib/features/tools/`（缓存/书签/记录/文件/导入/登录/关于） | U00, G03, G04, G09 | 9 |
 
 UI 侧合计 **101 人日**。
+
+> U04「书源调试」页是 **Trace 总线的消费者**（`ARCHITECTURE-V2` §5.1）：
+> 它订阅 `/debug/session/{id}/events`，不含任何解析逻辑。CLI 的 `source trace` 与它读同一份事件流。
 
 ### 4.3 依赖图
 
@@ -238,7 +248,8 @@ flowchart LR
 
 ### 5.1 方法命名
 
-`<Domain>.<Verb>`，Domain 与模块一一对应：
+`<Domain>.<Verb>`，Domain 与模块一一对应。**方法表不是手写的，而是各模块在 `Register()` 里声明、
+由 `legado schema -o methods.json` 导出**（见 `ARCHITECTURE-V2` §4.2、§6）—— 这样契约只有一份，Dart 侧按导出结果生成常量。
 
 ```
 Source.List / Source.Get / Source.Save / Source.Debug / Source.Check / Source.Import
@@ -277,11 +288,12 @@ data: {"taskId": "cache-3", "done": 12, "total": 88}
 
 | 文件 | 内容 | 谁可以改 |
 |---|---|---|
-| `desktop/internal/port/*.go` | 13 个接口 | 仅契约负责人，Wave 边界串行 |
-| `desktop/internal/app/dto/*.go` | 传输结构体 | 同上 |
-| `desktop/internal/bridge/methods.go` | method → handler 映射表 | 同上 |
-| `client/lib/core/bridge/api.dart` | Dart 侧方法常量 + 类型 | 同上 |
-| `client/lib/core/router/routes.dart` | 28 条路由 | 同上 |
+| `core/ports/*.go` | 出站接口 | 仅契约负责人，Wave 边界串行 |
+| `core/domain/*.go` | 领域模型 | 同上 |
+| `core/modules/<域>/dto.go` | 该模块的传输结构 | 模块 owner；**被其他模块引用时视为契约**，需走变更流程 |
+| `core/kernel/registry.go` | 注册表机制本体 | 仅 G00 |
+| `client/lib/core/bridge/api.dart` | Dart 侧方法常量 | 由 `legado schema` 导出，仅 U00 更新 |
+| `client/lib/core/router/routes.dart` | 28 条路由 | 仅 U00 |
 
 ---
 
@@ -291,7 +303,7 @@ data: {"taskId": "cache-3", "done": 12, "total": 88}
 
 | 波次 | 并行数 | 内容 | 出口条件 |
 |---|---|---|---|
-| **W0**（2 周，串行） | 1 | 契约冻结 + G00 桥 + U00 壳 + `client/` 工程可跑通一次 `getVersion` 往返 | `flutter run` 能列出真实书架 |
+| **W0**（3 周，串行） | 1 | `ARCHITECTURE-V2` M1+M2（建 `core/` 骨架、kernel 注册表、Boot 装配）+ 契约冻结 + G00 桥 + U00 壳 + `client/` 工程跑通一次 `getVersion` 往返 | `flutter run` 能列出真实书架；`legado source probe` 能跑通同一书源 |
 | **W1**（3 周） | 4 | G01、G02、U01、U02 | 书架→详情→目录 可读通（阅读器先用纯文本占位） |
 | **W2**（3 周） | 5 | G03、G04、G05、G09、U04 | 缓存可下、RSS 可拉到文章、书源可编辑保存 |
 | **W3**（4 周） | 5 | G06、G07、G08、U06、U08 | 朗读出声、词典可查、RSS 可读 |
@@ -318,7 +330,7 @@ worktree：../wt/G05-rss          ../wt/U03-reader
 |---|---|
 | **依赖新增**（`go.mod` / `pubspec.yaml`） | W0 一次装齐；后续需要新依赖 → 提「依赖申请」，每周一次窗口串行合并（否则 `pubspec.lock` 天天冲突） |
 | **dto 结构变更** | 契约变更流程：模块提出 → 契约负责人在 W 边界统一改 → 广播 → 各分支 rebase |
-| **method 表冲突** | 同上，只有契约负责人改 `bridge/methods.go` |
+| **method / 路由注册** | 由各模块在自己的 `Register()` 内声明，**天然无冲突**（这是模块自描述的直接收益）；只有跨模块共享的 `dto` 需要契约变更 |
 | **路由表** | U00 在 W0 就把 28 条路由页占位好（空 Widget），后续模块只替换实现 |
 | **主题/通用组件** | 归 U00 所有；其他模块需要新组件 → 提给 U00，不许各自造 |
 | **i18n 文案** | 按模块前缀划分 key 空间：`source.*`、`reader.*`、`rss.*`，各自只加自己的前缀 |
@@ -338,11 +350,11 @@ worktree：../wt/G05-rss          ../wt/U03-reader
 
 示例（G05 RSS）：
 
-> **G05 RSS 域**：只改 `desktop/internal/app/rss_*.go`、`internal/domain/rss.go`、`adapter/rssparse/`。
-> 实现 `Rss.Source.List/Save`、`Rss.Article.List/Refresh`、`Rss.Favorite.*`，
-> 解析支持 RSS 2.0 / Atom，复用 `legado-go/pkg/net` 与 `rule` 的 CSS 选择器能力。
-> 产出：`RssSource`/`RssArticle` 的 dto（**若 dto 缺失，先提契约变更，不要自己加**）。
-> 验收：`go test ./internal/app -run TestRss`，含 3 个真实 RSS XML fixture。
+> **G05 RSS 域**：只改 `core/modules/rss/`（`module.go` / `service.go` / `dto.go` / `migrations/`）与 `core/adapters/rssparse/`。
+> 实现 `Rss.Source.List/Save`、`Rss.Article.List/Refresh`、`Rss.Favorite.*`，并在 `Register()` 里同时挂
+> CLI（`rss list`）与 HTTP 路由；解析支持 RSS 2.0 / Atom，复用 `core/adapters/httpx` 与 `legado-go/pkg/rule` 的 CSS 能力。
+> **不要改 `core/ports`、`core/kernel`、`hosts/*`、`client/*`**；若需新 dto，加在模块自己的 `dto.go`。
+> 验收：`go test ./core/modules/rss/...` + `./legado rss list --json`（headless 必须能跑）。
 
 ### 6.5 每波合并检查（防止并行返工）
 
@@ -351,7 +363,8 @@ worktree：../wt/G05-rss          ../wt/U03-reader
 | Go 全量编译 + 测试 | `go build ./... && go test ./internal/... ./pkg/...` |
 | Dart 静态检查 | `flutter analyze && flutter test` |
 | 违约扫描（§1.5） | `grep -rE "sqflite\|dio\|dart:io" client/lib/` 应为 0 命中（白名单除外） |
-| 契约未变 | `git diff flutter -- desktop/internal/port desktop/internal/app/dto client/lib/core/bridge` 应为空 |
+| 契约未变 | `git diff flutter -- core/ports core/domain client/lib/core/bridge` 应为空 |
+| **headless 可用** | `./legado source probe -entry "search:<关键词>" --json` 对该波次涉及的域必须跑通（不依赖 UI） |
 | 体积回归 | 记录 exe/apk/AppImage 大小，超预算 5% 即复盘 |
 
 ---
@@ -360,12 +373,15 @@ worktree：../wt/G05-rss          ../wt/U03-reader
 
 | 方案 | 人日 | 日历工期 | 说明 |
 |---|---|---|---|
-| 单人串行 | 165 | **26 周** | v3 的估算 |
-| 3 路并行 | 165 | ~18 周 | 受 U03 阅读器（22 人日）制约 |
-| **4~5 路并行（推荐）** | 165 | **14~16 周** | W0 2 周 + 5 波 + 联调；摩擦成本约 +25% |
-| 6 路以上 | 165 | 不再下降 | 契约与合并开销吃掉收益，共享区竞争加剧 |
+| 单人串行 | 173 | **27 周** | v3 估算 + 内核/CLI 增项 |
+| 3 路并行 | 173 | ~19 周 | 受 U03 阅读器（22 人日）制约 |
+| **4~5 路并行（推荐）** | 173 | **16~18 周** | W0 3 周 + 5 波 + 联调；摩擦成本约 +25% |
+| 6 路以上 | 173 | 不再下降 | 契约与合并开销吃掉收益，共享区竞争加剧 |
 
 结论：**并行 4~5 路是甜点**。全项目最长关键路径是 **U03 阅读器**，所以它必须在 W2 就启动（不等 Go 侧全好，用 mock 数据先做排版）。
+
+> CLI 那 6 人日（G11）不要省：它既是 headless 验收手段，也是并行开发时每个 Go 模块的**自测入口**，
+> 没有它，模块质量只能等 UI 接上才发现问题。
 
 ---
 
