@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import { useBookshelfStore } from "@/stores/bookshelf";
@@ -11,20 +11,37 @@ import { useReaderLayoutStore } from "@/stores/readerLayout";
 import { useSourceDebugStore } from "@/stores/sourceDebug";
 import { useSourcesStore } from "@/stores/sources";
 import { useTtsStore } from "@/stores/tts";
+import { useAudioPlayerStore } from "@/stores/audioPlayer";
 import { useBreakpoint } from "@/utils/breakpoint";
-import { onImportProgress } from "@/api/events";
+import { onImportProgress, onVerifyDone, onVerifyRequest } from "@/api/events";
 import type { ProgressPayload } from "@/api/events";
+import { ElMessage } from "element-plus";
 import TtsBar from "@/components/TtsBar.vue";
+import AudioBar from "@/components/AudioBar.vue";
 
 const router = useRouter();
 const shelf = useBookshelfStore();
 const tts = useTtsStore();
+const audio = useAudioPlayerStore();
 const cache = useCacheStore();
 const platform = usePlatformStore();
 const readerLayout = useReaderLayoutStore();
 const progress = ref<ProgressPayload | null>(null);
 /** 当前视口档位，写进 data-layout 供 CSS 兜底与自动化断言读取。 */
 const { size: layoutSize } = useBreakpoint();
+
+/**
+ * 听书与朗读互斥：两者同时活跃时优先保留听书并停掉朗读。
+ * store 的 start() 已经做过一次，这里兜住「听书播放中又去开朗读」的反向路径，
+ * 同时保证外壳底部不会同时出现两条播放条。
+ */
+watch(
+  () => audio.isActive && tts.isActive,
+  (both) => {
+    if (both) tts.stop();
+  },
+  { immediate: true },
+);
 
 /**
  * 阅读页是沉浸式页面，不属于五个 Tab：底部 Tab 栏不渲染。
@@ -118,6 +135,29 @@ onMounted(async () => {
     useAIChatStore().attach();
   } catch {
     /* 同上 */
+  }
+  // 站点人机验证（Cloudflare）：Go 侧已经另开了一个窗口加载验证页，
+  // 读请求正阻塞在等用户点完，所以必须提示，否则用户以为卡死了。
+  // 用常驻可关闭的提示，验证窗口一关就收起。
+  try {
+    let tip: { close: () => void } | null = null;
+    onVerifyRequest((p) => {
+      tip?.close();
+      tip = ElMessage({
+        message: `请在验证窗口完成${
+          p.domain ? ` ${p.domain} ` : ""
+        }的人机验证，通过后会自动继续`,
+        type: "warning",
+        duration: 0,
+        showClose: true,
+      });
+    });
+    onVerifyDone(() => {
+      tip?.close();
+      tip = null;
+    });
+  } catch {
+    /* 事件订阅是增强能力，失败不影响主流程 */
   }
   cache
     .refreshJobs()
@@ -224,8 +264,12 @@ onMounted(async () => {
         </router-view>
       </main>
 
-      <!-- 朗读播放条常驻在外壳里，离开阅读器也能继续听/控制 -->
-      <TtsBar v-if="tts.isActive" />
+      <!-- 朗读播放条常驻在外壳里，离开阅读器也能继续听/控制；
+           听书活跃时让位给 AudioBar，避免两条播放条叠在一起 -->
+      <TtsBar v-if="tts.isActive && !audio.isActive" />
+
+      <!-- 听书常驻迷你播放条：离开播放页也能继续听/控制 -->
+      <AudioBar v-if="audio.isActive" />
 
       <!--
         移动端底部 Tab：桌面端走左侧栏，这里不渲染。

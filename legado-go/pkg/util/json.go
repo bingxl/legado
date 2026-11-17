@@ -1,18 +1,8 @@
 package util
 
 import (
-	"regexp"
 	"strings"
 )
-
-// bareJSONKey 匹配 JSON 里的裸键（{"a":1, b:2} 中的 b）
-var bareJSONKey = regexp.MustCompile(`([{,]\s*)([A-Za-z_][\w]*)\s*:`)
-
-// RelaxJSONKeys 给裸键补双引号，用于解析书源里手写、不严格的 JSON
-// （header、@put:{}、url 选项等）。已经是合法 JSON 时调用也安全。
-func RelaxJSONKeys(s string) string {
-	return bareJSONKey.ReplaceAllString(s, `$1"$2":`)
-}
 
 // ParseLooseStringMap 解析书源里手写的键值对象，对齐 GSON lenient 语义。
 //
@@ -22,6 +12,9 @@ func RelaxJSONKeys(s string) string {
 //
 // 规则：去掉最外层大括号，按顶层逗号切分，每段按第一个冒号切成键/值，两侧引号去掉。
 // 空值、空段忽略；解析不出任何键值时返回 false。
+//
+// 优先用 UnmarshalLooseJSON：它能处理嵌套与转义，本函数只作为
+// 「值里含裸冒号、整体不是合法结构」时的最后兜底。
 func ParseLooseStringMap(s string) (map[string]string, bool) {
 	s = strings.TrimSpace(s)
 	if len(s) >= 2 && s[0] == '{' && s[len(s)-1] == '}' {

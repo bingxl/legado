@@ -124,6 +124,57 @@ describe("filterSources", () => {
   });
 });
 
+describe("filterSources 用在发现页的精简条目上", () => {
+  // 发现页只下发筛选需要的字段（没有 raw/order/权重这些），
+  // 用它跑同一套规则能保证两页搜同一个词得到同一批书源。
+  type Brief = {
+    id: number;
+    name: string;
+    group: string;
+    url: string;
+    enabled: boolean;
+    enabledExplore: boolean;
+    hasExploreUrl: boolean;
+    hasLoginUrl: boolean;
+  };
+  const brief = (patch: Partial<Brief> & { id: number; name: string }): Brief => ({
+    group: "",
+    url: `https://site${patch.id}.com`,
+    enabled: true,
+    enabledExplore: true,
+    hasExploreUrl: true,
+    hasLoginUrl: false,
+    ...patch,
+  });
+  const list = [
+    brief({ id: 1, name: "17k小说", group: "综合", url: "https://www.17k.com" }),
+    brief({ id: 2, name: "番茄怀旧", group: "都市,完本", hasLoginUrl: true }),
+    brief({ id: 3, name: "无分组源" }),
+  ];
+
+  it("与书源页一致：名称 / 地址 / 分组都能搜", () => {
+    expect(filterSources(list, "17k").map((s) => s.id)).toEqual([1]);
+    expect(filterSources(list, "www.17k.com").map((s) => s.id)).toEqual([1]);
+    expect(filterSources(list, "完本").map((s) => s.id)).toEqual([2]);
+  });
+
+  it("与书源页一致：group: 前缀与内置筛选词", () => {
+    expect(filterSources(list, "group:都市").map((s) => s.id)).toEqual([2]);
+    expect(filterSources(list, FILTER_PRESETS.needLogin).map((s) => s.id)).toEqual([2]);
+    expect(filterSources(list, FILTER_PRESETS.noGroup).map((s) => s.id)).toEqual([3]);
+    // 发现页里的源按定义都满足「启用 + 开启发现 + 有 exploreUrl」，
+    // 所以这两个筛选词在发现页分别等于「全部」与「空」——规则一致即为正确。
+    expect(filterSources(list, FILTER_PRESETS.enabledExplore)).toHaveLength(3);
+    expect(filterSources(list, FILTER_PRESETS.disabledExplore)).toEqual([]);
+  });
+
+  it("大小写不敏感且返回原对象", () => {
+    const hit = filterSources(list, "17K");
+    expect(hit).toHaveLength(1);
+    expect(hit[0]).toBe(list[0]);
+  });
+});
+
 describe("sortSources", () => {
   const list = [
     src({ id: 1, name: "b", order: 2, weight: 5, respondTime: 300 }),

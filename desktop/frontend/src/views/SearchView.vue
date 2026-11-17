@@ -6,6 +6,7 @@ import { useRoute, useRouter } from "vue-router";
 import { sourceApi } from "@/api/source";
 import { coverURL } from "@/utils/media";
 import { useSourcesStore } from "@/stores/sources";
+import { isAudioBook } from "@/types";
 import type { SearchResultView, SourceView } from "@/types";
 
 const router = useRouter();
@@ -67,7 +68,12 @@ async function openBook(r: SearchResultView) {
       r.variable ?? "",
     );
     if (!brief) return;
-    router.push({ name: "book", params: { id: String(brief.id) } });
+    // 音频书直接进听书页；其余照旧进详情页。
+    if (isAudioBook(brief)) {
+      router.push({ name: "audio", params: { id: String(brief.id) } });
+    } else {
+      router.push({ name: "book", params: { id: String(brief.id) } });
+    }
   } catch (e) {
     ElMessage.error((e as Error).message);
   } finally {

@@ -37,6 +37,19 @@ func TestGetExploreKindsJS(t *testing.T) {
 			raw:  `[{"title":"全部","url":"/all"}]`,
 			want: []model.ExploreKind{{Title: "全部", Url: "/all"}},
 		},
+		{
+			// 猫耳 FM 这类书源直接把 JS 对象字面量写在 exploreUrl 里，
+			// 没有 @js: 前缀。原版靠 GSON lenient 当数据读，不能当脚本执行。
+			name: "静态 JS 对象字面量（单引号 + 裸键 + style）",
+			raw: `[
+				{'title':'全年龄•全部','url':'https://a.com/f?page={{page}}','style':{layout_flexGrow:1,layout_flexBasisPercent:1}},
+				{'title':'全年龄•言情','url':'https://a.com/f?page={{page}}&k=6','style':{layout_flexGrow:1,layout_flexBasisPercent:0.4}},
+			]`,
+			want: []model.ExploreKind{
+				{Title: "全年龄•全部", Url: "https://a.com/f?page={{page}}"},
+				{Title: "全年龄•言情", Url: "https://a.com/f?page={{page}}&k=6"},
+			},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

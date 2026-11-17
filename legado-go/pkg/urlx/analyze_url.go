@@ -54,6 +54,11 @@ type AnalyzeUrl struct {
 	ServerID     int64
 	EncodedQuery string
 	EncodedForm  string
+	// NoChallenge 跳过反爬人工验证。
+	//
+	// 由 java.startBrowserAwait 的"验证后重新取正文"路径设置：此时凭证刚写入
+	// CookieStore，若这一跳又被判定为挑战页，再弹一次窗口对用户毫无意义。
+	NoChallenge bool
 
 	mUrl     string
 	key      string
@@ -295,6 +300,7 @@ func (au *AnalyzeUrl) doRequest() (*net.Response, error) {
 		Retry:       au.Retry,
 		Proxy:       proxy,
 		SaveCookie:  saveCookie,
+		NoChallenge: au.NoChallenge,
 	})
 	if err != nil {
 		debug.Errorf("≡请求失败 %s %s: %v", au.Method, reqURL, err)
@@ -427,11 +433,10 @@ type urlOption struct {
 
 func parseUrlOption(s string) *urlOption {
 	m := map[string]any{}
-	if err := json.Unmarshal([]byte(s), &m); err != nil {
-		// 宽松解析：给无引号的键补引号
-		if err2 := json.Unmarshal([]byte(util.RelaxJSONKeys(s)), &m); err2 != nil {
-			return nil
-		}
+	// 原版先按 GSONStrict、失败再按 GSON 解析；宽松解析本身兼容严格 JSON，
+	// 一次即可（书源里的 URL 选项常写成 {headers:{...}} 这种裸键形式）。
+	if err := util.UnmarshalLooseJSON(s, &m); err != nil {
+		return nil
 	}
 	return &urlOption{raw: m}
 }
@@ -474,16 +479,8 @@ func (o *urlOption) getMap(k string) map[string]any {
 		return t
 	case string:
 		m := map[string]any{}
-		if err := json.Unmarshal([]byte(t), &m); err == nil {
+		if err := util.UnmarshalLooseJSON(t, &m); err == nil {
 			return m
-		}
-		m2 := map[string]string{}
-		if err := json.Unmarshal([]byte(t), &m2); err == nil {
-			out := map[string]any{}
-			for k2, v2 := range m2 {
-				out[k2] = v2
-			}
-			return out
 		}
 	}
 	return nil
@@ -674,6 +671,45 @@ func init() {
 	js.Hooks.WebView = func(src *model.BookSource, htmlStr, urlStr, jsStr string) string {
 		js.OnLog("[webView] 本环境不支持内置浏览器，java.webView 已降级为空")
 		return ""
+	}
+	// java.startBrowser / startBrowserAwait：交给宿主的浏览器完成防爬验证。
+	//
+	// 与原版一致：宿主负责弹出浏览器、等用户通过、把 Cookie 与 UA 回填；引擎这边
+	// 只决定"要不要重新取一次正文"：
+	//   - refetch=true（startBrowserAwait 默认）：用刚写入的凭证重新请求 url，
+	//     返回真实正文——绝大多数书源要的是这个；
+	//   - refetch=false：直接用浏览器里渲染出来的 HTML（原版 startBrowserAwait
+	//     的 refetchAfterSuccess=false，以及 startBrowser 的场景）。
+	js.Hooks.StartBrowser = func(src *model.BookSource, u, title string, refetch bool) (string, int) {
+		h := net.ChallengeHandler
+		if h == nil {
+			js.OnLog("[startBrowser] 本环境不支持内置浏览器，无法完成验证：" + u)
+			return "", 0
+		}
+		res, err := h(net.Challenge{
+			URL:    u,
+			Domain: util.GetSubDomain(u),
+			Reason: "manual:" + title,
+		})
+		if err != nil {
+			js.OnLog("[startBrowser] 验证失败：" + err.Error())
+			return res.Body, 0
+		}
+		if res.Skip {
+			return res.Body, 0
+		}
+		net.ApplyChallengeResult(u, res)
+		if !refetch {
+			return res.Body, 200
+		}
+		au := New(Options{Url: u, Source: src})
+		au.NoChallenge = true
+		r, err := au.GetStrResponse()
+		if err != nil {
+			// 重新请求失败时退回浏览器里的 HTML——总比空响应强。
+			return res.Body, 0
+		}
+		return r.Body, r.StatusCode
 	}
 	// java.downloadFile(content, url) 需要知道 URL 规则里的 type
 	js.Hooks.URLType = func(src *model.BookSource, u string) string {

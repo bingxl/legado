@@ -22,6 +22,7 @@ import (
 	"github.com/legado/desktop/internal/adapter/imagefetch"
 	"github.com/legado/desktop/internal/adapter/legado"
 	"github.com/legado/desktop/internal/adapter/persistence/sqlite"
+	"github.com/legado/desktop/internal/adapter/verifywails"
 	legadowebdav "github.com/legado/desktop/internal/adapter/webdav"
 	"github.com/legado/desktop/internal/app"
 	"github.com/legado/desktop/internal/domain"
@@ -60,6 +61,9 @@ type App struct {
 	AI *app.AIService
 	// Dict 提供阅读器取词（英汉互译的词典部分）。
 	Dict *app.DictService
+	// Audio 提供音频书的地址解析、/stream/ 流式代理与离线下载。
+	// 它同时实现 http.Handler，由宿主注册到 AssetServer。
+	Audio *app.AudioService
 }
 
 // New 在 root 下装配全部业务依赖。
@@ -111,6 +115,11 @@ func New(root string, events port.EventBus) (*App, error) {
 	// 每次重启应用都要重新登录一遍（书源的 Set-Cookie 也会随之丢失）。
 	store.Default().SetCookieFile(filepath.Join(root, "cookies.json"))
 	fetcher := legado.NewFetcher(DefaultUserAgent())
+
+	// 站点人机验证（Cloudflare 托管挑战）的求解器：引擎检测到拦截时回调它，
+	// 由宿主弹出 WebView 窗口让用户点一下，再把 cf_clearance 交回 CookieStore。
+	// 必须在引擎发出第一次请求前注册。
+	verifywails.Install(events)
 
 	// ── 应用服务 ────────────────────────────────────────────
 	content := app.NewContentProvider(books, chapters, sources, parsers, fetcher, chapterCache)
@@ -205,6 +214,18 @@ func New(root string, events port.EventBus) (*App, error) {
 		},
 	})
 
+	// 听书：地址解析在 adapter/legado，真实 URL 与请求头只留在 Go 侧会话里，
+	// 前端只拿 /stream/<sid>。音频流不受 Wails 绑定往返影响，也不受 CORS 限制。
+	audio := app.NewAudioService(app.AudioDeps{
+		Root:     root,
+		Books:    books,
+		Chapters: chapters,
+		Sources:  sources,
+		Vars:     sourceVars,
+		Resolver: fetcher,
+		Events:   events,
+	})
+
 	return &App{
 		Root:        root,
 		DB:          db,
@@ -222,6 +243,7 @@ func New(root string, events port.EventBus) (*App, error) {
 		SourceLogin: sourceLogin,
 		AI:          ai,
 		Dict:        dict,
+		Audio:       audio,
 	}, nil
 }
 
@@ -233,6 +255,10 @@ func (a *App) Close() error {
 	// 先停掉缓存任务再关库：任务还在写的时候关闭连接会留下半条记录。
 	if a.Cache != nil {
 		a.Cache.StopAll()
+	}
+	// 音频下载同样是后台任务，退出前掐断，否则会写进一个已关闭的库/挂住进程。
+	if a.Audio != nil {
+		a.Audio.StopAll()
 	}
 	// WebDAV 导入是后台下载，退出时也要掐掉，否则进程会被挂住。
 	if a.WebDAV != nil {

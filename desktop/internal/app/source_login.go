@@ -11,6 +11,7 @@ import (
 	"github.com/legado/desktop/internal/app/dto"
 	"github.com/legado/desktop/internal/domain"
 	"github.com/legado/desktop/internal/port"
+	"github.com/legado/legado-go/pkg/util"
 )
 
 // SourceLoginService 负责书源（含漫画源）的登录。
@@ -369,6 +370,10 @@ func (s *SourceLoginService) persistHeader(ctx context.Context, sourceURL, heade
 //
 // loginUi 的两种存法都要认：JSON 数组，以及被转义成字符串的 JSON 数组
 // （老版本导入器会把对象写成字符串）。
+//
+// 解析必须用宽松 JSON：原版走 GSON lenient，书源里常见
+// `[{name:'账号',type:'text'},{name:'密码',type:'password'}]` 这种
+// 裸键 + 单引号的写法，严格 JSON 会解析失败并让登录框变成空的。
 func parseLoginFields(raw string) []dto.LoginFieldView {
 	s := strings.TrimSpace(raw)
 	if s == "" || s == "null" {
@@ -385,7 +390,7 @@ func parseLoginFields(raw string) []dto.LoginFieldView {
 		Type   string `json:"type"`
 		Action string `json:"action"`
 	}
-	if err := json.Unmarshal([]byte(s), &rows); err != nil {
+	if err := util.UnmarshalLooseJSON(s, &rows); err != nil {
 		return nil
 	}
 	out := make([]dto.LoginFieldView, 0, len(rows))

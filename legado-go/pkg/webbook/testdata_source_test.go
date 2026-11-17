@@ -13,6 +13,7 @@ package webbook_test
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -235,21 +236,26 @@ func TestSourceLangrenReplay(t *testing.T) {
 		len(list), len(explore), len(chapters), len([]rune(content)))
 }
 
-// —— 草榴社区：站点当前不可达，只做离线的规则语义校验 ——
+// —— t66y（草榴社區 · 成人文學交流區）：离线规则语义校验 ——
+//
+// 该源的形态是「一个帖子 = 一本书 = 一章」：目录规则直接返回单章，正文就是楼主帖。
+// 站点在境内常被墙，CI 里只跑离线规则（真站链路靠 LEGADO_ONLINE 手工验）。
 
 func TestSourceT66yRulesOffline(t *testing.T) {
-	src := loadSource(t, "t66y_book_source.json", "草榴社区-文学")
+	src := loadSource(t, "t66y_book_source.json", "t66y")
 
 	if src.SearchUrl != "" {
 		t.Errorf("该源只有发现，searchUrl 应为空: %q", src.SearchUrl)
 	}
-	// 列表页结构（按站点真实 DOM 的精简版）：#tbody tr.tr3 内是 td.tal > h3 > a
-	const listHTML = `<html><body><table id="tbody">
-	<tr class="tr3"><td class="tal"><h3><a id="t1234567" href="/read.php?tid=1234567">标题甲</a></h3></td>
-	<td class="tal">[都市]</td><td><a class="bl">作者甲</a></td></tr>
-	</table></body></html>`
 
-	// 1. 列表规则命中 1 条
+	// 列表页结构（按站点真实 DOM 精简）：#tbody > tr > td.tal > h3 > a
+	const listHTML = `<html><body><table><tbody id="tbody">
+	<tr class="tr3 t_one tac"><td class="tal" id="">
+	[現代奇幻]
+	<h3><a href="/htm_data/2611/20/7505912.html" target="_blank" id="t7505912">偷吃老爸好几次（共12章）</a></h3>
+	</td><td><a href="/thread0806.php?fid=20&search=1" class="bl">link1568</a></td></tr>
+	</tbody></table></body></html>`
+
 	ar := rule.New(src)
 	ar.SetContent(listHTML, src.BookSourceUrl)
 	els := ar.GetElements(src.GetExploreRule().BookList)
@@ -257,41 +263,243 @@ func TestSourceT66yRulesOffline(t *testing.T) {
 		t.Fatalf("列表规则未命中: %d", len(els))
 	}
 
-	// 2. 逐条按真实流程求值（每条规则都以列表元素为 content，result 也是该元素）
 	item := rule.New(src)
 	item.SetContent(els[0])
-	if got := item.GetString("h3 a@text"); got != "标题甲" {
+	if got := item.GetString(src.GetExploreRule().Name); got != "偷吃老爸好几次（共12章）" {
 		t.Errorf("name 规则结果错误: %q", got)
 	}
-	if got := item.GetString("td a.bl@text"); got != "作者甲" {
-		t.Errorf("author 规则结果错误: %q", got)
+
+	// ★ 回归点：bookUrl 的 ## 替换必须**吃掉整段路径**。
+	// 曾经写成 `href##(\d+)\.html##/read.php?tid=$1&toread=2`，只替换了文件名，
+	// 产出 /htm_data/2611/20//read.php?tid=7505912 —— 站点对该地址返回 404
+	// （「無法找到頁面」，不含 div.tpc_content），现场表现就是「正文页解析结果为空」。
+	got := item.GetString(src.GetExploreRule().BookUrl)
+	if want := "/read.php?tid=7505912&toread=2"; got != want {
+		t.Fatalf("bookUrl 规则结果错误: %q（期望 %q）", got, want)
 	}
-	// `result.select('td.tal').text().match(/\[.*?\]/)` —— 验证 ElementWrap 的 select/text 可用
-	if got := item.GetString(`@js:(result.select('td.tal').text().match(/\[.*?\]/)||[''])[0]`); got != "[都市]" {
-		t.Errorf("kind JS 规则结果错误: %q", got)
-	}
-	// 详情地址由 JS 拼装，验证 ElementWrap#attr 与正则替换
-	wantURL := "https://t66y.com/read.php?tid=1234567&fpage=0&toread=2"
-	if got := item.GetString(`@js:'https://t66y.com/read.php?tid='+result.select('h3 a').attr('id').replace(/[^0-9]/g,'')+'&fpage=0&toread=2'`); got != wantURL {
-		t.Errorf("bookUrl JS 规则结果错误: %q", got)
+	if strings.Contains(got, "htm_data") {
+		t.Errorf("bookUrl 残留 htm_data 路径，会 404: %q", got)
 	}
 
-	// 3. 目录规则：单章，标题固定
-	ar.SetContent(listHTML, src.BookSourceUrl)
-	if els := ar.GetElements(src.GetTocRule().ChapterList); len(els) != 1 {
-		t.Errorf("chapterList JS 规则应返回 1 个元素，实际 %d", len(els))
+	// 详情页：<title> 带 [分類] 前缀与站点后缀，规则要剥干净
+	const infoHTML = `<html><head><title>[另類禁忌] 偷吃老爸好几次（共12章） - 成人文學交流區 | 草榴社區 - t66y.com</title></head>
+	<body><div class="tpc_content" id="conttpc">作者：lili525<br /><br />　　（一）<br />　　第一段正文</div></body></html>`
+	const pageURL = "https://t66y.com/read.php?tid=7505912&toread=2"
+
+	ir := rule.New(src)
+	ir.SetContent(infoHTML, pageURL)
+	if got := ir.GetString(src.GetBookInfoRule().Name); got != "偷吃老爸好几次（共12章）" {
+		t.Errorf("详情 name 规则结果错误: %q", got)
 	}
-	if got := ar.GetString(src.GetTocRule().ChapterName); got != "正文" {
-		t.Errorf("chapterName JS 规则结果错误: %q", got)
+	if got := ir.GetString(src.GetBookInfoRule().Author); got != "lili525" {
+		t.Errorf("详情 author 规则结果错误: %q", got)
 	}
 
-	// 4. 正文规则：div.tpc_content@textNodes
-	const contentHTML = `<html><body><div class="tpc_content">第一段<br>第二段</div></body></html>`
+	// 目录：单帖单章（chapterList 命中 body 一个元素）
+	tr := rule.New(src)
+	tr.SetContent(infoHTML, pageURL)
+	if els := tr.GetElements(src.GetTocRule().ChapterList); len(els) != 1 {
+		t.Errorf("chapterList 规则应返回 1 个元素，实际 %d", len(els))
+	}
+
+	// 正文：div.tpc_content@html（保留 <br>，比 @textNodes 更利于分段渲染）
 	cr := rule.New(src)
-	cr.SetContent(contentHTML, src.BookSourceUrl)
-	list := cr.GetStringList(src.GetContentRule().Content)
-	if len(list) != 1 || !strings.Contains(list[0], "第一段") || !strings.Contains(list[0], "第二段") {
-		t.Errorf("正文规则结果错误: %#v", list)
+	cr.SetContent(infoHTML, pageURL)
+	content := cr.GetString(src.GetContentRule().Content)
+	for _, want := range []string{"tpc_content", "第一段正文", "<br"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("正文规则结果缺少 %q: %.120q", want, content)
+		}
+	}
+	if strings.Contains(content, "script") {
+		t.Errorf("正文未清洗 script: %.120q", content)
+	}
+}
+
+// —— 爱丽丝书屋（alicesw.com）：站点在境内不可达，只做离线的规则语义校验 ——
+//
+// 该源是纯静态 HTML：列表 / 详情 / 目录 / 正文全部服务端直出，没有任何 JS 计算或接口二次请求。
+// 需要代理才能访问真站，所以 CI 只跑离线规则（真站链路 ALICESW_LIVE=1 手工验）。
+
+func TestSourceAliceSWRulesOffline(t *testing.T) {
+	src := loadSource(t, "alicesw_book_source.json", "爱丽丝书屋")
+
+	// 只有发现，没有搜索以外的聚合能力；搜索走 GET 查询串
+	if !strings.Contains(src.SearchUrl, "/search.html?q={{key}}") {
+		t.Errorf("搜索地址异常: %q", src.SearchUrl)
+	}
+	kinds := model.ParseExploreKinds(src.ExploreUrl)
+	if len(kinds) < 30 || kinds[0].Title != "科幻" || kinds[0].Url != "/lists/71.html?page={{page}}" {
+		t.Errorf("发现分类异常（首个 %+v，共 %d 个）", kinds[0], len(kinds))
+	}
+
+	// 详情页：作者/分类/最新章靠 div.novel_info 里的 <p> 顺序（p.0/p.1/p.5）
+	const detailHTML = `<html><body>
+	<div class="detail-cols"><div class="ui_bg6"><div class="box_intro">
+	  <div class="pic"><img data-src="https://img.example.com/cover.webp" src="/static/tmp.jpg" alt="测试书"></div>
+	  <div class="box_info">
+	    <div class="novel_title">测试书名</div>
+	    <div class="novel_info">
+	      <p>作 者：<a href="/search.html?q=某作者&f=author">某作者</a></p>
+	      <p>分 类：<a href="/lists/62.html">玄幻</a></p>
+	      <p>热 度：1 · 收 藏：2</p>
+	      <p>字 数：1.23万 · 章 节：2</p>
+	      <p>状 态：连载中</p>
+	      <p>最 新：<a href="/book/50000/abcdef1234567.html">2 第二章</a></p>
+	    </div>
+	  </div>
+	</div>
+	<div class="book_newchap">
+	  <div class="tit tabtitle">最新章节：全2章 <a href="/other/chapters/id/40000.html">查看所有章节</a></div>
+	  <div class="con"><li><a href="/book/50000/abcdef1234567.html">2 第二章</a><em>更新时间：2026-11-09 01:47</em></li></div>
+	</div>
+	<div class="jianjie"><h6>内容简介：</h6><p>这里是简介正文。</p><div id="ddlist">随机提示</div></div>
+	</div></div></body></html>`
+	const detailURL = "https://www.alicesw.com/novel/40000.html"
+
+	ir := rule.New(src)
+	ir.SetContent(detailHTML, detailURL)
+	info := src.GetBookInfoRule()
+	checks := map[string]string{
+		"name":        "测试书名",
+		"author":      "某作者",
+		"kind":        "玄幻",
+		"lastChapter": "2 第二章",
+		"coverUrl":    "https://img.example.com/cover.webp",
+		"intro":       "这里是简介正文。",
+	}
+	got := map[string]string{
+		"name":        ir.GetString(info.Name),
+		"author":      ir.GetString(info.Author),
+		"kind":        ir.GetString(info.Kind),
+		"lastChapter": ir.GetString(info.LastChapter),
+		"coverUrl":    ir.GetString(info.CoverUrl),
+		"intro":       ir.GetString(info.Intro),
+	}
+	for k, want := range checks {
+		if got[k] != want {
+			t.Errorf("详情 %s 规则结果错误: %q（期望 %q）", k, got[k], want)
+		}
+	}
+
+	// ★ 回归点：tocUrl 必须取详情页里「查看所有章节」的链接。
+	// 详情 ID(40000) 与章节页 ID(50000) 不是同一个数字，用详情 URL 拼 /book/<id>/ 一定 404。
+	if u := ir.GetString(info.TocUrl); u != "/other/chapters/id/40000.html" {
+		t.Fatalf("tocUrl 规则结果错误: %q", u)
+	}
+
+	// 目录：ul.mulu_list 一次给全（站点不分页）
+	const tocHTML = `<html><body><ul class="mulu_list">
+	<li><a href="/book/50000/9f25147eca9f8.html" target="_blank">1 第一章</a></li>
+	<li><a href="/book/50000/abcdef1234567.html" target="_blank">2 第二章</a></li>
+	</ul></body></html>`
+	tr := rule.New(src)
+	tr.SetContent(tocHTML, "https://www.alicesw.com/other/chapters/id/40000.html")
+	els := tr.GetElements(src.GetTocRule().ChapterList)
+	if len(els) != 2 {
+		t.Fatalf("目录规则应返回 2 章，实际 %d", len(els))
+	}
+	cr0 := rule.New(src)
+	cr0.SetContent(els[1])
+	if n, u := cr0.GetString(src.GetTocRule().ChapterName), cr0.GetString(src.GetTocRule().ChapterUrl); n != "2 第二章" || u != "/book/50000/abcdef1234567.html" {
+		t.Errorf("章节规则结果错误: %q %q", n, u)
+	}
+
+	// 正文：div.read-content 内是 <p> 段落，@html 保留分段
+	const chapHTML = `<html><body><div class="read-content j_readContent user_ad_content">
+	<p>　　第一段正文。</p><p>　　第二段正文。</p>
+	</div><div id="user_ad"></div></body></html>`
+	ch := rule.New(src)
+	ch.SetContent(chapHTML, "https://www.alicesw.com/book/50000/abcdef1234567.html")
+	content := ch.GetString(src.GetContentRule().Content)
+	for _, want := range []string{"第一段正文", "第二段正文", "<p>"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("正文规则结果缺少 %q: %.120q", want, content)
+		}
+	}
+	if strings.Contains(content, `id="user_ad"`) {
+		t.Errorf("正文误吞广告区: %.120q", content)
+	}
+
+	// 发现列表：div.rec_rullist 下每个 <ul> 是一条
+	const listHTML = `<html><body><div class="clearfix rec_rullist"><ul>
+	<li class="one"><span>1</span></li>
+	<li class="sev"><span><a href="/lists/62.html">玄幻小说</a></span></li>
+	<li class="two"><a href="/novel/54028.html" target="_blank">玉壶修仙传</a></li>
+	<li class="three"><a href="/book/55360/e15a23a5fa4d3.html">02 夜半杀人</a></li>
+	<li class="four">某作者</li><li class="five">0.77万</li><li class="six">2026-11-09</li>
+	</ul></div></body></html>`
+	lr := rule.New(src)
+	lr.SetContent(listHTML, "https://www.alicesw.com/lists/62.html?page=1")
+	els = lr.GetElements(src.GetExploreRule().BookList)
+	if len(els) != 1 {
+		t.Fatalf("发现列表规则未命中: %d", len(els))
+	}
+	er := rule.New(src)
+	er.SetContent(els[0])
+	xr := src.GetExploreRule()
+	if v := er.GetString(xr.Name); v != "玉壶修仙传" {
+		t.Errorf("发现 name 错误: %q", v)
+	}
+	if v := er.GetString(xr.Author); v != "某作者" {
+		t.Errorf("发现 author 错误: %q", v)
+	}
+	if v := er.GetString(xr.Kind); v != "玄幻" {
+		t.Errorf("发现 kind 应剥掉「小说」后缀: %q", v)
+	}
+	if v := er.GetString(xr.LastChapter); v != "02 夜半杀人" {
+		t.Errorf("发现 lastChapter 错误: %q", v)
+	}
+	if v := er.GetString(xr.BookUrl); v != "/novel/54028.html" {
+		t.Errorf("发现 bookUrl 错误: %q", v)
+	}
+
+	// 搜索：div.list-group-item，书名带「1. 」序号前缀要剥掉，标签要去 # 并逗号连接
+	const searchHTML = `<html><body><div class="list-group">
+	<div class="list-group-item">
+	  <h5><a href="/novel/42159.html" target="_blank">1. 逸<em>剑</em>风云决</a><small>[已完结]</small></h5>
+	  <p class="mb-1 text-muted">作者：<a href="/search?q=Ding&f=author">Ding</a> 字数：2.47万</p>
+	  <p class="content-txt">简介首句。</p>
+	  <p class="text-muted">标签：<a href="/search?q=x&f=tag"><span>#</span>调教</a> <a href="/search?q=y&f=tag"><span>#</span>凌辱</a></p>
+	  <p class="timedesc">发布时间：2025-07-26</p>
+	</div></div></body></html>`
+	sr := rule.New(src)
+	sr.SetContent(searchHTML, "https://www.alicesw.com/search.html?q=%E5%89%91&f=_all")
+	els = sr.GetElements(src.GetSearchRule().BookList)
+	if len(els) != 1 {
+		t.Fatalf("搜索列表规则未命中: %d", len(els))
+	}
+	ss := rule.New(src)
+	ss.SetContent(els[0])
+	xq := src.GetSearchRule()
+	if v := ss.GetString(xq.Name); v != "逸剑风云决" {
+		t.Errorf("搜索 name 应剥掉序号前缀: %q", v)
+	}
+	if v := ss.GetString(xq.Author); v != "Ding" {
+		t.Errorf("搜索 author 错误: %q", v)
+	}
+	if v := ss.GetString(xq.Intro); v != "简介首句。" {
+		t.Errorf("搜索 intro 错误: %q", v)
+	}
+	if v := ss.GetString(xq.Kind); v != "调教,凌辱" {
+		t.Errorf("搜索 kind 应为「调教,凌辱」: %q", v)
+	}
+	if v := ss.GetString(xq.BookUrl); v != "/novel/42159.html" {
+		t.Errorf("搜索 bookUrl 错误: %q", v)
+	}
+
+	// bookUrlPattern 只认详情页，别把列表/搜索/章节页当成书
+	if !regexp.MustCompile(src.BookUrlPattern).MatchString(detailURL) {
+		t.Errorf("bookUrlPattern 未命中详情页: %s", src.BookUrlPattern)
+	}
+	for _, u := range []string{
+		"https://www.alicesw.com/lists/62.html",
+		"https://www.alicesw.com/search.html?q=a&f=_all",
+		"https://www.alicesw.com/book/50000/abcdef1234567.html",
+	} {
+		if regexp.MustCompile(src.BookUrlPattern).MatchString(u) {
+			t.Errorf("bookUrlPattern 误命中非详情页: %s", u)
+		}
 	}
 }
 

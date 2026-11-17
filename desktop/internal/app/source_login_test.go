@@ -639,6 +639,16 @@ func TestParseLoginFields(t *testing.T) {
 			[]dto.LoginFieldView{{Name: "手机", Type: "text"}},
 		},
 		{
+			// 书源里最常见的写法：裸键 + 单引号，原版靠 GSON lenient 解析。
+			"宽松 JS 字面量",
+			`[{name:'账号',type:'text'},{name:'密码',type:'password'},{name:'登录',type:'button',action:"java.post('/login','a=1')"}]`,
+			[]dto.LoginFieldView{
+				{Name: "账号", Type: "text"},
+				{Name: "密码", Type: "password"},
+				{Name: "登录", Type: "button", Action: "java.post('/login','a=1')"},
+			},
+		},
+		{
 			"默认 type 与未知 type",
 			`[{"name":"a"},{"name":"b","type":"switch"},{"name":""},{"name":"c","type":"PASSWORD"}]`,
 			[]dto.LoginFieldView{{Name: "a", Type: "text"}, {Name: "c", Type: "password"}},

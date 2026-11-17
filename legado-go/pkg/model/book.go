@@ -55,6 +55,9 @@ func (v *VariableHolder) ensure() {
 
 // PutVariable 保存变量，超过 10000 字符转为"大变量"
 func (v *VariableHolder) PutVariable(key, value string) {
+	if v == nil {
+		return
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.ensure()
@@ -68,6 +71,9 @@ func (v *VariableHolder) PutVariable(key, value string) {
 }
 
 func (v *VariableHolder) GetVariable(key string) string {
+	if v == nil {
+		return ""
+	}
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	v.ensure()
@@ -78,6 +84,9 @@ func (v *VariableHolder) GetVariable(key string) string {
 }
 
 func (v *VariableHolder) DelVariable(key string) {
+	if v == nil {
+		return
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.ensure()
@@ -87,6 +96,9 @@ func (v *VariableHolder) DelVariable(key string) {
 
 // ToJSON 序列化为 JSON 字符串（不含大变量）
 func (v *VariableHolder) ToJSON() string {
+	if v == nil {
+		return ""
+	}
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	if len(v.vars) == 0 {
@@ -97,6 +109,9 @@ func (v *VariableHolder) ToJSON() string {
 }
 
 func (v *VariableHolder) LoadJSON(s string) {
+	if v == nil {
+		return
+	}
 	if strings.TrimSpace(s) == "" {
 		return
 	}
@@ -145,6 +160,10 @@ func (b *Book) GetReverseToc() bool { return b.ReverseToc }
 
 // IsWebFile 是否为文件型书籍（下载站）。对齐 legado 的 `type and BookType.webFile`。
 func (b *Book) IsWebFile() bool { return b.Type&BookFlagWebFile != 0 }
+
+// IsAudio 是否为音频书。对齐 legado 的 Book.isAudio（`type and BookType.audio`）。
+// 音频书的「正文」是音频地址规则串，不走文本/图片渲染。
+func (b *Book) IsAudio() bool { return b.Type&BookFlagAudio != 0 }
 
 // SetSourceType 按书源类型重设 Type（对齐 WebBook 里的
 // removeAllBookType() + addType(source.getBookType())）

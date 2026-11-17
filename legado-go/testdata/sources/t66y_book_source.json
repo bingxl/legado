@@ -1,34 +1,38 @@
 [
   {
-    "bookSourceUrl": "https://t66y.com/thread0806.php?fid=20",
-    "bookSourceName": "草榴社区-文学",
-    "bookSourceGroup": "文学",
+    "bookSourceName": "t66y",
+    "bookSourceGroup": "🍕 图片,🎨 漫画,bingxl",
     "bookSourceType": 0,
-    "bookUrlPattern": "read\\.php\\?tid=\\d+",
+    "bookSourceUrl": "https://t66y.com/thread0806.php",
+    "bookUrlPattern": "(read\\.php\\?tid=\\d+|/htm_data/[\\w/]+\\.html)",
+    "customOrder": 0,
     "enabled": true,
+    "enabledCookieJar": true,
     "enabledExplore": true,
     "header": "{\"User-Agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\"}",
-    "exploreUrl": "https://t66y.com/thread0806.php?fid=20&search=&page={{page}}",
-    "ruleExplore": {
-      "bookList": "#tbody tr.tr3",
-      "name": "h3 a@text",
-      "author": "td a.bl@text",
-      "kind": "@js:(result.select('td.tal').text().match(/\\[.*?\\]/)||[''])[0]",
-      "bookUrl": "@js:'https://t66y.com/read.php?tid='+result.select('h3 a').attr('id').replace(/[^0-9]/g,'')+'&fpage=0&toread=2'"
-    },
+    "exploreUrl": "現代奇幻::https://t66y.com/thread0806.php?fid=20&type=1&page={{page}},\n古典武俠::https://t66y.com/thread0806.php?fid=20&type=2&page={{page}},\n另類禁忌::https://t66y.com/thread0806.php?fid=20&type=3&page={{page}},\n性愛技巧::https://t66y.com/thread0806.php?fid=20&type=4&page={{page}},\n笑話連篇::https://t66y.com/thread0806.php?fid=20&type=5&page={{page}},\n有声小说::https://t66y.com/thread0806.php?fid=20&type=6&page={{page}},\n其他交流::https://t66y.com/thread0806.php?fid=20&type=12&page={{page}},\n所有主題::https://t66y.com/thread0806.php?fid=20&page={{page}},\n精華主題::https://t66y.com/thread0806.php?fid=20&search=digest&page={{page}},\n今日主題(6)::https://t66y.com/thread0806.php?fid=20&search=today&page={{page}}",
+    "lastUpdateTime": 0,
+    "respondTime": 180000,
     "ruleBookInfo": {
-      "name": "@js:src.match(/<title>([^<]+)<\\/title>/)[1].replace(/^\\[[^\\]]*\\]\\s*/,'').replace(/\\s*作者：.*$/,'').trim()",
-      "author": "@js:(src.match(/作者：([^<\\s-]+)/)||['',''])[1]"
-    },
-    "ruleToc": {
-      "chapterList": "@js:[1]",
-      "chapterName": "@js:'正文'",
-      "chapterUrl": "@js:book.tocUrl"
+      "name": "@js:src.match(/<title>([^<]+)<\\/title>/)[1].replace(/^\\[[^\\]]*\\]\\s*/,'').replace(/\\s*[-|]\\s*(成人文學交流區|草榴社區|t66y\\.com)[\\s\\S]*$/,'').trim()",
+      "author": "@js:(src.match(/作者：([^<\\s-]+)/)||['',''])[1]",
+      "tocUrl": "@js:book.bookUrl"
     },
     "ruleContent": {
-      "content": "div.tpc_content@textNodes",
-      "nextContentUrl": "div.pages a:contains(下一頁)@href"
-    }
+      "content": "div.tpc_content@html"
+    },
+    "ruleExplore": {
+      "bookList": "#tbody > tr > td.tal >h3 >a",
+      "name": "text",
+      "bookUrl": "href##^.*/(\\d+)\\.html##/read.php?tid=$1&toread=2"
+    },
+    "ruleSearch": {},
+    "ruleToc": {
+      "chapterList": "body",
+      "chapterName": "@js:book.name",
+      "chapterUrl": "@js:book.tocUrl"
+    },
+    "weight": 0
   },
   {
     "bookSourceGroup": "18+,bingxl,🍕 文字",

@@ -127,17 +127,13 @@ func (sr *SourceRule) splitPutRule(ruleStr string) string {
 	for _, m := range putPattern.FindAllStringSubmatch(ruleStr, -1) {
 		out = strings.Replace(out, m[0], "", 1)
 		var obj map[string]string
-		if err := json.Unmarshal([]byte(m[1]), &obj); err == nil {
-			maps.Copy(sr.PutMap, obj)
-			continue
-		}
-		// 非规范 JSON（键无引号）容错
-		if err := json.Unmarshal([]byte(util.RelaxJSONKeys(m[1])), &obj); err == nil {
+		// 宽松 JSON：单引号、裸键、注释都认（原版走 GSON lenient）。
+		if err := util.UnmarshalLooseJSON(m[1], &obj); err == nil {
 			maps.Copy(sr.PutMap, obj)
 			continue
 		}
 		// 书源里最常见的形式：键和值都不加引号（{book:id}、{bid:@css:a@text}）。
-		// Kotlin 侧靠 GSON 宽松模式解析，这里只能自己按最宽松的规则切分。
+		// Kotlin 侧靠 GSON 宽松模式解析，这里按最宽松的规则切分。
 		if obj, ok := util.ParseLooseStringMap(m[1]); ok {
 			maps.Copy(sr.PutMap, obj)
 		}

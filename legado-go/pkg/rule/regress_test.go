@@ -104,3 +104,31 @@ func TestIsSelectorRule(t *testing.T) {
 		}
 	}
 }
+
+// 回归：`.[?(@.title)]` 这类「点+方括号」的 JSONPath 必须能跑。
+//
+// legado 对不以 `$` 开头的路径补 `$.` 前缀，`.[?(...)]` 因此变成
+// `$..[?(...)]`（递归下降过滤）。ojg 不认 `.[`，直接报
+// "expression fragment can not start with a '['"，规则会静默返回 0 条。
+// UAA·文学 这类纯 API 书源就用一条 `.[?(@.title)]` 同时捞
+// `model.data[]` 里的书和 `model.menus[].children[]` 里的章节；
+// 命中 0 条会让列表退化成「按详情页解析」，把列表接口地址当成详情地址。
+func TestJSONPathLeadingDotBracket(t *testing.T) {
+	search := `{"model":{"data":[{"id":1,"title":"甲"},{"id":2,"title":"乙"}],"total":2}}`
+	catalog := `{"model":{"menus":[{"title":"第一卷","type":"2","children":[
+		{"id":11,"title":"第一章"},{"id":12,"title":"第二章"}]}]}}`
+
+	if got := len(JsonGetList(search, ".[?(@.title)]")); got != 2 {
+		t.Errorf("嵌套列表应命中 2 条，实际 %d", got)
+	}
+	if got := len(JsonGetList(catalog, ".[?(@.title)]")); got != 3 {
+		t.Errorf("目录应递归命中 卷+2 章 = 3 条，实际 %d", got)
+	}
+	// 已有写法不能被改坏
+	if got := len(JsonGetList(search, "$.model.data")); got != 2 {
+		t.Errorf("$.model.data 应命中 2 条，实际 %d", got)
+	}
+	if got := len(JsonGetList(search, "$..[?(@.title)]")); got != 2 {
+		t.Errorf("显式递归写法应命中 2 条，实际 %d", got)
+	}
+}

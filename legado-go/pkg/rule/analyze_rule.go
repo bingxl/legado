@@ -798,6 +798,10 @@ func (ar *AnalyzeRule) evalJSRaw(jsStr string, result any) (any, error) {
 		NextChapterUrl: ar.nextChapterUrl,
 		Vars:           ar,
 		InPreUpdateJs:  ar.InPreUpdateJs,
+		// java.getString(rule) / getStringList(rule) 按规则求值当前内容。
+		// 这里不加锁：evalJSRaw 本身不持 ar.mu，GetString 内部自己取读锁。
+		EvalRuleString:     func(rule string) string { return ar.GetString(rule) },
+		EvalRuleStringList: func(rule string) []string { return ar.GetStringList(rule) },
 	}
 	if ar.Chapter != nil {
 		b.Title = ar.Chapter.Title

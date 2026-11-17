@@ -36,6 +36,9 @@ type ChapterContent struct {
 	// Images 是漫画/图片类章节的图片地址列表；文本章节为空。
 	// 元素既可以是 http(s) 外链，也可以是由 ResourceServer 提供的本地地址。
 	Images []string
+	// Audio 是音频书的「正文」——一段待 AnalyzeUrl 展开的音频地址规则串。
+	// 与漫画源用 Images 分流同理：文本/图片/音频三选一，前端不该拿到它。
+	Audio string
 }
 
 // LocalBookParser 解析本地书籍文件。

@@ -14,6 +14,10 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- 听书前台服务：Android 14 (API 34) 起 mediaPlayback 类型必须显式声明权限。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- 熄屏续播：PARTIAL_WAKE_LOCK + WifiLock 都依赖它。 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- 存储：安卓 10 及以下用传统读写权限；安卓 11 起分区存储，读任意位置的
          书籍文件只能靠「所有文件访问」（MANAGE_EXTERNAL_STORAGE）特殊权限，
@@ -79,6 +83,13 @@
             android:name=".WailsForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- 听书：前台保活 + MediaStyle 通知 + 媒体键 / 音频焦点 / WakeLock。
+             与上面的 dataSync 服务互不干扰，只在真正播放时由前端启动。 -->
+        <service
+            android:name=".AudioPlayService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
     </application>
 
 </manifest>

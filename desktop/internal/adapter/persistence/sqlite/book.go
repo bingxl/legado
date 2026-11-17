@@ -22,7 +22,7 @@ func NewBookRepo(db *DB) *BookRepo { return &BookRepo{db: db} }
 // 编译期断言。
 var _ port.BookRepository = (*BookRepo)(nil)
 
-const bookColumns = `id, name, author, intro, cover_url, kind, format, origin, book_url,
+const bookColumns = `id, name, author, intro, cover_url, kind, format, type, origin, book_url,
 	group_id, sort_order, total_chapters, last_chapter, dur_chapter_index, dur_chapter_title,
 	dur_chapter_pos, created_at, updated_at, last_read_at, variable, in_shelf`
 
@@ -32,6 +32,10 @@ func (r *BookRepo) Create(ctx context.Context, b *domain.Book) error {
 		return fmt.Errorf("%w: 书名不能为空", domain.ErrInvalidArgument)
 	}
 	now := time.Now()
+	// 文本是默认类型（8），与 Kotlin BookType.text 一致；音频书由抓取器显式写 32。
+	if b.Type == 0 {
+		b.Type = domain.BookTypeText
+	}
 	if b.CreatedAt.IsZero() {
 		b.CreatedAt = now
 	}
@@ -40,11 +44,11 @@ func (r *BookRepo) Create(ctx context.Context, b *domain.Book) error {
 	}
 
 	const query = `INSERT INTO books (` + bookColumns + `)
-		VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id`
-	// bookColumns 含 id，故需 20 个占位符（不含 id）。
+	// bookColumns 含 id 共 22 列，故需 21 个占位符（不含 id）。
 	args := []any{
-		b.Name, b.Author, b.Intro, b.CoverURL, string(b.Kind), string(b.Format),
+		b.Name, b.Author, b.Intro, b.CoverURL, string(b.Kind), string(b.Format), b.Type,
 		b.Origin, b.BookURL, b.GroupID, b.Order, b.TotalChapters, b.LastChapter,
 		b.DurChapterIndex, b.DurChapterTitle, b.DurChapterPos,
 		b.CreatedAt, b.UpdatedAt, nullableTime(b.LastReadAt), b.Variable,
@@ -66,11 +70,11 @@ func (r *BookRepo) Update(ctx context.Context, b *domain.Book) error {
 		return fmt.Errorf("%w: 缺少书籍 ID", domain.ErrInvalidArgument)
 	}
 	b.UpdatedAt = time.Now()
-	const query = `UPDATE books SET name=?, author=?, intro=?, cover_url=?, kind=?, format=?,
+	const query = `UPDATE books SET name=?, author=?, intro=?, cover_url=?, kind=?, format=?, type=?,
 		group_id=?, sort_order=?, total_chapters=?, last_chapter=?, dur_chapter_index=?,
 		dur_chapter_title=?, dur_chapter_pos=?, variable=?, updated_at=?, last_read_at=? WHERE id=?`
 	res, err := r.db.q(ctx).ExecContext(ctx, query,
-		b.Name, b.Author, b.Intro, b.CoverURL, string(b.Kind), string(b.Format),
+		b.Name, b.Author, b.Intro, b.CoverURL, string(b.Kind), string(b.Format), b.Type,
 		b.GroupID, b.Order, b.TotalChapters, b.LastChapter,
 		b.DurChapterIndex, b.DurChapterTitle, b.DurChapterPos, b.Variable,
 		b.UpdatedAt, nullableTime(b.LastReadAt), b.ID)
@@ -198,7 +202,7 @@ func scanBook(s scanner) (*domain.Book, error) {
 		inShelf              int
 	)
 	err := s.Scan(
-		&b.ID, &b.Name, &b.Author, &b.Intro, &b.CoverURL, &kind, &format,
+		&b.ID, &b.Name, &b.Author, &b.Intro, &b.CoverURL, &kind, &format, &b.Type,
 		&b.Origin, &b.BookURL, &b.GroupID, &b.Order, &b.TotalChapters, &b.LastChapter,
 		&b.DurChapterIndex, &b.DurChapterTitle, &b.DurChapterPos,
 		&createdAt, &updatedAt, &lastReadAt, &b.Variable, &inShelf,

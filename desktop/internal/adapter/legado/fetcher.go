@@ -137,6 +137,12 @@ func (f *Fetcher) GetBookInfo(ctx context.Context, src *domain.BookSource, b *do
 	book.GroupID = b.GroupID
 	book.Origin = src.URL
 	book.Kind = domain.BookKindWeb
+	// 书源类型决定打开方式：音频书必须落 format=audio 与 type 位域 32，
+	// 否则书架/详情会把「开始听书」错发到文本阅读器。
+	book.Type = legadomodel.SourceTypeToBookType(engineSrc.GetBookType())
+	if isAudioSource(engineSrc) {
+		book.Format = domain.BookFormatAudio
+	}
 	return book, fromEngineChapters(engineChapters, b.ID), nil
 }
 
@@ -162,6 +168,11 @@ func (f *Fetcher) GetContent(ctx context.Context, src *domain.BookSource, b *dom
 	// 保留 HTML 原样，导出（EPUB）还需要它来内嵌图片。
 	if isComicSource(engineSrc) {
 		content.Images = extractImages(html, ch.URL)
+	}
+	// 音频源：整段「正文」其实是 URL 规则串，交给 AudioResolver 展开。
+	// 原版 AudioPlay.kt 也是把 getContent 结果原样当 durPlayUrl 用。
+	if isAudioSource(engineSrc) {
+		content.Audio = strings.TrimSpace(html)
 	}
 	return content, nil
 }
@@ -248,6 +259,8 @@ func toEngineBook(b *domain.Book) *legadomodel.Book {
 	out.Intro = b.Intro
 	out.CoverUrl = b.CoverURL
 	out.TotalChapterNum = b.TotalChapters
+	// 书源 JS 会读 book.type（`=== 64` 图片 / `& 128` 下载站），必须带上真实位域。
+	out.Type = b.Type
 	out.DurChapterIndex = b.DurChapterIndex
 	out.DurChapterTitle = b.DurChapterTitle
 	// 书源在列表页 @put 的变量要靠它恢复：目录/正文规则里的 @get 从这里取值。
@@ -266,6 +279,7 @@ func fromEngineBook(b *legadomodel.Book) *domain.Book {
 		Intro:           b.Intro,
 		CoverURL:        b.CoverUrl,
 		Kind:            domain.BookKindWeb,
+		Type:            b.Type,
 		Origin:          b.Origin,
 		OriginName:      b.OriginName,
 		BookURL:         b.BookUrl,

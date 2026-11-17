@@ -8,6 +8,7 @@ import { libraryApi } from "@/api/library";
 import { bookshelfApi } from "@/api/bookshelf";
 import { systemApi } from "@/api/system";
 import { coverURL } from "@/utils/media";
+import { isAudioBook } from "@/types";
 import type { BookBrief, ImportResult } from "@/types";
 
 const router = useRouter();
@@ -103,7 +104,12 @@ async function removeBook(book: BookBrief) {
 }
 
 function openBook(book: BookBrief) {
-  router.push({ name: "reader", params: { id: String(book.id) } });
+  // 音频书进听书页，其余进阅读器。新 DTO 字段经 isAudioBook 统一判定。
+  if (isAudioBook(book)) {
+    router.push({ name: "audio", params: { id: String(book.id) } });
+  } else {
+    router.push({ name: "reader", params: { id: String(book.id) } });
+  }
 }
 </script>
 

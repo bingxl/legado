@@ -1,7 +1,6 @@
 package net
 
 import (
-	"bytes"
 	"crypto/tls"
 	"io"
 	"maps"
@@ -47,6 +46,11 @@ type Options struct {
 	SaveCookie bool
 	// CookieDomain 覆盖 cookie 作用域
 	CookieDomain string
+	// NoChallenge 跳过反爬人工验证。
+	//
+	// 验证通过后的"重新取正文"必须置 true：否则一旦凭证还没生效，
+	// 引擎会再弹一次验证窗口，用户会看到窗口反复弹出。
+	NoChallenge bool
 }
 
 // Client HTTP 客户端
@@ -81,7 +85,7 @@ func (c *Client) timeout(o *Options) time.Duration {
 	return 30 * time.Second
 }
 
-// Do 执行请求（含 cookie 注入、编码识别、重试）
+// Do 执行请求（含 cookie 注入、编码识别、重试与反爬人工验证）
 func (c *Client) Do(opt Options) (*Response, error) {
 	method := strings.ToUpper(opt.Method)
 	if method == "" {
@@ -93,40 +97,73 @@ func (c *Client) Do(opt Options) (*Response, error) {
 		hc = &http.Client{Timeout: timeout, Transport: newTransport(opt.Proxy)}
 	}
 
-	// 1. 注入已保存 cookie
 	domain := opt.CookieDomain
 	if domain == "" {
 		domain = util.GetSubDomain(opt.URL)
 	}
-	headers := map[string]string{}
-	maps.Copy(headers, opt.Headers)
-	if _, ok := headers["User-Agent"]; !ok {
-		headers["User-Agent"] = c.UserAgent
-	}
-	stored := store.Default().GetCookie(domain)
-	if stored != "" {
-		headers["Cookie"] = store.MergeCookies(headers["Cookie"], stored)
-	}
-	delete(headers, CookieJarHeader)
 
-	// 2. 构造 body
-	var bodyReader io.Reader
+	// 基础请求头：不含 Cookie——每轮都要按最新的 CookieStore 重新拼，
+	// 否则验证拿到 cf_clearance 之后的重试仍然带的是旧 Cookie。
+	baseHeaders := map[string]string{}
+	maps.Copy(baseHeaders, opt.Headers)
+	delete(baseHeaders, CookieJarHeader)
+
+	// UA 决策：域名上存在验证覆盖值时一律用覆盖值。
+	//
+	// cf_clearance 与 UA 绑定，书源自己配的 UA 如果和通过验证时浏览器的 UA
+	// 不一致，Cloudflare 会认为凭证不属于这个客户端，验证过了照样 403。
+	uaKey := ""
+	for k := range baseHeaders {
+		if strings.EqualFold(k, "User-Agent") {
+			uaKey = k
+			break
+		}
+	}
+	overridden := UserAgentOverride(domain)
+	switch {
+	case uaKey != "" && overridden != "":
+		baseHeaders[uaKey] = overridden
+	case uaKey == "":
+		ua := c.UserAgent
+		if overridden != "" {
+			ua = overridden
+		}
+		baseHeaders["User-Agent"] = ua
+	}
+
+	// 请求体只在这里定格一次：重试与换凭证重试都要重新造 reader，
+	// 复用同一个 reader 会让第二轮读到已经消费完的 body（POST 书源变空 body）。
+	bodyStr := ""
 	if (method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch) && opt.Body != "" {
-		bodyReader = bytes.NewReader([]byte(opt.Body))
+		bodyStr = opt.Body
 		if opt.ContentType != "" {
-			headers["Content-Type"] = opt.ContentType
-		} else if _, ok := headers["Content-Type"]; !ok {
+			baseHeaders["Content-Type"] = opt.ContentType
+		} else if _, ok := baseHeaders["Content-Type"]; !ok {
 			if looksJSON(opt.Body) {
-				headers["Content-Type"] = "application/json;charset=UTF-8"
+				baseHeaders["Content-Type"] = "application/json;charset=UTF-8"
 			} else {
-				headers["Content-Type"] = "application/x-www-form-urlencoded"
+				baseHeaders["Content-Type"] = "application/x-www-form-urlencoded"
 			}
 		}
 	}
 
 	retries := max(opt.Retry, 0)
 	var lastErr error
+	challengeTried := false
+	// pendingBody 是宿主回填的"浏览器渲染结果"。凭证没生效时用它兜底：
+	// 这类站点不用 cf_clearance（自建验证/只有 __cf_bm），重试必然还是挑战页。
+	var pendingBody string
 	for i := 0; i <= retries; i++ {
+		headers := map[string]string{}
+		maps.Copy(headers, baseHeaders)
+		if stored := store.Default().GetCookie(domain); stored != "" {
+			headers["Cookie"] = store.MergeCookies(headers["Cookie"], stored)
+		}
+
+		var bodyReader io.Reader
+		if bodyStr != "" {
+			bodyReader = strings.NewReader(bodyStr)
+		}
 		req, err := http.NewRequest(method, opt.URL, bodyReader)
 		if err != nil {
 			return nil, err
@@ -139,7 +176,6 @@ func (c *Client) Do(opt Options) (*Response, error) {
 			lastErr = err
 			continue
 		}
-		// 3. 回写 cookie
 		if opt.SaveCookie {
 			store.Default().SaveResponseCookie(resp)
 		}
@@ -166,11 +202,72 @@ func (c *Client) Do(opt Options) (*Response, error) {
 		for k := range resp.Header {
 			hdr[k] = resp.Header.Get(k)
 		}
+		body := util.DecodeBytes(raw, cs)
+
+		// 上一轮宿主回填了浏览器渲染结果、但凭证没让上游放行：用它兜底。
+		// 放在验证块之前，避免第二次弹窗（challengeTried 已为 true，也不会弹）。
+		if pendingBody != "" {
+			if ok, _ := IsCloudflareChallenge(resp.StatusCode, hdr, body); ok {
+				return &Response{
+					URL:        finalURL,
+					StatusCode: http.StatusOK,
+					Headers:    hdr,
+					Body:       pendingBody,
+					Bytes:      []byte(pendingBody),
+					IsRedirect: isRedirect,
+				}, nil
+			}
+			pendingBody = ""
+		}
+
+		// 反爬拦截：交给宿主完成人工验证，然后带着新凭证重试一次。
+		//
+		// 只试一次——宿主放弃或凭证仍然无效时原样返回本次响应，
+		// 不能陷入"弹窗 → 重试 → 再弹窗"的死循环。
+		if !challengeTried && !opt.NoChallenge {
+			if ok, reason := IsCloudflareChallenge(resp.StatusCode, hdr, body); ok {
+				res, solved := RunChallenge(Challenge{
+					URL:        opt.URL,
+					Domain:     domain,
+					StatusCode: resp.StatusCode,
+					Reason:     reason,
+				})
+				if solved {
+					challengeTried = true
+					// 宿主只拿到页面内容、没有 Cookie：直接当响应体用。
+					// 对应原版 startBrowserAwait(refetchAfterSuccess = false)。
+					if res.Body != "" {
+						pendingBody = res.Body
+					}
+					if res.Cookie == "" {
+						return &Response{
+							URL:        finalURL,
+							StatusCode: http.StatusOK,
+							Headers:    hdr,
+							Body:       res.Body,
+							Bytes:      []byte(res.Body),
+							IsRedirect: isRedirect,
+						}, nil
+					}
+					i-- // 验证重试不占用网络重试次数
+					// 浏览器 UA 必须立刻生效：baseHeaders 是循环外定格的，
+					// 只写进覆盖表对"当前这次重试"不起作用。
+					if res.UserAgent != "" {
+						if uaKey == "" {
+							uaKey = "User-Agent"
+						}
+						baseHeaders[uaKey] = res.UserAgent
+					}
+					continue
+				}
+			}
+		}
+
 		return &Response{
 			URL:        finalURL,
 			StatusCode: resp.StatusCode,
 			Headers:    hdr,
-			Body:       util.DecodeBytes(raw, cs),
+			Body:       body,
 			Bytes:      raw,
 			IsRedirect: isRedirect,
 		}, nil

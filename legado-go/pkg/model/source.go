@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"strings"
 	"sync"
@@ -20,10 +21,14 @@ const (
 	BookTypeFile  = 3 // 文件（下载站）
 )
 
-// Book.type 位域（对齐 app/constant/BookType.kt）
+// Book.type 位域（对齐 app/constant/BookType.kt）。
+//
+// 原版取值：text=8(1<<3)、audio=32(1<<5)、image=64(1<<6)、webFile=128(1<<7)；
+// 1/2/4/16 是保留位，不能拿来当类型。书源 JS 里会写 `book.type === 64`
+// 或 `book.type & 128`，取值错了会让这类规则静默失效，所以这里必须与 Kotlin 一致。
 const (
-	BookFlagText    = 1 << 0 // 1 文本
-	BookFlagAudio   = 1 << 1 // 2 音频
+	BookFlagText    = 1 << 3 // 8 文本
+	BookFlagAudio   = 1 << 5 // 32 音频
 	BookFlagImage   = 1 << 6 // 64 图片
 	BookFlagWebFile = 1 << 7 // 128 只提供下载服务的网站
 )
@@ -176,7 +181,9 @@ func unmarshalRule(v any, out any) bool {
 		if s == "" || s == "null" {
 			return false
 		}
-		return json.Unmarshal([]byte(s), out) == nil
+		// 书源手写时规则对象可能被写成宽松 JSON（单引号/裸键），
+		// 与 exploreUrl、header 同一套解析口径。
+		return util.UnmarshalLooseJSON(s, out) == nil
 	default:
 		b, err := json.Marshal(v)
 		if err != nil {
@@ -360,15 +367,17 @@ func (s *BookSource) GetHeaderMap(hasLoginHeader ...bool) map[string]string {
 				jsonStr = EvalJSHook(s, h[4:idx])
 			}
 		}
-		out := map[string]string{}
-		if err := json.Unmarshal([]byte(jsonStr), &out); err == nil {
-			maps.Copy(m, out)
-		} else {
-			// 宽松解析：给裸键补引号后再试一次
-			fixed := map[string]string{}
-			if err := json.Unmarshal([]byte(util.RelaxJSONKeys(jsonStr)), &fixed); err == nil {
-				maps.Copy(m, fixed)
+		out := map[string]any{}
+		if err := util.UnmarshalLooseJSON(jsonStr, &out); err == nil {
+			for k, v := range out {
+				if v == nil {
+					continue
+				}
+				// 原版 StringJsonDeserializer 把非字符串值 toString，这里保持一致。
+				m[k] = fmt.Sprint(v)
 			}
+		} else if fixed, ok := util.ParseLooseStringMap(jsonStr); ok {
+			maps.Copy(m, fixed)
 		}
 	}
 	hasUA := false
@@ -434,8 +443,14 @@ func (s *BookSource) GetCheckKeyword(def string) string {
 // ParseExploreKinds 把「非 JS 形式」的发现配置解析成分类列表。
 //
 // 对齐 Legado 的 BookSourceExtensions.exploreKinds()：
-//  1. JSON 数组：[{"title":"分类","url":"/xx"}, ...]
+//  1. 数组/对象：`[{"title":"分类","url":"/xx"}, ...]`
 //  2. 文本行：分类名::地址，多段以 `&&` 或换行分隔
+//
+// 第 1 种**必须按宽松 JSON 解析**：真实书源几乎都写成 JS 对象字面量
+// （`[{title:'全年龄•全部',url:'…',style:{layout_flexGrow:1}}]`——
+// 单引号、裸键、裸值、尾随逗号、注释），Kotlin 侧靠 GSON 的 lenient 模式
+// 吃掉。用 encoding/json 严格解析会失败并回落到「按行拆分」，把整段配置
+// 变成一个同名分组标题——不报错，但发现页一个分类都点不开。
 //
 // 与原版一致，**没有 `::` 时整段是分类名而不是地址**——很多书源用
 // `{'title':'全站总榜','url':''}` 或空地址项做「分组标题」，把整段当地址
@@ -450,18 +465,18 @@ func ParseExploreKinds(raw string) []ExploreKind {
 	}
 	if strings.HasPrefix(raw, "[") || strings.HasPrefix(raw, "{") {
 		var kinds []ExploreKind
-		if err := json.Unmarshal([]byte(raw), &kinds); err == nil {
+		if err := util.UnmarshalLooseJSON(raw, &kinds); err == nil {
 			if out := usableKinds(kinds); len(out) > 0 {
 				return out
 			}
 		}
 		var one ExploreKind
-		if err := json.Unmarshal([]byte(raw), &one); err == nil {
+		if err := util.UnmarshalLooseJSON(raw, &one); err == nil {
 			if out := usableKinds([]ExploreKind{one}); len(out) > 0 {
 				return out
 			}
 		}
-		// JSON 解析失败时继续按文本行处理：个别书源把 JSON 写坏了但仍能用。
+		// 解析失败时继续按文本行处理：个别书源把 JSON 写坏了但仍能用。
 	}
 
 	out := []ExploreKind{}

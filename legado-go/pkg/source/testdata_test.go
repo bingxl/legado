@@ -16,13 +16,14 @@ func TestLoadTestdataSources(t *testing.T) {
 	if len(errs) > 0 {
 		t.Fatalf("加载出错: %v", errs)
 	}
-	if len(list) != 3 {
-		t.Fatalf("书源数量错误: 期望 3，实际 %d", len(list))
+	if len(list) != 4 {
+		t.Fatalf("书源数量错误: 期望 4，实际 %d", len(list))
 	}
 	want := map[string]string{
-		"草榴社区-文学": "t66y_book_source.json",
-		"狼人小说":    "t66y_book_source.json",
-		"漫画客":     "yumanhua_comic_source.json",
+		"t66y":  "t66y_book_source.json",
+		"狼人小说":  "t66y_book_source.json",
+		"漫画客":   "yumanhua_comic_source.json",
+		"爱丽丝书屋": "alicesw_book_source.json",
 	}
 	got := map[string]string{}
 	for _, s := range list {
@@ -104,21 +105,50 @@ func TestSourceShapes(t *testing.T) {
 			if got := s.GetTocRule().ChapterUrl; got != "href" {
 				t.Errorf("狼人小说 chapterUrl 应为单段属性名 href，实际 %q", got)
 			}
-		case "草榴社区-文学":
-			if s.SearchUrl != "" {
-				t.Errorf("草榴只有发现，searchUrl 应为空: %q", s.SearchUrl)
+		case "爱丽丝书屋":
+			if s.BookSourceType != 0 {
+				t.Errorf("爱丽丝书屋类型应为 0（文本），实际 %d", s.BookSourceType)
 			}
-			if !strings.HasPrefix(s.GetTocRule().ChapterList, "@js:") {
-				t.Errorf("草榴目录规则应为 JS: %.40q", s.GetTocRule().ChapterList)
+			if !strings.Contains(s.SearchUrl, "/search.html?q={{key}}") {
+				t.Errorf("爱丽丝书屋搜索地址异常: %s", s.SearchUrl)
+			}
+			// ★ 回归：tocUrl 必须取详情页「查看所有章节」的链接。
+			// 详情 ID 与章节页 ID 不同，用详情 URL 拼章节地址会 404（正文解析为空）。
+			if tu := s.GetBookInfoRule().TocUrl; !strings.Contains(tu, "book_newchap") {
+				t.Errorf("爱丽丝书屋 tocUrl 须取 book_newchap 内的链接: %q", tu)
+			}
+			if c := s.GetContentRule().Content; !strings.Contains(c, "read-content") {
+				t.Errorf("爱丽丝书屋正文规则异常: %s", c)
+			}
+			kinds := model.ParseExploreKinds(s.ExploreUrl)
+			if len(kinds) < 30 || kinds[0].Url != "/lists/71.html?page={{page}}" {
+				t.Errorf("爱丽丝书屋发现分类异常: 共 %d 个，首个 %+v", len(kinds), kinds[0])
+			}
+		case "t66y":
+			if s.SearchUrl != "" {
+				t.Errorf("t66y 只有发现，searchUrl 应为空: %q", s.SearchUrl)
+			}
+			if s.GetTocRule().ChapterList == "" {
+				t.Errorf("t66y 目录规则为空")
 			}
 			if !strings.Contains(s.GetContentRule().Content, "tpc_content") {
-				t.Errorf("草榴正文规则异常: %s", s.GetContentRule().Content)
+				t.Errorf("t66y 正文规则异常: %s", s.GetContentRule().Content)
+			}
+			// ★ 回归：bookUrl 的 ## 替换必须吃掉整条 /htm_data/... 路径。
+			// 只替换文件名会产出 /htm_data/2611/20//read.php?tid=x，站点回 404，
+			// 表现为「正文解析结果为空」。
+			if br := s.GetExploreRule().BookUrl; !strings.Contains(br, "^.*/") {
+				t.Errorf("t66y bookUrl 替换正则须从行首吃掉路径: %q", br)
+			}
+			kinds := model.ParseExploreKinds(s.ExploreUrl)
+			if len(kinds) < 2 || !strings.Contains(kinds[0].Url, "fid=20") {
+				t.Errorf("t66y 发现分类异常: %+v", kinds)
 			}
 		default:
 			t.Errorf("未预期的书源: %s", s.BookSourceName)
 		}
 	}
-	for _, n := range []string{"漫画客", "狼人小说", "草榴社区-文学"} {
+	for _, n := range []string{"漫画客", "狼人小说", "t66y", "爱丽丝书屋"} {
 		if !byName[n] {
 			t.Errorf("缺少书源: %s", n)
 		}

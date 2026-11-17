@@ -25,6 +25,14 @@ const (
 	EventDownloadProgress = "download:progress"
 	// EventCacheProgress 章节缓存进度，payload 为 dto.CacheProgress。
 	EventCacheProgress = "cache:progress"
+	// EventAudioCacheProgress 音频章节下载进度，payload 为 dto.AudioCacheProgress。
+	EventAudioCacheProgress = "audio:cache:progress"
+	// EventAudioPlaybackState 听书服务态快照，payload 为 dto.AudioPlaybackState。
+	// 由 AudioService.ReportPlaybackState 广播，宿主与其他窗口据此对齐状态。
+	EventAudioPlaybackState = "audio:playback:state"
+	// EventAudioCommand 原生媒体控制指令，payload 为 dto.AudioCommand。
+	// 安卓前台 Service 经 Wails 事件总线直接发到前端，Go 侧只定义契约。
+	EventAudioCommand = "audio:command"
 	// EventWebDAVSyncProgress WebDAV 同步进度，payload 为 dto.SyncProgress。
 	EventWebDAVSyncProgress = "webdav:sync:progress"
 	// EventWebDAVImportProgress 从 WebDAV 导入书籍的进度，payload 为 dto.WebDAVImportProgress。
@@ -37,4 +45,9 @@ const (
 	EventAIAnswerDone = "ai:answer:done"
 	// EventDictInstallProgress 词典扩展包安装进度，payload 为 dto.DictInstallProgress。
 	EventDictInstallProgress = "dict:install:progress"
+	// EventVerifyRequest 站点要求人机验证，payload 为 {domain,url,title}。
+	// 前端据此提示"请在弹出窗口完成验证，通过后阅读会自动继续"。
+	EventVerifyRequest = "verify:request"
+	// EventVerifyDone 人机验证窗口已关闭，payload 为 {domain}。
+	EventVerifyDone = "verify:done"
 )

@@ -28,8 +28,22 @@ type Bindings struct {
 	Extra          map[string]any
 	// Vars 变量读写（java.put/java.get），由 AnalyzeRule 提供
 	Vars VarStore
+	// EvalRuleString / EvalRuleStringList 是 `java.getString(rule)` /
+	// `java.getStringList(rule)` 的实现：按规则求值，**不是**读变量。
+	//
+	// Kotlin 原版的 JsExtensions 里 getString 走 analyzeRule.getString(ruleStr)，
+	// 大量纯 API 书源靠它在 JS 里取嵌套字段（如
+	// `@js: a=java.getString('model.lines')`）。用回调注入是为了避免 js 包
+	// 反向依赖 rule 包（rule → js 是单向的）。
+	EvalRuleString     func(rule string) string
+	EvalRuleStringList func(rule string) []string
 	// InPreUpdateJs 是否在 preUpdateJs 阶段执行（限制 reGetBook/refreshTocUrl）
 	InPreUpdateJs bool
+	// StartBrowser / VerificationCode 覆盖包级 Hooks 的同名能力。
+	// 包级 Hooks 是宿主启动时注册一次的实现，按 Bindings 覆盖便于单测与
+	// 登录等特殊场景复用同一套 JS 绑定。
+	StartBrowser     func(src *model.BookSource, url, title string, refetch bool) (string, int)
+	VerificationCode func(src *model.BookSource, imageUrl string) string
 	// GInt 跨调用累加的全局计数（formatJs 的 `gInt++` 依赖它）。
 	// 调用后会把脚本改写的值写回指针。
 	GInt *int

@@ -24,6 +24,8 @@ import { sourceApi } from "@/api/source";
 import { useSourcesStore } from "@/stores/sources";
 import { smartBack } from "@/utils/nav";
 import { coverURL } from "@/utils/media";
+import { filterSources, splitGroups } from "@/utils/sourceList";
+import { isAudioBook } from "@/types";
 import type { ExploreKindView, ExploreSourceBrief, SearchResultView } from "@/types";
 
 /** 单个书源的分类加载状态。 */
@@ -76,21 +78,32 @@ function setItemRef(id: number, el: unknown) {
   else itemRefs.delete(id);
 }
 
+/** 分组下拉的候选项：拆开逗号，只留单个分组名。
+ *
+ * 不能直接拿 `s.group` 原文当候选——多分组源的原文形如
+ * 「玄幻,完本,推荐」，按原文筛只能命中「分组串完全相同」的那几个源，
+ * 而书源页的 `group:玄幻` 认的是**单个**分组名。两边要一致。
+ */
 const groups = computed(() => {
   const set = new Set<string>();
   for (const s of sources.value) {
-    if (s.group) set.add(s.group);
+    for (const g of splitGroups(s.group)) set.add(g);
   }
-  return [...set];
+  return [...set].sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
 });
 
+/** 书源列表：分组下拉与顶部筛选框叠加生效。
+ *
+ * 筛选框走 filterSources——与书源管理页**同一套规则**（`group:分组`、
+ * 启用 / 禁用 / 需要登录 / 无分组 / 启用发现 / 禁用发现，以及名称、地址、
+ * 分组的模糊匹配）。此前这里只做 `name.includes()`，同一个词在发现页搜不到
+ * 的源在书源页却能搜到，两页结果对不上。
+ */
 const visibleSources = computed(() => {
-  const kw = filter.value.trim().toLowerCase();
-  return sources.value.filter((s) => {
-    if (group.value && s.group !== group.value) return false;
-    if (kw && !s.name.toLowerCase().includes(kw)) return false;
-    return true;
-  });
+  const list = group.value
+    ? sources.value.filter((s) => splitGroups(s.group).includes(group.value))
+    : sources.value;
+  return filterSources(list, filter.value);
 });
 
 /** 分类地址里带分页变量才可能翻页，其余源只有一页。 */
@@ -400,7 +413,12 @@ async function openBook(r: SearchResultView) {
       r.variable ?? "",
     );
     if (!brief) return;
-    router.push({ name: "book", params: { id: String(brief.id) } });
+    // 音频书直接进听书页；其余照旧进详情页。
+    if (isAudioBook(brief)) {
+      router.push({ name: "audio", params: { id: String(brief.id) } });
+    } else {
+      router.push({ name: "book", params: { id: String(brief.id) } });
+    }
   } catch (e) {
     ElMessage.error((e as Error).message);
   } finally {
@@ -424,7 +442,8 @@ async function openBook(r: SearchResultView) {
             v-model="filter"
             class="search-input"
             type="text"
-            placeholder="筛选"
+            placeholder="筛选 / group:分组 / 需要登录 / 无分组"
+            title="与书源页同一套搜索规则：group:分组名、启用、禁用、需要登录、无分组、启用发现、禁用发现，或直接输入名称 / 地址 / 分组片段"
             spellcheck="false"
           />
           <button v-if="filter" class="clear" title="清空" @click="filter = ''">

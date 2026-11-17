@@ -17,7 +17,9 @@ import {
 import type { PermissionKind, PermissionState } from "@/api/permissions";
 import { usePlatformStore } from "@/stores/platform";
 import { useTtsStore } from "@/stores/tts";
+import { useAudioPlayerStore } from "@/stores/audioPlayer";
 import { useDictStore } from "@/stores/dict";
+import { loadAudioPrefs } from "@/audio/prefs";
 import type { DictPackageView } from "@/api/dict";
 import { loadReaderPrefs, saveReaderPrefs } from "@/utils/readerPrefs";
 import DictSourceDialog from "@/components/DictSourceDialog.vue";
@@ -25,6 +27,7 @@ import DictSourceDialog from "@/components/DictSourceDialog.vue";
 const router = useRouter();
 const platform = usePlatformStore();
 const tts = useTtsStore();
+const audio = useAudioPlayerStore();
 const dict = useDictStore();
 
 // ── 阅读排版 ────────────────────────────────────────────────
@@ -44,6 +47,13 @@ const shelfPrompt = ref(false);
 const rate = ref(100);
 const voiceId = ref("");
 const autoNext = ref(true);
+
+// ── 听书 ────────────────────────────────────────────────────
+// 与播放页共享同一份 localStorage 偏好；这里改，下次起播即生效。
+const audioRate = ref(1);
+const audioVolume = ref(100);
+const audioAutoNext = ref(true);
+const audioTimer = ref(0);
 
 /**
  * 子功能入口。
@@ -290,6 +300,11 @@ onMounted(() => {
   rate.value = tts.rate;
   voiceId.value = tts.voiceId;
   autoNext.value = tts.autoNext;
+  const ap = loadAudioPrefs();
+  audioRate.value = ap.rate;
+  audioVolume.value = Math.round(ap.volume * 100);
+  audioAutoNext.value = ap.autoNext;
+  audioTimer.value = ap.timerMinutes;
   loadAIConfig();
   // 词典：订阅安装进度并刷新包状态（用户可能刚在别处下完一个包）。
   dict.attach();
@@ -325,6 +340,20 @@ function onVoiceChange() {
 
 function onAutoNextChange() {
   tts.setAutoNext(autoNext.value);
+}
+
+function onAudioRate(v: number) {
+  audio.setRate(v);
+}
+function onAudioVolume(v: number) {
+  audio.setVolume(v / 100);
+}
+function onAudioAutoNext(v: boolean) {
+  audio.setAutoNext(v);
+}
+/** 默认定时只改偏好，不立刻给当前播放起表。 */
+function onAudioTimer(v: number) {
+  audio.setTimerMinutes(v);
 }
 
 /** 恢复默认：用户把字号调乱了要有退路。 */
@@ -377,7 +406,7 @@ function resetReader() {
       >
         这里是正文预览。风急天高猿啸哀，渚清沙白鸟飞回。
       </div>
-      <!-- 书籍与漫画共用同一个阅读器，这一个开关同时管两者；默认关闭 -->
+      <!-- 书籍、漫画与听书共用同一个阅读器口径，这一个开关同时管三者；默认关闭 -->
       <div class="row">
         <div class="row-label">返回时提示加入书架</div>
         <div class="row-control">
@@ -389,7 +418,7 @@ function resetReader() {
         </div>
       </div>
       <div class="hint">
-        阅读书籍或漫画离开阅读器时，若这本书还不在书架，询问一次是否加入。
+        阅读书籍、漫画或听书离开时，若这本书还不在书架，询问一次是否加入。
         默认关闭——只是随手看两章时，这个询问会拦人一下。
       </div>
       <div class="row-actions">
@@ -544,6 +573,64 @@ function resetReader() {
       </div>
       <div v-if="tts.voices.length === 0" class="hint">
         当前环境没有可用音色（系统朗读未安装中文语音包时会出现这种情况）。
+      </div>
+    </div>
+
+    <h2 class="section-title">听书</h2>
+    <div class="card">
+      <div class="row">
+        <div class="row-label">
+          默认倍速
+          <span class="row-value">{{ audioRate.toFixed(1) }}×</span>
+        </div>
+        <div class="row-control">
+          <el-slider
+            v-model="audioRate"
+            :min="0.5"
+            :max="3"
+            :step="0.1"
+            @change="onAudioRate"
+          />
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-label">
+          默认音量
+          <span class="row-value">{{ audioVolume }}%</span>
+        </div>
+        <div class="row-control">
+          <el-slider
+            v-model="audioVolume"
+            :min="0"
+            :max="100"
+            :step="1"
+            @change="onAudioVolume"
+          />
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-label">章末自动续播</div>
+        <div class="row-control">
+          <el-switch v-model="audioAutoNext" @change="onAudioAutoNext" />
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-label">
+          默认定时停止
+          <span class="row-value">{{ audioTimer }} 分钟</span>
+        </div>
+        <div class="row-control">
+          <el-slider
+            v-model="audioTimer"
+            :min="0"
+            :max="180"
+            :step="1"
+            @change="onAudioTimer"
+          />
+        </div>
+      </div>
+      <div class="hint">
+        0 分钟表示不启用定时。播放页里可随时改倍速、音量与定时，改动会回写到这里。
       </div>
     </div>
 

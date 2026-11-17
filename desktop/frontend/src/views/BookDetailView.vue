@@ -24,6 +24,7 @@ import { copyText } from "@/utils/clipboard";
 import { formatBytes } from "@/utils/format";
 import { coverURL } from "@/utils/media";
 import { smartBack } from "@/utils/nav";
+import { isAudioBook } from "@/types";
 import type { BookDetail, CacheBookStatus, ChapterItem } from "@/types";
 import type { CacheScopeValue } from "@/api/cache";
 
@@ -95,7 +96,10 @@ const progressIndex = computed(() => {
   return i >= 0 ? i : 0;
 });
 const hasProgress = computed(() => (book.value?.percent ?? 0) > 0);
-const readLabel = computed(() => (hasProgress.value ? "继续阅读" : "开始阅读"));
+const readLabel = computed(() => {
+  if (book.value && isAudioBook(book.value)) return "开始听书";
+  return hasProgress.value ? "继续阅读" : "开始阅读";
+});
 const percent = computed(() => book.value?.percent ?? 0);
 
 async function load() {
@@ -180,12 +184,21 @@ watch(
   },
 );
 
-/** 进入阅读器，index 指定从哪一章开始（阅读器读 query.index）。 */
+/** 进入阅读器 / 听书页，index 指定从哪一章开始（两个页都读 query.index）。 */
 function openReader(index: number) {
+  const idx = String(Math.max(0, index));
+  if (book.value && isAudioBook(book.value)) {
+    router.push({
+      name: "audio",
+      params: { id: String(bookId.value) },
+      query: { index: idx },
+    });
+    return;
+  }
   router.push({
     name: "reader",
     params: { id: String(bookId.value) },
-    query: { index: String(Math.max(0, index)) },
+    query: { index: idx },
   });
 }
 

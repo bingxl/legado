@@ -103,11 +103,25 @@ function cnCompare(a: string, b: string): number {
  * 判断顺序很重要：先认 `group:` 前缀与内置筛选词（它们是精确语义），
  * 再退化成模糊匹配——否则用户搜「启用」会被当成普通关键词，
  * 明明想筛启用状态却得到一堆名字里带「启用」的源。
+ *
+ * 入参只要求这几个字段，所以书源管理页的 `SourceView` 与发现页的
+ * `ExploreSourceBrief` 都能直接传进来——两页共用同一套搜索规则是本函数
+ * 存在的意义，别在其中一处另写一份 `name.includes()`。
  */
-export function filterSources(
-  list: SourceView[],
+export interface SourceFilterItem {
+  name: string;
+  url: string;
+  group: string;
+  enabled: boolean;
+  enabledExplore: boolean;
+  hasExploreUrl: boolean;
+  hasLoginUrl: boolean;
+}
+
+export function filterSources<T extends SourceFilterItem>(
+  list: T[],
   keyword: string,
-): SourceView[] {
+): T[] {
   const k = keyword.trim();
   if (!k) return list;
 

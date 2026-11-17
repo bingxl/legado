@@ -6,6 +6,7 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -55,6 +56,22 @@ var Hooks struct {
 	RefreshTocUrl func(src *model.BookSource, book *model.Book) error
 	// URLType 取 URL 规则里的 type 选项（java.downloadFile(content, url) 用）
 	URLType func(src *model.BookSource, u string) string
+	// StartBrowser 打开内置浏览器让用户完成防爬验证（人机验证 / 登录）。
+	//
+	// refetch=true 表示"验证完成后由引擎重新请求 url 取正文"（对应 Kotlin 的
+	// startBrowserAwait 默认行为）；false 表示直接用浏览器里渲染出来的 HTML。
+	// 返回 (正文, 状态码)；宿主不支持时返回 ("", 0)。
+	StartBrowser func(src *model.BookSource, url, title string, refetch bool) (string, int)
+	// VerificationCode 弹图片验证码让用户输入，返回用户填的字符。
+	VerificationCode func(src *model.BookSource, imageUrl string) string
+}
+
+// startBrowserFn 取生效的 startBrowser 实现：Bindings 覆盖优先，其次包级 Hooks。
+func startBrowserFn(b *Bindings) func(src *model.BookSource, url, title string, refetch bool) (string, int) {
+	if b != nil && b.StartBrowser != nil {
+		return b.StartBrowser
+	}
+	return Hooks.StartBrowser
 }
 
 func Md5(s string) string {
@@ -523,12 +540,23 @@ func newJavaObject(vm *goja.Runtime, b *Bindings) *goja.Object {
 		}
 		return vm.ToValue(v)
 	})
+	// java.getString(ruleStr)：按**规则**求值当前内容（对齐 Kotlin JsExtensions
+	// 的 `analyzeRule.getString(ruleStr)`）。早期这里实现成 `Vars.Get(k)`，
+	// 把「求值规则」错当成了「读变量」：`java.getString('model.lines')` 恒为空，
+	// 靠它取正文/字段的纯 API 书源会静默拿到空串。
 	set("getString", func(call goja.FunctionCall) goja.Value {
-		k := fmt.Sprint(exportValue(call.Argument(0)))
-		if b.Vars != nil {
-			return vm.ToValue(b.Vars.Get(k))
+		rule := fmt.Sprint(exportValue(call.Argument(0)))
+		if b.EvalRuleString != nil {
+			return vm.ToValue(b.EvalRuleString(rule))
 		}
 		return vm.ToValue("")
+	})
+	set("getStringList", func(call goja.FunctionCall) goja.Value {
+		rule := fmt.Sprint(exportValue(call.Argument(0)))
+		if b.EvalRuleStringList == nil {
+			return vm.ToValue([]string{})
+		}
+		return vm.ToValue(b.EvalRuleStringList(rule))
 	})
 	set("putVar", func(call goja.FunctionCall) goja.Value {
 		k := fmt.Sprint(exportValue(call.Argument(0)))
@@ -887,9 +915,67 @@ func newJavaObject(vm *goja.Runtime, b *Bindings) *goja.Object {
 		b.log("[js.webView] 本环境不支持 WebView，已降级")
 		return vm.ToValue("")
 	})
+	// startBrowser 打开内置浏览器，不等结果（Kotlin 里是 launch Activity 后立刻返回）。
 	set("startBrowser", func(call goja.FunctionCall) goja.Value {
-		b.log("[js.startBrowser] " + fmt.Sprint(exportValue(call.Argument(0))))
+		u := argURL(call, 0)
+		title := ""
+		if len(call.Arguments) > 1 {
+			title = fmt.Sprint(exportValue(call.Argument(1)))
+		}
+		sb := startBrowserFn(b)
+		if sb == nil {
+			b.log("[js.startBrowser] 本环境不支持内置浏览器，已忽略：" + u)
+			return goja.Undefined()
+		}
+		// 不等结果：必须放到独立 goroutine，否则书源 JS 会一直卡在这里等用户点完。
+		go sb(src, u, title, false)
 		return goja.Undefined()
+	})
+	// startBrowserAwait 打开内置浏览器并等待用户完成验证，返回 StrResponse 形态的对象。
+	//
+	// 书源里的典型写法是 `res = java.startBrowserAwait(u,'ver'); java.setContent(res.body())`，
+	// 所以 body 必须是**可调用**的：Kotlin 的 StrResponse 同时有 body 属性和 body()
+	// 方法，而 goja 一个键只能放一个值，这里按实际用法做成函数，并重写 toString，
+	// 让 `${res.body}` / String(res.body) 也能拿到正文。
+	set("startBrowserAwait", func(call goja.FunctionCall) goja.Value {
+		u := argURL(call, 0)
+		title := ""
+		if len(call.Arguments) > 1 {
+			title = fmt.Sprint(exportValue(call.Argument(1)))
+		}
+		refetch := true
+		if len(call.Arguments) > 2 && !goja.IsUndefined(call.Argument(2)) {
+			refetch = call.Argument(2).ToBoolean()
+		}
+		body, code := "", 0
+		if sb := startBrowserFn(b); sb != nil {
+			body, code = sb(src, u, title, refetch)
+		} else {
+			b.log("[js.startBrowserAwait] 本环境不支持内置浏览器，返回空响应：" + u)
+		}
+		obj := vm.NewObject()
+		obj.Set("url", vm.ToValue(u))
+		obj.Set("code", vm.ToValue(code))
+		obj.Set("text", vm.ToValue(body))
+		bodyFn := vm.ToValue(func(goja.FunctionCall) goja.Value { return vm.ToValue(body) })
+		if fo, ok := bodyFn.(*goja.Object); ok {
+			_ = fo.Set("toString", func(goja.FunctionCall) goja.Value { return vm.ToValue(body) })
+		}
+		obj.Set("body", bodyFn)
+		return obj
+	})
+	// getVerificationCode 弹图片验证码，等待用户输入后返回字符。
+	set("getVerificationCode", func(call goja.FunctionCall) goja.Value {
+		u := argURL(call, 0)
+		vc := b.VerificationCode
+		if vc == nil {
+			vc = Hooks.VerificationCode
+		}
+		if vc == nil {
+			b.log("[js.getVerificationCode] 本环境不支持图片验证码：" + u)
+			return vm.ToValue("")
+		}
+		return vm.ToValue(vc(src, u))
 	})
 	set("openUrl", func(call goja.FunctionCall) goja.Value {
 		b.log("[js.openUrl] " + fmt.Sprint(exportValue(call.Argument(0))))
@@ -1041,6 +1127,20 @@ func newSourceObjectWith(vm *goja.Runtime, s *model.BookSource, b *Bindings) *go
 			}
 		}
 		return out
+	})
+	// getLoginHeader：取回 putLoginHeader 保存的整段请求头（JSON 字符串）。
+	// 音频源常用 `JSON.parse(source.getLoginHeader())` 拿 Authorization 去拼播放地址，
+	// 缺失时脚本会在 JSON.parse("") 处抛错，整条规则拿不到 URL。
+	o.Set("getLoginHeader", func(goja.FunctionCall) goja.Value {
+		header := s.GetLoginHeaderMap()
+		if len(header) == 0 {
+			return vm.ToValue("")
+		}
+		data, err := json.Marshal(header)
+		if err != nil {
+			return vm.ToValue("")
+		}
+		return vm.ToValue(string(data))
 	})
 	// putLoginHeader：登录成功后保存整段请求头（含 Cookie），下次请求自动带上。
 	o.Set("putLoginHeader", func(call goja.FunctionCall) goja.Value {

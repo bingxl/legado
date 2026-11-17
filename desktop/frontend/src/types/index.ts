@@ -44,6 +44,8 @@ export type {
   WebDAVImportJob,
 } from "@bindings/github.com/legado/desktop/internal/app/dto/models";
 
+export * from "./audio";
+
 /** 书籍来源类型：网络书 / 本地书。 */
 export type BookKind = "web" | "local";
 

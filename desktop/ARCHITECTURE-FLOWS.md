@@ -202,9 +202,38 @@ flowchart TB
 > （`utils/readerPrefs.ts` 的 `promptAddToShelf`）。书籍与漫画共用同一个
 > `ReaderView`（`isComic` 只是模板渲染分支），所以一个开关同时管两者；
 > 关掉时退出阅读器直接放行，详情页的「加入书架」按钮仍然可用。
+>
+> **听书页（`AudioPlayerView`）遵守同一个开关**：它自己的 `onBeforeRouteLeave`
+> 也必须先读 `loadReaderPrefs().promptAddToShelf` 再判 `inShelf`——曾经的 bug 是
+> 只判 `inShelf`，于是音频源不管你设没设都弹框，与书籍/漫画表现不一致。
+> 入架成功后两处都 `useBookshelfStore().loadBooks()` 刷新列表。
+> 回归：`tmp-mcptest/s29_audio_shelf.py`（自带 mock 音频站点，开关开/关 ×
+> 暂不加入/加入书架四条路径）。
 
 > 发现页的「书源列表 → 分类 → 书单」是页内状态切换，不产生路由；
 > `ExploreView` 被 `keep-alive` 缓存，进详情再返回时展开状态与滚动位置仍在。
+
+> **发现页与书源页共用一套书源搜索规则**：两边都调 `utils/sourceList.ts` 的
+> `filterSources`（`group:分组名` 精确筛、启用 / 禁用 / 需要登录 / 无分组 /
+> 启用发现 / 禁用发现六个内置词优先，其余按名称 / 地址 / 分组模糊匹配，大小写不敏感）。
+> 因此 `ListExploreSources` 除了名字与分组，还要下发 `url / enabled /
+> enabledExplore / hasExploreUrl / hasLoginUrl`——少一个字段，同一个词在两页就会
+> 给出不同结果。发现页右侧的分组下拉是 `group:` 的等价快捷方式，候选项是
+> **拆开后的单个分组名**（`splitGroups`），不是 `s.group` 原文。
+> 回归：`tmp-mcptest/s4_explore_search.py` 用 Python 复刻同一份规则，逐词比对
+> DOM 渲染结果。
+
+> **exploreUrl 的三种写法都要能解析**：
+> ① `分类名::地址` 文本行（`&&` 或换行分隔）；
+> ② 数组 / 单个对象——严格 JSON 与**手写 JS 对象字面量**都算（单引号、裸键、
+> 裸值、注释、尾随逗号，如 `[{title:'全年龄•全部',url:'…',style:{layout_flexGrow:1}}]`）；
+> ③ `<js>` / `@js:` 脚本，求值后返回上面两种文本。
+> ② 走 `model.ParseExploreKinds`（内部用 `util.UnmarshalLooseJSON`，对齐 GSON lenient），
+> ③ 由 `webbook.GetExploreKinds` 先执行脚本。地址为空的项是**分组标题**，保留展示
+> 但不可点；`style` 只影响原版 Android 的 flex 布局，桌面端列表不使用。
+> 回归：`pkg/model/source_test.go`、`pkg/webbook/explore_test.go`。
+> 注意：测试导入书源**必须用独有的 bookSourceUrl**（如 `https://example.test/…`），
+> 否则 `Import(overwrite=true)` 会按 URL 覆盖用户真实书源。
 
 ---
 

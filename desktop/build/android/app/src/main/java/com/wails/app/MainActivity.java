@@ -128,6 +128,9 @@ public class MainActivity extends AppCompatActivity {
         });
         bridge.setPermissions(permissions);
         bridge.initialize();
+        // 听书前台服务要把媒体键 / 通知栏 / 音频焦点的指令发回前端，
+        // 必须持有同一个 WailsBridge 实例（事件总线由它连到 Go runtime）。
+        AudioPlayService.attachBridge(bridge);
 
         // Set up WebView
         setupWebView();
@@ -223,6 +226,14 @@ public class MainActivity extends AppCompatActivity {
                             new java.util.HashMap<>(),
                             new java.io.ByteArrayInputStream("{}".getBytes())
                         );
+                    }
+
+                    // Audio chapters: WailsPathHandler buffers the whole asset into
+                    // a byte[] and drops Range, which makes a 30MB chapter eat memory
+                    // and breaks seeking. Ask Go for the resolved URL + auth headers
+                    // (a tiny JSON payload) and stream it here with 206 support.
+                    if (path != null && path.startsWith("/stream/")) {
+                        return serveAudioStream(path, request);
                     }
 
                     // Stream captured photos/videos from the cache with HTTP Range
@@ -548,6 +559,159 @@ public class MainActivity extends AppCompatActivity {
         String abs = file.getAbsolutePath();
         String rel = abs.startsWith(base) ? abs.substring(base.length()) : file.getName();
         return "/__capture__/" + Uri.encode(rel, "/");
+    }
+
+    /**
+     * Stream a resolved audio chapter to the WebView.
+     *
+     * Why not WailsPathHandler: it calls bridge.serveAsset(), which returns the
+     * whole body as byte[] and always answers 200. An audio chapter is tens of MB
+     * and <audio> seeks with Range requests, so that path is unusable. Instead we
+     * read the tiny /streammeta/&lt;sid&gt; JSON (real URL + Referer/Cookie/login
+     * headers resolved on the Go side) and open the stream here, forwarding
+     * Range and 206 so seeking works. Offline cached chapters are served from a
+     * local file with the same Range semantics.
+     */
+    private WebResourceResponse serveAudioStream(String path, WebResourceRequest request) {
+        try {
+            String sid = path.substring("/stream/".length());
+            int dot = sid.lastIndexOf('.');
+            if (dot > 0) sid = sid.substring(0, dot);
+
+            byte[] metaBytes = bridge.serveAsset("/streammeta/" + sid, "GET", "{}");
+            if (metaBytes == null || metaBytes.length == 0) {
+                return audioError(410, "Play session expired");
+            }
+            String metaText = new String(metaBytes, java.nio.charset.StandardCharsets.UTF_8).trim();
+            // Go answers 410 with a plain-text body; don't let JSONObject throw a
+            // confusing 502 for an expired session.
+            if (!metaText.startsWith("{")) {
+                return audioError(410, "Play session expired");
+            }
+            JSONObject meta = new JSONObject(metaText);
+
+            String local = meta.optString("file", "");
+            if (!local.isEmpty()) {
+                File f = new File(local);
+                File root = getFilesDir();
+                // Only app-private files may be served; never trust a path from the page.
+                if (!f.getCanonicalPath().startsWith(root.getCanonicalPath() + File.separator)
+                        || !f.isFile()) {
+                    return audioError(404, "Offline audio missing");
+                }
+                return serveRangeFile(f, request, audioMime(f.getName()));
+            }
+
+            String target = meta.optString("url", "");
+            if (!target.startsWith("http://") && !target.startsWith("https://")) {
+                return audioError(400, "Invalid audio URL");
+            }
+            java.net.HttpURLConnection conn =
+                    (java.net.HttpURLConnection) new java.net.URL(target).openConnection();
+            conn.setRequestMethod("GET");
+            conn.setInstanceFollowRedirects(true);
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(30000);
+            JSONObject hs = meta.optJSONObject("headers");
+            if (hs != null) {
+                java.util.Iterator<String> it = hs.keys();
+                while (it.hasNext()) {
+                    String k = it.next();
+                    String v = hs.optString(k, "");
+                    if (!k.isEmpty() && !v.isEmpty()) conn.setRequestProperty(k, v);
+                }
+            }
+            java.util.Map<String, String> reqHeaders = request.getRequestHeaders();
+            String range = reqHeaders != null ? reqHeaders.get("Range") : null;
+            if (range == null && reqHeaders != null) range = reqHeaders.get("range");
+            if (range != null && !range.isEmpty()) conn.setRequestProperty("Range", range);
+
+            int status = conn.getResponseCode();
+            java.util.Map<String, String> headers = new java.util.HashMap<>();
+            headers.put("Access-Control-Allow-Origin", "*");
+            headers.put("Accept-Ranges", "bytes");
+            headers.put("Cache-Control", "no-store");
+            copyRespHeader(conn, headers, "Content-Range");
+            copyRespHeader(conn, headers, "Content-Length");
+            copyRespHeader(conn, headers, "ETag");
+            String mime = conn.getContentType();
+            if (mime == null || mime.isEmpty()) mime = "audio/mpeg";
+            return new WebResourceResponse(mime, null, status,
+                    status == 206 ? "Partial Content" : "OK", headers, conn.getInputStream());
+        } catch (Exception e) {
+            Log.e(TAG, "serveAudioStream failed", e);
+            return audioError(502, "Audio source unavailable");
+        }
+    }
+
+    /** Serve a local file with byte-range support (offline audio chapters). */
+    private WebResourceResponse serveRangeFile(File file, WebResourceRequest request, String mime) {
+        try {
+            long length = file.length();
+            java.util.Map<String, String> reqHeaders = request.getRequestHeaders();
+            String range = reqHeaders != null ? reqHeaders.get("Range") : null;
+            if (range == null && reqHeaders != null) range = reqHeaders.get("range");
+            java.util.Map<String, String> headers = new java.util.HashMap<>();
+            headers.put("Accept-Ranges", "bytes");
+            headers.put("Cache-Control", "no-store");
+            if (range != null && range.startsWith("bytes=")) {
+                long start = 0, end = length - 1;
+                String spec = range.substring(6).trim();
+                int dash = spec.indexOf('-');
+                if (dash >= 0) {
+                    try {
+                        if (dash > 0) start = Long.parseLong(spec.substring(0, dash).trim());
+                        String e = spec.substring(dash + 1).trim();
+                        if (!e.isEmpty()) end = Long.parseLong(e);
+                    } catch (NumberFormatException ignored) { }
+                }
+                if (start < 0) start = 0;
+                if (end >= length) end = length - 1;
+                if (start > end) { start = 0; end = length - 1; }
+                long count = end - start + 1;
+                InputStream in = new java.io.FileInputStream(file);
+                long toSkip = start;
+                while (toSkip > 0) {
+                    long s = in.skip(toSkip);
+                    if (s <= 0) break;
+                    toSkip -= s;
+                }
+                headers.put("Content-Range", "bytes " + start + "-" + end + "/" + length);
+                headers.put("Content-Length", String.valueOf(count));
+                return new WebResourceResponse(mime, null, 206, "Partial Content",
+                        headers, new LimitedInputStream(in, count));
+            }
+            headers.put("Content-Length", String.valueOf(length));
+            return new WebResourceResponse(mime, null, 200, "OK", headers,
+                    new java.io.FileInputStream(file));
+        } catch (Exception e) {
+            Log.e(TAG, "serveRangeFile failed", e);
+            return audioError(500, "Offline audio unreadable");
+        }
+    }
+
+    private static void copyRespHeader(java.net.HttpURLConnection conn,
+                                       java.util.Map<String, String> out, String key) {
+        String v = conn.getHeaderField(key);
+        if (v != null && !v.isEmpty()) out.put(key, v);
+    }
+
+    private static String audioMime(String name) {
+        String n = name.toLowerCase();
+        if (n.endsWith(".m4a") || n.endsWith(".mp4") || n.endsWith(".m4b")) return "audio/mp4";
+        if (n.endsWith(".aac")) return "audio/aac";
+        if (n.endsWith(".flac")) return "audio/flac";
+        if (n.endsWith(".ogg") || n.endsWith(".oga") || n.endsWith(".opus")) return "audio/ogg";
+        if (n.endsWith(".wav")) return "audio/wav";
+        if (n.endsWith(".webm")) return "audio/webm";
+        return "audio/mpeg";
+    }
+
+    private static WebResourceResponse audioError(int status, String reason) {
+        return new WebResourceResponse("text/plain", "UTF-8", status, reason,
+                new java.util.HashMap<String, String>(),
+                new java.io.ByteArrayInputStream(
+                        reason.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
     }
 
     /**
@@ -1067,6 +1231,9 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         unregisterSystemEventReceivers();
+        // 静态引用不能留住已销毁的 Activity；听书期间返回键走 moveTaskToBack，
+        // 不会走到这里（见 onBackPressed）。
+        AudioPlayService.detachBridge(bridge);
         if (bridge != null) {
             bridge.shutdown();
         }
@@ -1079,8 +1246,16 @@ public class MainActivity extends AppCompatActivity {
     public void onBackPressed() {
         if (webView != null && webView.canGoBack()) {
             webView.goBack();
-        } else {
-            super.onBackPressed();
+            return;
         }
+        // 正在听书时返回键只把任务移到后台，绝不能 finish：
+        // onDestroy 会 webView.destroy() + bridge.shutdown()，
+        // 而 WebView 里的 HTMLAudioElement 就是播放器，销毁即断音。
+        // 前台服务负责保活进程，通知栏负责把用户带回界面。
+        if (AudioPlayService.isPlaying()) {
+            moveTaskToBack(true);
+            return;
+        }
+        super.onBackPressed();
     }
 }

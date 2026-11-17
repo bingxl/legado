@@ -141,6 +141,11 @@ func (s *CacheService) Start(ctx context.Context, bookID int64, scope string, in
 	if book.IsLocal() {
 		return dto.CacheJob{}, fmt.Errorf("%w: 本地书本身就是本地文件，无需缓存", domain.ErrInvalidArgument)
 	}
+	// 对齐原版 CacheActivity 的 `!it.isAudio()`：音频书的「正文」只是一段
+	// 带时效的 URL 规则串，把它当文本缓存毫无意义，还会干扰离线音频目录。
+	if book.IsAudio() {
+		return dto.CacheJob{}, fmt.Errorf("%w: 音频书请在听书页用「下载」缓存音频", domain.ErrInvalidArgument)
+	}
 	chapters, err := s.chapters.List(ctx, bookID)
 	if err != nil {
 		return dto.CacheJob{}, fmt.Errorf("读取目录失败: %w", err)

@@ -166,6 +166,7 @@ func run() error {
 	sourceDebugAPI := api.NewSourceDebugAPI(biz.SourceDebug)
 	sourceLoginAPI := api.NewSourceLoginAPI(biz.SourceLogin)
 	dictAPI := api.NewDictAPI(biz.Dict)
+	audioAPI := api.NewAudioAPI(biz.Audio)
 
 	wailsApp := application.New(application.Options{
 		Name:        "legado-desktop",
@@ -185,10 +186,11 @@ func run() error {
 			application.NewService(sourceLoginAPI),
 			application.NewService(aiAPI),
 			application.NewService(dictAPI),
+			application.NewService(audioAPI),
 			application.NewService(systemAPI),
 		},
 		Assets: application.AssetOptions{
-			Handler: assetHandler(root),
+			Handler: assetHandler(root, biz.Audio),
 		},
 		Windows: windowsOptions(),
 		Mac: application.MacOptions{
@@ -212,18 +214,27 @@ func run() error {
 //   - "/local/..." 应用数据目录，用于封面与漫画图片缓存
 //   - "/raw/<arg>[.ext]" 任意本地文件（arg = base64url(绝对路径)），用于 PDF 与本地图片直读
 //   - "/img/<arg>[.ext]" 网络图片代理（arg = base64url(图片地址 + "\n" + 书源地址)），绕开图床防盗链
+//   - "/stream/<sid>[.ext]" 音频流代理：sid 对应 Go 侧一次性播放会话，
+//     真实 URL 与 Referer/Cookie/登录头不下发前端，且支持 Range 拖动
 //
 // 参数编进路径段而不是查询串，是安卓端能读到文件的必要条件，见 asset_url.go。
 // 旧写法 "?p=" / "?u=&src=" 仍然兼容（桌面端早期链接与测试用）。
 //
-// 前端因此可以用普通 <img src> / <iframe src> 访问本地资源，无需 base64 内联。
-func assetHandler(root string) http.Handler {
+// 前端因此可以用普通 <img src> / <iframe src> / <audio src> 访问本地资源，
+// 无需 base64 内联。
+func assetHandler(root string, audio http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/", spaHandler())
 	// http.FileServer 会自行规整路径，天然防御目录穿越。
 	mux.Handle("/local/", http.StripPrefix("/local/", http.FileServer(http.Dir(root))))
 	mux.HandleFunc("/raw/", serveRawFile)
 	mux.HandleFunc("/img/", serveRemoteImage)
+	// 播放页路由是 /audio/:id，音频流必须另起前缀，否则深链会被这里截走。
+	// /streammeta/ 只给安卓宿主取「真实 URL + 请求头」用，它自己流式转发音频。
+	if audio != nil {
+		mux.Handle("/stream/", audio)
+		mux.Handle("/streammeta/", audio)
+	}
 	return mux
 }
 

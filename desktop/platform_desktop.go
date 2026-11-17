@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,8 @@ import (
 	"github.com/adrg/xdg"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+
+	"github.com/legado/desktop/internal/adapter/verifywails"
 )
 
 // platformName 供前端区分桌面端与移动端布局，经 SystemAPI.Platform 暴露。
@@ -63,13 +66,38 @@ func windowOptions() application.WebviewWindowOptions {
 // 表现像前端挂了，实际是 WebView 根本没挂到窗口上。
 // 参考 MicrosoftEdge/WebView2Feedback#5759。
 //
+// 自动补 --remote-debugging-port：站点的反爬人机验证（Cloudflare）通过后，
+// cf_clearance 是 HttpOnly，Wails 又没有 Cookie API，只能经 CDP 从浏览器内核
+// 里读（见 internal/adapter/verifywails）。端口只监听 127.0.0.1，进程内随机分配。
+//
 // 需要 GPU 加速（WebGL / canvas 加速）时用 LEGADO_WEBVIEW_ARGS 覆盖，
 // 逗号分隔，会整体替换默认值，例如 LEGADO_WEBVIEW_ARGS=--disable-gpu-compositing。
+// 覆盖后调试端口仍会自动补上；确实要关掉验证能力时显式传
+// LEGADO_WEBVIEW_ARGS=...,--remote-debugging-port=0。
 func webviewBrowserArgs() []string {
+	var args []string
 	if v := os.Getenv("LEGADO_WEBVIEW_ARGS"); v != "" {
-		return strings.Split(v, ",")
+		args = strings.Split(v, ",")
+	} else {
+		args = []string{"--disable-gpu"}
 	}
-	return []string{"--disable-gpu"}
+	if hasDebugPortArg(args) {
+		return args
+	}
+	if port := verifywails.DebugPort(); port > 0 {
+		args = append(args, fmt.Sprintf("--remote-debugging-port=%d", port))
+	}
+	return args
+}
+
+// hasDebugPortArg 判断用户是否已自行指定（或显式禁用）调试端口。
+func hasDebugPortArg(args []string) bool {
+	for _, a := range args {
+		if strings.HasPrefix(strings.TrimSpace(a), "--remote-debugging-port") {
+			return true
+		}
+	}
+	return false
 }
 
 // safeAreaJSON 桌面端没有刘海屏/系统手势区，返回空串让前端跳过适配。

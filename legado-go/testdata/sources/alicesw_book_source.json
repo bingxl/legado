@@ -1,0 +1,51 @@
+{
+  "bookSourceName": "爱丽丝书屋",
+  "bookSourceGroup": "🔞 成人,bingxl",
+  "bookSourceType": 0,
+  "bookSourceUrl": "https://www.alicesw.com",
+  "bookSourceComment": "alicesw.com（爱丽丝书屋）纯净 HTML 源，无需 JS/接口逆向：列表、详情、目录、正文全部服务端直出。\n页面结构：详情 /novel/<书籍ID>.html；全量目录 /other/chapters/id/<书籍ID>.html（一次给全，131 章也在同一页）；章节 /book/<内部书籍ID>/<章节hash>.html —— 注意详情页 ID 与章节页 ID **不是同一个数字**，所以不要用详情 URL 去拼章节 URL，tocUrl 必须取详情页里「查看所有章节」的链接。\n正文 div.read-content 内是 <p> 段落，用 @html 保留分段；无分页、无截断（实测 2180 字章节完整）。\n搜索 /search.html?q=<词>&f=_all，固定返回前 10 条且 page 参数无效，属于站点限制不是规则问题。\n分类 /lists/<id>.html?page=N 每页 50 条；排行 /other/rank_hits/order/hits*.html 只有单页。\n【网络】站点在境内直连不可达，需代理；桌面端抓取器不走系统代理，只在书源 header 里认 proxy 字段。如需本机代理，在 header 里加 \"proxy\":\"http://127.0.0.1:7890\"（默认不带，避免写死某个人的端口）。",
+  "bookUrlPattern": "^https?://(www\\.)?alicesw\\.com/novel/\\d+\\.html$",
+  "customOrder": 0,
+  "enabled": true,
+  "enabledCookieJar": true,
+  "enabledExplore": true,
+  "header": "{\"User-Agent\": \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\"}",
+  "exploreUrl": "科幻::/lists/71.html?page={{page}}\n经典::/lists/79.html?page={{page}}\n奇幻::/lists/75.html?page={{page}}\n系统::/lists/69.html?page={{page}}\n武侠::/lists/68.html?page={{page}}\n乱伦::/lists/65.html?page={{page}}\n都市::/lists/64.html?page={{page}}\n乡村::/lists/63.html?page={{page}}\n同人::/lists/73.html?page={{page}}\n玄幻::/lists/62.html?page={{page}}\n校园::/lists/61.html?page={{page}}\n穿越::/lists/70.html?page={{page}}\n反差::/lists/22.html?page={{page}}\n凌辱::/lists/46.html?page={{page}}\n堕落::/lists/18.html?page={{page}}\n纯爱::/lists/19.html?page={{page}}\n伪娘::/lists/52.html?page={{page}}\n萝莉::/lists/48.html?page={{page}}\n熟女::/lists/56.html?page={{page}}\n正太::/lists/50.html?page={{page}}\n明星::/lists/72.html?page={{page}}\nNTR::/lists/54.html?page={{page}}\n媚黑::/lists/53.html?page={{page}}\n调教::/lists/58.html?page={{page}}\n言情::/lists/59.html?page={{page}}\n百合::/lists/47.html?page={{page}}\n耽美::/lists/82.html?page={{page}}\n重口::/lists/21.html?page={{page}}\n其他::/lists/57.html?page={{page}}\n本日排行::/other/rank_hits/order/hits_day.html\n本周排行::/other/rank_hits/order/hits_week.html\n本月排行::/other/rank_hits/order/hits_month.html\n总排行::/other/rank_hits/order/hits.html\n最新更新::/all/order/update_time+desc.html?page={{page}}\n字数榜::/all/order/word+desc.html?page={{page}}\n人气榜::/all/order/hits+desc.html?page={{page}}",
+  "lastUpdateTime": 0,
+  "respondTime": 180000,
+  "searchUrl": "/search.html?q={{key}}&f=_all",
+  "ruleBookInfo": {
+    "name": "div.novel_title@text",
+    "author": "div.novel_info@tag.p.0@tag.a@text",
+    "kind": "div.novel_info@tag.p.1@tag.a@text",
+    "lastChapter": "div.novel_info@tag.p.5@tag.a@text",
+    "coverUrl": "div.pic@tag.img.0@data-src",
+    "intro": "div.jianjie@tag.p@text",
+    "tocUrl": "div.book_newchap@tag.a.0@href"
+  },
+  "ruleContent": {
+    "content": "div.read-content@html"
+  },
+  "ruleExplore": {
+    "bookList": "div.rec_rullist@tag.ul",
+    "name": "li.two@tag.a@text",
+    "author": "li.four@text",
+    "kind": "li.sev@tag.a@text##小说$",
+    "lastChapter": "li.three@tag.a@text",
+    "bookUrl": "li.two@tag.a@href"
+  },
+  "ruleSearch": {
+    "bookList": "div.list-group@tag.div.list-group-item",
+    "name": "h5@tag.a@text##^\\d+\\.\\s*",
+    "author": "p.mb-1@tag.a@text",
+    "kind": "p.text-muted[1]@tag.a@text@js:result.split(\"\\n\").map(s=>s.replace(/^#/,\"\")).join(\",\")",
+    "intro": "p.content-txt@text",
+    "bookUrl": "h5@tag.a@href"
+  },
+  "ruleToc": {
+    "chapterList": "ul.mulu_list@tag.li@tag.a",
+    "chapterName": "text",
+    "chapterUrl": "href"
+  },
+  "weight": 0
+}

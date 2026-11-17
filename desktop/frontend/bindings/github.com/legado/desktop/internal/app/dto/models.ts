@@ -155,6 +155,64 @@ export interface AITestResult {
 }
 
 /**
+ * AudioCacheView 描述一章已落盘的离线音频。
+ */
+export interface AudioCacheView {
+    "index": number;
+    "size": number;
+    "path": string;
+}
+
+/**
+ * AudioDownloadView 是「下载若干章音频」任务启动后的即时回执。
+ */
+export interface AudioDownloadView {
+    "bookId": number;
+    "total": number;
+}
+
+/**
+ * AudioPlaybackState 是听书的「服务态」镜像。
+ * 
+ * 真正的播放器在 WebView 的 HTMLAudioElement 里，但宿主（安卓前台 Service、
+ * 锁屏/通知栏媒体控制）与 Go 业务层都需要一份权威状态：前端每次状态变化上报，
+ * AudioService 存下快照、分配单调递增的 seq 并广播 audio:playback:state。
+ * seq 用来丢弃乱序事件，clientId 让上报方忽略自己发出的那一轮广播，避免回环。
+ * 
+ * 注意这里不含 playUrl：播放地址是一次性会话，绝不能进事件广播。
+ */
+export interface AudioPlaybackState {
+    "bookId": number;
+    "bookName": string;
+    "chapterIndex": number;
+    "chapterTitle": string;
+    "cover": string;
+
+    /**
+     * idle | loading | playing | paused | error
+     */
+    "status": string;
+    "positionMs": number;
+    "durationMs": number;
+    "rate": number;
+
+    /**
+     * LIST_END_STOP | SINGLE_LOOP | RANDOM | LIST_LOOP
+     */
+    "playMode": string;
+
+    /**
+     * ClientID 标识上报方；广播时原样带回，供前端过滤自己的回声。
+     */
+    "clientId": string;
+
+    /**
+     * Seq 由 AudioService 分配，不从前端接受。
+     */
+    "seq": number;
+}
+
+/**
  * BookBrief 是书架列表中的书籍摘要，字段精简以满足列表渲染。
  */
 export interface BookBrief {
@@ -169,6 +227,16 @@ export interface BookBrief {
      * 用于展示的中文格式名
      */
     "formatLabel": string;
+
+    /**
+     * Legado Book.type 位域，音频为 32
+     */
+    "type": number;
+
+    /**
+     * 前端只认这个派生布尔，不自己解位域
+     */
+    "isAudio": boolean;
     "groupId": number;
     "totalChapters": number;
     "lastChapter": string;
@@ -210,6 +278,16 @@ export interface BookDetail {
      * 用于展示的中文格式名
      */
     "formatLabel": string;
+
+    /**
+     * Legado Book.type 位域，音频为 32
+     */
+    "type": number;
+
+    /**
+     * 前端只认这个派生布尔，不自己解位域
+     */
+    "isAudio": boolean;
     "groupId": number;
     "totalChapters": number;
     "lastChapter": string;
@@ -360,6 +438,12 @@ export interface ChapterItem {
     "title": string;
     "url": string;
     "isVolume": boolean;
+
+    /**
+     * Duration 是音频章节时长（毫秒）。原版把它放在 BookChapter.end，
+     * 桌面端不回写列，播放器拿到 loadedmetadata 后自行显示；这里留字段供目录展示。
+     */
+    "duration"?: number;
 }
 
 /**
@@ -570,12 +654,27 @@ export interface ExploreKindView {
  * 
  * 这里刻意**不带分类**：Legado 原版的发现页是折叠列表，展开某个源时才去
  * 解析它的分类（部分源的 exploreUrl 是一段要联网的 JS，全部预解析会让
- * 首屏等十几秒）。因此列表只传名字与分组，分类由 ExploreKinds 单独按需取。
+ * 首屏等十几秒）。因此列表只传名字、分组与下面几个筛选用的派生字段，
+ * 分类由 ExploreKinds 单独按需取。
+ * 
+ * 为什么还要带 URL / Enabled / 发现 / 登录这几个字段：发现页顶部的筛选框
+ * 与书源管理页用的是**同一套搜索规则**（`group:` 前缀 + 内置筛选词 +
+ * 名称/地址/分组模糊匹配，见前端 utils/sourceList.ts 的 filterSources）。
+ * 只有名字的话两边搜同一个词会得到不同结果，所以把规则要吃到的字段一并下发。
  */
 export interface ExploreSourceBrief {
     "id": number;
     "name": string;
     "group": string;
+
+    /**
+     * 以下字段仅服务于筛选，与 SourceView 的同名派生字段同源（domain ParseSourceMeta）。
+     */
+    "url": string;
+    "enabled": boolean;
+    "enabledExplore": boolean;
+    "hasExploreUrl": boolean;
+    "hasLoginUrl": boolean;
 }
 
 /**
@@ -672,6 +771,19 @@ export interface LoginResult {
      */
     "openUrl": string;
     "cookieMask": string;
+}
+
+/**
+ * PlayURL 是一次播放会话的地址。
+ * 
+ * URL 形如 "/stream/<sid>.mp3"：真实音频地址与请求头只留在 Go 侧，
+ * 绝不交给前端。前端直接把它塞给 <audio src>，由 /stream/ 代理负责带
+ * Referer/Cookie 去取流并透传 Range。每次切章都会换新 sid。
+ */
+export interface PlayURL {
+    "url": string;
+    "title": string;
+    "index": number;
 }
 
 /**

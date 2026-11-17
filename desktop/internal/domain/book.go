@@ -25,8 +25,19 @@ const (
 	BookFormatTXT   BookFormat = "txt"
 	BookFormatPDF   BookFormat = "pdf"
 	BookFormatComic BookFormat = "comic"
+	// BookFormatAudio 来自 bookSourceType=1 的音频书：章节「正文」是音频地址规则串。
+	BookFormatAudio BookFormat = "audio"
 	// BookFormatUnknown 用于尚未识别格式（例如网络书在未抓取前）。
 	BookFormatUnknown BookFormat = "unknown"
+)
+
+// Book.type 位域，取值必须与 Kotlin 原版 constant/BookType.kt 一致：
+// 书源 JS 会直接读 `book.type`（`=== 64` 图片、`& 128` 下载站），错位会静默失效。
+// domain 不依赖书源引擎，所以这里独立定义一份同值常量。
+const (
+	BookTypeText  = 1 << 3 // 8
+	BookTypeAudio = 1 << 5 // 32
+	BookTypeImage = 1 << 6 // 64
 )
 
 // String 返回格式的可读名称，用于前端展示。
@@ -40,6 +51,8 @@ func (f BookFormat) String() string {
 		return "PDF"
 	case BookFormatComic:
 		return "漫画"
+	case BookFormatAudio:
+		return "音频"
 	default:
 		return "未知"
 	}
@@ -73,6 +86,7 @@ type Book struct {
 	CoverURL   string     `json:"coverUrl"`   // 网络封面 URL 或本地封面路径
 	Kind       BookKind   `json:"kind"`       // 来源类型
 	Format     BookFormat `json:"format"`     // 正文格式
+	Type       int        `json:"type"`       // Legado Book.type 位域（音频 32 / 图片 64 / 文本 8）
 	Origin     string     `json:"origin"`     // 来源标识：书源 URL，或本地书的 "local"
 	OriginName string     `json:"originName"` // 来源书源名称，本地书为空
 	BookURL    string     `json:"bookUrl"`    // 网络书详情页 URL；本地书为文件绝对路径
@@ -87,7 +101,7 @@ type Book struct {
 
 	DurChapterIndex int    `json:"durChapterIndex"` // 当前阅读章节序号（从 0 开始）
 	DurChapterTitle string `json:"durChapterTitle"` // 当前阅读章节标题
-	DurChapterPos   int    `json:"durChapterPos"`   // 章节内位置（TXT 为字符偏移，EPUB/PDF 为页码）
+	DurChapterPos   int    `json:"durChapterPos"`   // 章节内位置（TXT 字符偏移 / EPUB、PDF 页码 / 音频书为播放毫秒）
 
 	CreatedAt  time.Time `json:"createdAt"`
 	UpdatedAt  time.Time `json:"updatedAt"`
@@ -106,6 +120,14 @@ func (b *Book) IsLocal() bool { return b.Kind == BookKindLocal }
 
 // IsComic 报告该书是否为漫画（图片流）类型。
 func (b *Book) IsComic() bool { return b.Format == BookFormatComic }
+
+// IsAudio 报告该书是否是音频书（走播放器而不是阅读器）。
+//
+// Type 是权威来源；Format 是冗余兜底：旧库里 type 列尚未回填时，
+// 导入时写下的 format=audio 仍能正确分流。
+func (b *Book) IsAudio() bool {
+	return b.Type&BookTypeAudio != 0 || b.Format == BookFormatAudio
+}
 
 // ReadPercent 返回阅读进度百分比（0~100），章节总数为 0 时返回 0。
 func (b *Book) ReadPercent() int {

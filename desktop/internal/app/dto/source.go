@@ -259,9 +259,22 @@ var pageListRe = regexp.MustCompile(`<\d+\s*,\s*\d+[^<>]*>`)
 //
 // 这里刻意**不带分类**：Legado 原版的发现页是折叠列表，展开某个源时才去
 // 解析它的分类（部分源的 exploreUrl 是一段要联网的 JS，全部预解析会让
-// 首屏等十几秒）。因此列表只传名字与分组，分类由 ExploreKinds 单独按需取。
+// 首屏等十几秒）。因此列表只传名字、分组与下面几个筛选用的派生字段，
+// 分类由 ExploreKinds 单独按需取。
+//
+// 为什么还要带 URL / Enabled / 发现 / 登录这几个字段：发现页顶部的筛选框
+// 与书源管理页用的是**同一套搜索规则**（`group:` 前缀 + 内置筛选词 +
+// 名称/地址/分组模糊匹配，见前端 utils/sourceList.ts 的 filterSources）。
+// 只有名字的话两边搜同一个词会得到不同结果，所以把规则要吃到的字段一并下发。
 type ExploreSourceBrief struct {
 	ID    int64  `json:"id"`
 	Name  string `json:"name"`
 	Group string `json:"group"`
+
+	// 以下字段仅服务于筛选，与 SourceView 的同名派生字段同源（domain ParseSourceMeta）。
+	URL            string `json:"url"`
+	Enabled        bool   `json:"enabled"`
+	EnabledExplore bool   `json:"enabledExplore"`
+	HasExploreURL  bool   `json:"hasExploreUrl"`
+	HasLoginURL    bool   `json:"hasLoginUrl"`
 }

@@ -377,7 +377,7 @@ func (s *SourceService) nextOrder(ctx context.Context) int {
 	return maxOrder + 1
 }
 
-// ListExploreSources 列出开启「发现」的书源，只带名字与分组。
+// ListExploreSources 列出开启「发现」的书源，只带筛选需要的字段。
 //
 // 与 Legado 原版一致，条件是「启用 + 开启发现 + 配了 exploreUrl」。
 // 分类不在这里解析：展开某个源时再按需取（见 ExploreKinds），
@@ -395,7 +395,17 @@ func (s *SourceService) ListExploreSources(ctx context.Context) ([]dto.ExploreSo
 		if !s.fetcher.HasExplore(src) {
 			continue
 		}
-		out = append(out, dto.ExploreSourceBrief{ID: src.ID, Name: src.Name, Group: src.Group})
+		meta := src.Meta()
+		out = append(out, dto.ExploreSourceBrief{
+			ID:             src.ID,
+			Name:           src.Name,
+			Group:          src.Group,
+			URL:            src.URL,
+			Enabled:        src.Enabled,
+			EnabledExplore: meta.EnabledExplore,
+			HasExploreURL:  meta.HasExploreURL,
+			HasLoginURL:    meta.HasLoginURL,
+		})
 	}
 	return out, nil
 }

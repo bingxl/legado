@@ -130,3 +130,98 @@ func TestInterruptClearedBeforeReuse(t *testing.T) {
 		t.Fatalf("复用后结果错误: %q", got)
 	}
 }
+
+// TestJavaGetStringEvaluatesRule 钉住 `java.getString(rule)` 的语义：
+// 它是**按规则求值**（Kotlin JsExtensions.getString → analyzeRule.getString），
+// 不是读变量。曾经实现成 Vars.Get，导致
+// `a=java.getString('model.lines')` 恒为空，纯 API 书源正文全空。
+func TestJavaGetStringEvaluatesRule(t *testing.T) {
+	var asked []string
+	b := &Bindings{
+		Vars: mapVarStore{"model.lines": "不该被当成变量读出来"},
+		EvalRuleString: func(rule string) string {
+			asked = append(asked, rule)
+			if rule == "model.lines" {
+				return "第一段正文。"
+			}
+			return ""
+		},
+		EvalRuleStringList: func(rule string) []string {
+			if rule == "list" {
+				return []string{"甲", "乙"}
+			}
+			return nil
+		},
+	}
+
+	v, err := DefaultEngine().Eval(`java.getString('model.lines')`, b)
+	if err != nil {
+		t.Fatalf("java.getString 出错: %v", err)
+	}
+	if got := fmt.Sprint(v); got != "第一段正文。" {
+		t.Fatalf("java.getString 应按规则求值，实际 %q", got)
+	}
+	if len(asked) != 1 || asked[0] != "model.lines" {
+		t.Fatalf("规则串未透传给求值钩子: %v", asked)
+	}
+
+	v, err = DefaultEngine().Eval(`java.getStringList('list').join('|')`, b)
+	if err != nil {
+		t.Fatalf("java.getStringList 出错: %v", err)
+	}
+	if got := fmt.Sprint(v); got != "甲|乙" {
+		t.Fatalf("java.getStringList 结果错误: %q", got)
+	}
+}
+
+// 书源过 Cloudflare 时普遍用 `java.startBrowserAwait(url,'验证').body()` 取正文
+// （如「顶点小说」：`res = java.startBrowserAwait(u,'ver'); java.setContent(res.body())`）。
+// Kotlin 的 StrResponse 同时有 body 属性和 body() 方法，goja 一个键只能放一个值，
+// 这里钉住"可调用 + 能字符串化"两条，避免改成普通属性后书源报
+// `res.body is not a function`。
+func TestJavaStartBrowserAwaitReturnsStrResponse(t *testing.T) {
+	var gotURL, gotTitle string
+	var gotRefetch bool
+	b := &Bindings{
+		StartBrowser: func(src *model.BookSource, url, title string, refetch bool) (string, int) {
+			gotURL, gotTitle, gotRefetch = url, title, refetch
+			return "<html>验证后的正文</html>", 200
+		},
+	}
+
+	v, err := DefaultEngine().Eval(`(function(){
+		var r = java.startBrowserAwait('http://site/book/1','请完成验证');
+		return r.body() + '|' + r.url + '|' + r.code + '|' + ('' + r.body);
+	})()`, b)
+	if err != nil {
+		t.Fatalf("startBrowserAwait 出错: %v", err)
+	}
+	want := "<html>验证后的正文</html>|http://site/book/1|200|<html>验证后的正文</html>"
+	if got := fmt.Sprint(v); got != want {
+		t.Fatalf("返回对象不符合 StrResponse 语义:\n got=%q\nwant=%q", got, want)
+	}
+	if gotURL != "http://site/book/1" || gotTitle != "请完成验证" || !gotRefetch {
+		t.Fatalf("透传给宿主的参数不对: url=%q title=%q refetch=%v", gotURL, gotTitle, gotRefetch)
+	}
+
+	// 第三个参数显式 false：直接用浏览器渲染的 HTML，不重新请求
+	_, err = DefaultEngine().Eval(`java.startBrowserAwait('http://site/2','t',false)`, b)
+	if err != nil {
+		t.Fatalf("startBrowserAwait 三个参数时出错: %v", err)
+	}
+	if gotRefetch {
+		t.Fatal("第三个参数为 false 时不应重新取正文")
+	}
+}
+
+// 宿主不支持内置浏览器时，startBrowserAwait 必须返回空响应而不是抛错，
+// 否则书源会在 JS 层直接中断，用户只看到"解析失败"。
+func TestJavaStartBrowserAwaitWithoutHost(t *testing.T) {
+	v, err := DefaultEngine().Eval(`java.startBrowserAwait('http://x','t').body()`, &Bindings{})
+	if err != nil {
+		t.Fatalf("无宿主时不应抛错: %v", err)
+	}
+	if got := fmt.Sprint(v); got != "" {
+		t.Fatalf("无宿主时应返回空正文，实际 %q", got)
+	}
+}

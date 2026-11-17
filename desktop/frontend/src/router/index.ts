@@ -93,6 +93,13 @@ const routes = [
     props: true,
   },
   {
+    path: "/audio/:id",
+    name: "audio",
+    component: () => import("@/views/AudioPlayerView.vue"),
+    meta: { title: "听书" },
+    props: true,
+  },
+  {
     // 兜底：未知路径回书架。
     // 后端对无扩展名的路径统一回退到 index.html（见 main.go spaHandler），
     // 所以这类地址会真的落到这里；没有它就会白屏。

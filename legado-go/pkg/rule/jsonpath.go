@@ -133,8 +133,23 @@ var jsonFuncRe = regexp.MustCompile(`\.(length|min|max|avg|sum)\(\)$`)
 // 注意 `$..[`（递归下降）是合法语法，不能动；"$..[" 里不含 "$.[" 子串，天然不受影响。
 var jsonDotBracketRe = regexp.MustCompile(`\$\.\[+`)
 
+// jsonLeadingDotBracketRe 匹配以「点+方括号」开头的路径（`.[?(@.title)]`）。
+//
+// legado 对不以 `$` 开头的路径会补一个 `$.` 前缀，于是 `.[?(...)]` 变成
+// `$..[?(...)]` —— 递归下降过滤。这不是笔误：纯 API 书源（UAA 系）就用
+// `.[?(@.title)]` 一条规则同时捞 `model.data[]` 里的书和
+// `model.menus[].children[]` 里的章节，靠的正是"任意深度找带 title 的对象"。
+// ojg 不认 `.[`（报 "expression fragment can not start with a '['"），
+// 所以必须显式补成 `$..[`；否则规则静默失败，列表退化成「按详情页解析」，
+// 详情页地址被写成列表接口地址，表现为"能出列表、点进去详情获取失败"。
+var jsonLeadingDotBracketRe = regexp.MustCompile(`^\.\[`)
+
 func normalizeJSONPath(path string) string {
-	return jsonDotBracketRe.ReplaceAllString(path, "$[")
+	p := strings.TrimSpace(path)
+	if jsonLeadingDotBracketRe.MatchString(p) {
+		return jsonDotBracketRe.ReplaceAllString("$."+p, "$[")
+	}
+	return jsonDotBracketRe.ReplaceAllString(p, "$[")
 }
 
 func jsonRead(data any, path string) []any {

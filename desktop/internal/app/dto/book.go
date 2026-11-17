@@ -24,6 +24,8 @@ type BookBrief struct {
 	Kind            string     `json:"kind"`
 	Format          string     `json:"format"`
 	FormatLabel     string     `json:"formatLabel"` // 用于展示的中文格式名
+	Type            int        `json:"type"`       // Legado Book.type 位域，音频为 32
+	IsAudio         bool       `json:"isAudio"`    // 前端只认这个派生布尔，不自己解位域
 	GroupID         int64      `json:"groupId"`
 	TotalChapters   int        `json:"totalChapters"`
 	LastChapter     string     `json:"lastChapter"`
@@ -55,6 +57,8 @@ func NewBookBrief(b *domain.Book) BookBrief {
 		Kind:            string(b.Kind),
 		Format:          string(b.Format),
 		FormatLabel:     b.Format.String(),
+		Type:            b.Type,
+		IsAudio:         b.IsAudio(),
 		GroupID:         b.GroupID,
 		TotalChapters:   b.TotalChapters,
 		LastChapter:     b.LastChapter,
@@ -133,6 +137,9 @@ type ChapterItem struct {
 	Title    string `json:"title"`
 	URL      string `json:"url"`
 	IsVolume bool   `json:"isVolume"`
+	// Duration 是音频章节时长（毫秒）。原版把它放在 BookChapter.end，
+	// 桌面端不回写列，播放器拿到 loadedmetadata 后自行显示；这里留字段供目录展示。
+	Duration int `json:"duration,omitempty"`
 }
 
 // NewChapterItem 转换章节条目。

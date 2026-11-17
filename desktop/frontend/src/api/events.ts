@@ -27,6 +27,15 @@ export const BackendEvents = {
   AIAnswerChunk: "ai:answer:chunk",
   AIAnswerDone: "ai:answer:done",
   DictInstallProgress: "dict:install:progress",
+  AudioCacheProgress: "audio:cache:progress",
+  /** Go 侧 AudioService 广播的播放态快照。 */
+  AudioPlaybackState: "audio:playback:state",
+  /** 安卓前台 Service 的媒体键 / 通知栏 / 音频焦点 / 拔耳机指令。 */
+  AudioCommand: "audio:command",
+  /** 站点要求人机验证（Cloudflare），Go 侧已弹出验证窗口。 */
+  VerifyRequest: "verify:request",
+  /** 人机验证窗口已关闭。 */
+  VerifyDone: "verify:done",
 } as const;
 
 /** 章节缓存进度载荷（对应 Go 侧 dto.CacheProgress）。 */
@@ -113,6 +122,46 @@ export interface WebDAVImportProgressPayload {
   bytes: number;
   totalBytes: number;
   message: string;
+}
+
+/** 音频章节缓存进度（对应 Go 侧 audio:cache:progress）。 */
+export interface AudioCacheProgressPayload {
+  bookId: number;
+  done: number;
+  total: number;
+  index: number;
+  /** running / done / canceled / error */
+  state: string;
+  error: string;
+}
+
+/** 听书服务态快照（对应 Go 侧 dto.AudioPlaybackState）。 */
+export interface AudioPlaybackStatePayload {
+  bookId: number;
+  bookName: string;
+  chapterIndex: number;
+  chapterTitle: string;
+  cover: string;
+  /** idle / loading / playing / paused / error */
+  status: string;
+  positionMs: number;
+  durationMs: number;
+  rate: number;
+  playMode: string;
+  /** 上报方标识；收到自己发出的回声要忽略。 */
+  clientId: string;
+  /** 服务端单调递增序号，用于丢弃乱序事件。 */
+  seq: number;
+}
+
+/**
+ * 原生媒体指令（对应 Go 侧 dto.AudioCommand，安卓宿主直接发进 Wails 事件总线）。
+ * value 对 seekto 是毫秒，对 seekbackward / seekforward 是秒。
+ */
+export interface AudioCommandPayload {
+  action: string;
+  value?: number;
+  reason?: string;
 }
 
 /** 进度类事件的载荷结构（导入 / 校验 / 同步共用）。 */
@@ -223,6 +272,25 @@ export function onCacheProgress(handler: (data: CacheProgressPayload) => void) {
   return subscribe(BackendEvents.CacheProgress, handler);
 }
 
+/** 订阅音频章节缓存（下载）进度。 */
+export function onAudioCacheProgress(
+  handler: (data: AudioCacheProgressPayload) => void,
+) {
+  return subscribe(BackendEvents.AudioCacheProgress, handler);
+}
+
+/** 订阅 Go 侧广播的听书服务态。 */
+export function onAudioPlaybackState(
+  handler: (data: AudioPlaybackStatePayload) => void,
+) {
+  return subscribe(BackendEvents.AudioPlaybackState, handler);
+}
+
+/** 订阅安卓宿主发来的原生媒体控制指令。 */
+export function onAudioCommand(handler: (data: AudioCommandPayload) => void) {
+  return subscribe(BackendEvents.AudioCommand, handler);
+}
+
 /** 订阅 AI 索引进度。 */
 export function onAIIndexProgress(
   handler: (data: AIIndexProgressPayload) => void,
@@ -296,4 +364,34 @@ export function onDictInstallProgress(
   handler: (data: DictInstallProgressPayload) => void,
 ) {
   return subscribe(BackendEvents.DictInstallProgress, handler);
+}
+
+/** 站点人机验证请求载荷（对应 Go 侧 verify:request）。 */
+export interface VerifyRequestPayload {
+  /** 触发验证的站点域名（eTLD+1），用于提示文案。 */
+  domain: string;
+  /** 被拦截的原始地址。 */
+  url: string;
+  /** 验证窗口标题。 */
+  title: string;
+}
+
+/** 人机验证窗口已关闭（对应 Go 侧 verify:done）。 */
+export interface VerifyDonePayload {
+  domain: string;
+}
+
+/**
+ * 订阅站点人机验证请求。
+ *
+ * Go 侧已经另开了一个 WebView 窗口加载验证页，前端只负责提示用户过去点一下，
+ * 否则用户会以为阅读卡死了（请求正阻塞在这一步）。
+ */
+export function onVerifyRequest(handler: (data: VerifyRequestPayload) => void) {
+  return subscribe(BackendEvents.VerifyRequest, handler);
+}
+
+/** 订阅验证窗口关闭。 */
+export function onVerifyDone(handler: (data: VerifyDonePayload) => void) {
+  return subscribe(BackendEvents.VerifyDone, handler);
 }

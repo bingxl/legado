@@ -152,6 +152,33 @@ public class WailsJSBridge {
     }
 
     /**
+     * 听书播放态上报。Called from JavaScript: wails.audioState(json)
+     *
+     * 前端 audioPlayer 每次状态变化都会推一份快照，宿主据此启停前台服务、
+     * 刷新 MediaStyle 通知、申请音频焦点并管理 WakeLock。桌面端没有这个
+     * 注入接口，前端用 typeof 探测，缺失时自动降级为纯前端 MediaSession。
+     *
+     * 必须在主线程操作 Service：JavaBridge 线程里 startForegroundService
+     * 与 MediaSession 都可能抛状态异常，这里统一 post 出去。
+     *
+     * @param json 见 Go 侧 dto.AudioPlaybackState，字段 bookId / bookName /
+     *             chapterIndex / chapterTitle / cover / status / positionMs /
+     *             durationMs / rate / playMode / clientId
+     */
+    @JavascriptInterface
+    public void audioState(String json) {
+        if (json == null) return;
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+            try {
+                AudioPlayService.update(
+                        webView.getContext().getApplicationContext(), json);
+            } catch (Exception e) {
+                Log.w(TAG, "audioState update failed", e);
+            }
+        });
+    }
+
+    /**
      * Send a callback response to JavaScript
      */
     private void sendCallback(String callbackId, String result, String error) {

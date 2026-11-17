@@ -185,9 +185,33 @@ SQLite 用 `modernc.org/sqlite`，EPUB、WebDAV、漫画解压（zip / rar / 7z�
 | JS 用 `result.parentNode()` | 抛 `parentNode is not a function`，标题空 → 0 章 | 节点包装需同时提供 `parent()` 与 `parentNode()` |
 | 正则含 `(?<=` `(?!` | RE2 编译失败、规则静默失效 | 交 `dlclark/regexp2`（回溯引擎）编译；TXT 目录规则必需 |
 | JS 里内嵌 `{{$.sid}}` | goja 报 `Unexpected token {` | 静态校验前先把 `{{...}}` 换成占位值 |
+| 书源内嵌 JSON 字段写成宽松写法 | 整段丢弃/回退成垃圾分类 | 统一走 `util.UnmarshalLooseJSON`（见下） |
 
 **判定原则**：任何「规则解析不出来」的路径都必须能报出**具体的规则串与原因**，
 不允许以「列表为空」「正文为空」草草收尾——否则线上只能靠猜。
+
+### 10.1 内嵌 JSON 字段：一律按 GSON lenient 解析
+
+书源里有多个字段的值**本身是一段 JSON 文本**：`exploreUrl`、`header`、`loginUi`、
+规则里的 `@put:{...}`、URL 规则尾部的 `,{...}` 选项。它们几乎都是人手写的，
+Kotlin 侧统一用 GSON（默认 lenient）解析，因此下列写法在原版全部合法：
+
+```text
+[{title:'全年龄•全部', url:'https://…/filter?page={{page}}', style:{layout_flexGrow:1}},
+ {'title':'完结', url:''},]     // 裸键、单引号、尾随逗号、分组标题
+```
+
+Go 的 `encoding/json` 是严格模式，同一份书源会解析失败——而失败路径大多**静默**：
+`exploreUrl` 会回退成按行拆分（整段变成一个点不开的分类）、`header` 会被整份丢掉
+（表现为全站 403，但浏览器打开正常）、`loginUi` 会让登录框变空。
+
+**约定**：这类字段一律用 `pkg/util.UnmarshalLooseJSON`，不要直接 `json.Unmarshal`。
+它支持单引号/裸键/裸值/注释/尾随逗号，**只解析数据、不执行 JS**（不要为了兼容把它
+丢进 goja，那等于让书源内容变成任意代码执行）。新增字段时若值可能是 JSON 文本，
+同样接入这个函数。
+
+回归：`pkg/util/jsonx_test.go`、`pkg/model/source_test.go`（`TestParseExploreKindsJSLiteral`、
+`TestGetHeaderMapLoose`）、`pkg/webbook/explore_test.go`、`internal/app/source_login_test.go`。
 
 ---
 
@@ -584,6 +608,10 @@ function login() { java.post(baseUrl + '/login', 'user=' + info['账号'] + ...)
 真正的登录态只认一个地方：**引擎的 `CookieStore`**。所以三条路径最后都落到它，
 抓取、图片下载、`/img/` 代理共用同一份（漫画源登录后图片才能取到）。
 
+> 例外：**反爬人机验证**窗口不适用上面这条结论——它确实需要读 HttpOnly 的
+> `cf_clearance`，办法是 WebView2 的 CDP 端口（见 13.7）。同一套手段理论上也能
+> 用于登录，但登录态还有 `source_login` 表要一起写，暂不合并。
+
 ### 13.4 两处必须改对的引擎行为
 
 1. **Cookie 必须落盘**：`bootstrap.New()` 里
@@ -627,7 +655,58 @@ function login() { java.post(baseUrl + '/login', 'user=' + info['账号'] + ...)
 `legado-go` 的 `AnalyzeUrl` 只从书源 `header` 字段取请求头，没有「登录头覆盖」这一层
 （Kotlin 原版有，Go 移植版没有）。这类书源要么把该头写进 `header` 规则，要么依赖 Cookie。
 
-### 13.7 回归用例
+### 13.7 反爬人机验证（Cloudflare）
+
+书源被「请稍候…/ Just a moment…」挡住，是 Cloudflare 的托管挑战（managed
+challenge）。引擎**不破解**它——挑战要真实浏览器跑 JS 并产出 `cf_clearance`，
+而这个 Cookie 是 **HttpOnly** 的。整条链路照搬原版思路「交给浏览器、用户点一下、
+再复用凭证」，只是取 Cookie 的手段不同：
+
+| 环节 | 原版（Android） | 桌面端 |
+| --- | --- | --- |
+| 检测 | 书源 `loginCheckJs` 里自己判 `_cf_` 特征 | **引擎统一检测**：`cf-mitigated: challenge` 响应头，或 403/503 + 挑战页正文特征（`pkg/net/challenge.go`） |
+| 开浏览器 | `WebViewActivity` + `SourceVerificationHelp` | 新建 Wails 窗口加载原地址（`internal/adapter/verifywails`） |
+| 取 Cookie | `CookieManager.getCookie(url)` | **CDP `Storage.getCookies`**（HttpOnly 也能读） |
+| 回填 | `CookieStore.setCookie` | `store.ReplaceCookie`（合并，不覆盖登录态）+ UA 覆盖 |
+| 重试 | `AnalyzeUrl(url)` 重新请求 | 同上，`net.Client.Do` 内部自动重试一次 |
+
+**为什么必须走 CDP**：§13.3 说过 Wails 没有 cookie API、`document.cookie` 也读不到
+HttpOnly。但 WebView2 支持 `--remote-debugging-port`，开一条本机 WebSocket 就能经
+`Storage.getCookies` 拿到浏览器内核里的全部 Cookie（实测可读 `httpOnly:true`）。
+端口由 `platform_desktop.go` 在拼 `AdditionalBrowserArgs` 时随机分配（只监听
+127.0.0.1），CDP 客户端在 `verifywails/cdp.go`。要关掉这条能力就显式传
+`LEGADO_WEBVIEW_ARGS=...,--remote-debugging-port=0`。
+
+**UA 必须跟着换**：`cf_clearance` 与 UA 绑定。验证窗口是 WebView2 的 UA
+（`Chrome/157 … Edg/157`），而引擎默认 UA 是 `Chrome/120`——照旧发就仍然 403。
+所以验证成功后 `net.SetUserAgentOverride(domain, ua)`，该域名的后续请求一律用
+浏览器 UA（覆盖书源自配的 UA，否则凭证白拿）。
+
+**三条硬约束**：
+
+1. **只试一次**。宿主放弃、或凭证仍无效时原样返回被拦截的响应，不能
+   「弹窗 → 重试 → 再弹窗」。`pkg/net/client.go` 里用 `challengeTried` 卡住。
+2. **同域名串行**。并发抓章节时不能给用户弹 N 个窗口（`RunChallenge` 按
+   eTLD+1 加锁）。
+3. **验证后的重新取正文要置 `NoChallenge`**（`AnalyzeUrl.NoChallenge`），
+   否则凭证还没生效时会再弹一次。
+
+**回填的两条通路**：拿到 `cf_clearance` 就走「存 Cookie + 重试」；站点不用
+`cf_clearance`（自建验证 / 只有 `__cf_bm`）时，宿主把窗口里 `outerHTML` 当
+`ChallengeResult.Body` 交回，引擎直接当响应体用——对应原版
+`startBrowserAwait(refetchAfterSuccess=false)`。
+
+**书源 JS 侧的 `java.startBrowserAwait` 也接通了**：有 6 个书源在
+`loginCheckJs` / `content` 里显式调用它（顶点小说、长佩、错衡…），原版行为是
+「开浏览器 → 等验证 → 重新请求」。桌面端走同一个 `ChallengeHandler`：
+`refetch=true` 就用刚写入的凭证重新请求，`false` 就用窗口里的 HTML。返回对象
+同时支持 `res.body()`（实际用法）和 `''+res.body`（Kotlin 的 StrResponse 两副面孔）。
+
+**没做的**：安卓端（`verify_android.go` 只打日志）。Wails 没暴露 Android
+WebView 的 `CookieManager`，要支持得在 Java 侧从 `WailsBridge` 拿 WebView 实例
+再经 JNI 回传 Cookie。
+
+### 13.8 回归用例
 
 `tmp-mcptest/s12_source_login.py`（23 项，自带 mock 站点，不依赖预置书目）：
 
@@ -855,3 +934,163 @@ M3（汉英方向的首版验收 + 在线 MT 引擎链）未开始：汉英库�
 回归：`tmp-mcptest/s20_dict.py`（25 项，覆盖包状态、回退链、源能力过滤、
 三种自定义写法、设置页与下载对话框、阅读器取词与 Esc 关闭）。
 Go 侧：`app/dictsource_test.go`（解析/拼装/过滤/续传/校验/落位）。
+
+---
+
+## 16. 音频源（听书）
+
+### 16.1 与原版的对应关系
+
+| 原版 | 桌面端 |
+|---|---|
+| `BookSourceType.audio = 1` → `Book.type` 位域 **32** | `legado-go` 的 `BookFlagAudio` / `domain.BookTypeAudio` 同为 32 |
+| `AudioPlay.kt` 把 `WebBook.getContent` 结果当 `durPlayUrl` | `adapter/legado.Fetcher.ResolveAudio` 取正文规则串 |
+| `AudioPlayService` 用 `AnalyzeUrl(...).getMediaItem()` | `urlx.New(...)` 展开 URL 选项、书源头、登录头、Cookie |
+| ExoPlayer + 后台 Service | 前端 `HTMLAudioElement` 播放 + 安卓 `AudioPlayService` 前台服务（通知/媒体键/焦点/锁） |
+| `AudioPlayService` 广播播放态 | `dto.AudioPlaybackState` + `audio:playback:state` 事件；前端上报、Go 分配 seq |
+| `CacheActivity` 排除 `isAudio()`，播放器自管缓存 | `CacheService.Start` 拒绝音频书；`AudioService` 显式下载整章 |
+
+**音频源的「正文」不是正文**：`ruleContent.content` 为空时引擎直接回退 `chapter.url`，
+整条流水线输出的是一段可能带 `,{...}` 选项与 `{{js}}` 的 **URL 规则串**。
+`BookContent.kt` 对音频没有任何专用分支，不要去正文里找 `<audio>` 标签（只在
+规则确实返回 HTML 时兜底抽 `src`）。
+
+```mermaid
+flowchart LR
+  A["书源 raw<br/>bookSourceType=1"] --> B["搜索/详情/目录"]
+  B --> C{"ruleContent.content"}
+  C -- 空 --> D["回退 chapter.url"]
+  C -- 非空 --> E["content 规则输出"]
+  D --> F["urlx.New 展开<br/>URL 选项 / JS / 登录头 / Cookie"]
+  E --> F
+  F --> G["/stream/&lt;sid&gt;.mp3<br/>Go 会话 + Range/206"]
+  G --> H["HTMLAudioElement"]
+  H --> I["SaveProgress<br/>chapterPos = 毫秒"]
+```
+
+### 16.2 硬约束
+
+1. **位域取值**：`text=8`、`audio=32`、`image=64`、`webFile=128`；`1/2/4/16` 是
+   原版保留位。书源 JS 会写 `book.type === 64`，取值错了静默失效。前端只认
+   `dto.BookBrief.isAudio`，不自己解位域。
+2. **真实 URL 不落库、不下发前端**：`BookChapter.resourceUrl` 在全仓无读写，是废弃字段。
+   直链带时效签名，切章 / 单曲循环 / 换源都必须重新 `ResolvePlayURL`。
+   `sid` 是一次性 nonce：同书重新点播时旧会话立即作废（旧直链与 `Authorization`
+   不再驻留内存），跨书最多保留 24 个并按最近访问 LRU 淘汰；每次请求滑动续期 6h，
+   绝对上限 24h，失效/过期一律 410。往回切章由前端重新 resolve，不依赖旧 sid 存活。
+   书源变量（`source_variables`）也必须像搜索/详情链路那样挂到书源实体上，
+   否则默认音频源「消消乐听书」的 `source.getVariable()` 读不到值。
+3. **路由前缀不能撞**：播放页是 `/audio/:id`，音频流必须是 `/stream/`（元数据
+   `/streammeta/`）。两者共用 `/audio/` 时 F5 深链会被代理截走、页面白屏。
+4. **安卓宿主不能走 `WailsPathHandler`**：它用 `bridge.serveAsset()` 把整个响应读成
+   `byte[]` 且恒返回 200，几十 MB 的章节会撑爆内存且无法 seek。Java 侧对
+   `/stream/` 单独拦截，先从 `/streammeta/<sid>` 取 URL + 请求头，再用
+   `HttpURLConnection` 流式转发并透传 Range/206；离线文件走 `serveRangeFile`。
+5. **请求头必须全带**：`Referer` 用 `scheme://host/`，书源 `header`、登录头、
+   `CookieStore` 的 Cookie 一个都不能少，否则音频站 403。
+6. **进度单位是毫秒**：`books.dur_chapter_pos` / `reading_progress.chapter_pos`
+   对文本是字符偏移、对音频是播放毫秒，复用同一列，不新增保存接口。
+7. **章节缓存排除音频书**：缓存一段 URL 规则串毫无意义；离线能力只在听书页的
+   「下载」里做，`cache/audio/<bookID>/<idx>.<ext>` 落盘，命中后 `/stream/` 用
+   `http.ServeFile` 直出（自带 Range）。写盘先 `.part`、成功才 rename。
+8. **后台播放靠宿主、不靠播放器**：WebView 里的 `<audio>` 就是播放器，Activity
+   一销毁音频即断。播放中的返回键必须 `moveTaskToBack(true)` 而不是 `finish()`；
+   `AudioPlayService` 只做前台保活与控制，不复制第二份播放器，也不接触音频数据。
+   前台服务类型是 `mediaPlayback`，与既有 `dataSync` 服务互不干扰。
+9. **两套 MediaSession 不能同时激活**：真安卓由宿主 `MediaSession` 独占系统媒体键，
+   前端探测到 `window.wails.audioState` 就跳过 `navigator.mediaSession` 的
+   metadata / playbackState / action handler；桌面端没有该注入接口时照常注册。
+   指令统一走 `audio:command` 回来，避免抢按键。
+
+```mermaid
+flowchart LR
+  subgraph WebView
+    P["audioPlayer<br/>唯一播放状态源"]
+  end
+  P -- "wails.audioState(json)" --> S["AudioPlayService<br/>前台通知 / MediaSession<br/>音频焦点 / WakeLock"]
+  P -- "AudioAPI.ReportPlaybackState" --> G["Go AudioService<br/>分配 seq + 存快照"]
+  G -- "audio:playback:state" --> W["其它窗口 / 宿主 / 前端订阅"]
+  S -- "audio:command<br/>媒体键/通知栏/焦点/拔耳机" --> P
+  S -- "MediaStyle 通知" --> N["锁屏 / 通知栏"]
+```
+
+`dto.AudioPlaybackState` **不含播放地址**：`/stream/<sid>` 是一次性会话，不能进广播。
+Go 侧分配单调递增 `seq`，`clientId` 原样回带，前端借此过滤自己的回声；只有外部的
+`idle` 才会让本地停止。`audio:command` 的 `action` 是
+`play / pause / toggle / prev / next / stop / seekto / seekbackward / seekforward / duck`，
+`value` 对 seekto 为毫秒、对快退快进为秒，`reason` 只用于诊断。
+
+### 16.3 回归用例
+
+Go 侧：`internal/app/audio_test.go`（会话代理、Range/206、410、元数据端点、
+离线缓存优先与删除、扩展名、**源变量注入**、**sid 每书 nonce 与闲置/绝对过期**、
+**服务态 seq / idle 清空 / 非法状态拒绝**）、`internal/adapter/legado/audio_test.go`
+（URL 选项展开、请求头、非 http(s) 拒绝）、`spa_fallback_test.go`（深链与流路由隔离）。
+引擎侧：`legado-go` 的 `js/ext.go` 补了 `source.getLoginHeader()`，默认音频源
+「消消乐听书」依赖它取 Authorization。
+
+前端：`/audio/:id` 独立播放页 + 外壳 `AudioBar` 常驻条，`stores/audioPlayer.ts`
+是唯一状态源，`AudioEngine.ts` 用 generation 丢弃旧章迟到事件；
+`MediaSession` 注册 play/pause/prev/next/seekto/seekbackward/seekforward。
+听书与 TTS 双向互斥，`App.vue` 保证同时只显示一条播放条。章节号用
+`router.replace({ query: { index } })` 记账，安卓返回键只认 vue-router 历史。
+UI 回归 `tmp-mcptest/s27_audio.py`（16 项，不依赖预置音频书）：播放页完整渲染、
+F5 深链不被 `/stream/` 截走、失效会话 410、常驻条挂载/收起、与朗读条互斥、
+**矮窗口（1000×320）文字不被压扁且顶部可滚回**。
+`tmp-mcptest/s28_audio_state.py`（11 项）：服务态 seq 与快照查询、idle 清空、
+非法状态拒绝、`audio:playback:state` 确实到达前端、`audio:command(stop)` 收起播放条、
+桌面端无原生桥时降级且无未捕获错误。
+
+播放页布局（`AudioPlayerView.vue`）有两条不能碰的约束：
+
+- `.stage` 只负责滚动，居中交给内层 `.stage-inner`（`min-height: 100%`）。
+  直接在滚动容器上用 `align-items: center`，内容一旦高于容器，顶部会被裁掉且**滚不上去**。
+- `.stage-inner > *`、`.stage-main > *` 必须 `flex: none`。纵向 flex 默认允许收缩，
+  窗口一矮就把行高压到比字形还小，`overflow: hidden` 会把汉字切成半截
+  （截图里标题/作者/章节名/时间同时变半行的根因）。
+- 宽度 ≥900px 左右分栏（封面左、信息控件右，左对齐），<900px 退回上封面下单列并居中；
+  封面尺寸用 `min(46vw, 220px, 22vh)` 同时受宽高约束，矮窗口先缩封面。
+
+### 16.4 验证结果（2026-11-14）
+
+| 项目 | 结果 |
+|---|---|
+| `legado-go go test ./... -count=1` | 通过 |
+| `desktop go test ./... -count=1` | 通过 |
+| `GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build ./internal/... ./api/...` | 通过 |
+| `pnpm run typecheck` / `pnpm test`（138 项） | 通过 |
+| `task build`（bindings 生成 → vite 生产构建 → 签名 → 完整性标签） | 通过（136 Methods / 74 Models） |
+| `:app:compileDebugJavaWithJavac`（安卓宿主 Java + 资源 + manifest） | 通过 |
+| `:app:assembleDebug`（整包：dex / 资源合并 / 打包） | BUILD SUCCESSFUL |
+| `task ui:mcp` + `s27_audio.py` / `s28_audio_state.py` | 16/16、11/11 通过 |
+
+UI 回归跑完之后要杀掉 `legado-desktop` 进程并重跑 `task build` 恢复生产 bin：
+`WAILS_MCP=1` 构建会带上测试标签，不能直接交付。重跑前先按 §环境与工具链
+手动清 `frontend/dist`，否则 vite 自清会撞 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`。
+
+### 16.5 原生后台能力（2026-11-14 补齐）
+
+进程内能力之外，安卓宿主现已补齐：`AudioPlayService`（`mediaPlayback` 前台服务）、
+`MediaStyle` 通知（上一章 / 播放暂停 / 下一章，点击回应用）、平台 `MediaSession`
+（锁屏、蓝牙与有线线控的 `onMediaButtonEvent` / transport 回调）、音频焦点、
+`ACTION_AUDIO_BECOMING_NOISY` 拔耳机暂停、`PARTIAL_WAKE_LOCK` + `WifiLock`；
+播放中返回键改走 `moveTaskToBack(true)`，不再 `finish()` 销毁 WebView。
+Go 侧 `AudioService` 持有播放态镜像并广播 `audio:playback:state`，前端与宿主
+通过 `wails.audioState()` / `audio:command` 两条单向通道闭环。桌面端没有注入接口时
+自动降级为纯前端 `MediaSession`，一套代码两边都能跑。
+
+**仍存在的边界**（与「换成原生 ExoPlayer」的差别）：
+
+1. 播放器仍是 WebView 的 `HTMLAudioElement`。前台服务能保住进程，但系统强杀
+   Activity、用户在设置里「强制停止」、或 WebView 渲染进程崩溃时播放仍会中断；
+   原生播放器能把音频放在 Service 进程里免疫这些情况。
+2. Android 13+ 的 `POST_NOTIFICATIONS` 已在 manifest 声明，但还没有运行时申请
+   引导（`AndroidPermissions` 目前只管存储与相机）。未授权时前台服务照常运行，
+   只是通知不显示、通知栏媒体控制不可用。
+3. `audio:playback:state` 目前只对**外部** `idle` 生效（停止本地播放）；跨窗口的
+   切章 / 进度对齐不做，避免另一个窗口的快照把本地播放来回拽。
+4. 音频焦点丢失只发 `pause`，不自动恢复；`CAN_DUCK` 交给系统自动 duck，
+   不改用户音量偏好，避免恢复时写错音量。
+5. `:app:assembleDebug` 用的是工程里已有的 `libwails.so`。真机验收本轮改动前要跑
+   `task android:build ARCH=arm64` → `task android:assemble:apk` 重新编 Go 动态库
+   并嵌入最新前端产物。
