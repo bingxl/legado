@@ -1,11 +1,13 @@
-# Legado 跨端技术选型重规划 v3
+# Legado 跨端技术选型重规划 v4
 
 > **变更记录**
 > - v1（同日早些）：以「保留 Vue 阅读器」为前提，推荐 Flutter + legado-go。
 > - v2：按新约束重排 —— ①不限 Golang 生态；②**包体与内存都要小、交互要流畅**；③**阅读器 100% 原生重写**
 >   （不得再装 WebView）；④平台 = Windows + Android + **Linux**，macOS/iOS 只要求技术栈支持、本期不实现。
-> - **v3（本版）**：**UI 基准切换为「原版 legado」**（本仓库 `app/`，Kotlin + XML + AndroidX Preference）。
+> - **v3**：**UI 基准切换为「原版 legado」**（本仓库 `app/`，Kotlin + XML + AndroidX Preference）。
 >   desktop 的 Vue 界面**不再作为任何视觉或交互依据**，仅作「该功能曾跑通」的旁证。随之重算 UI 工作量与路线。
+> - **v4（本版）**：新增硬约束 —— **非 UI 功能代码全部下沉 Go**，Dart 只保留渲染与平台 API 调用（详见 §2.1）；
+>   并配套产出模块划分与并行开发规划 `MODULE-PLAN.md`（22 个模块 / 5 波次 / worktree 隔离规则）。
 >
 > 现状基线：`legado-go` 12.3k 行 / `desktop` Go 24.7k 行 / Vue 24.3k 行（均为非测试行数）；
 > 产物 **Windows exe 35 MB**（不含系统 WebView2）、**Android APK 45 MB**。
@@ -28,6 +30,9 @@
 6. **额外白捡的资产**：原版 167 个 VectorDrawable 可直接转 Flutter SVG/Path；`strings.xml` 1236 行 +
    8 个语言目录可批量转 ARB；`ReadBookConfig` 的 40+ 字段就是阅读设置面板的字段表，不用重新设计。
 7. **引擎不要换语言**：Go 是最大资产，重写等于把 1988 条书源的适配经验清零。
+8. **非 UI 逻辑全部下沉 Go**（v4 新约束）：Dart 只剩渲染与平台 API 调用。代价是 Go 侧要**新增约 1 万行**
+   （RSS、书签记录、下载管理、TTS 引擎、设置备份、文件管理 —— 这些原本会写进 Dart 的业务逻辑），
+   收益是三层彻底解耦 + 可切模块并行。落到工程上是 22 个模块 / 5 个波次，见 **`MODULE-PLAN.md`**。
 
 ---
 
@@ -44,6 +49,27 @@
 | Cloudflare 验证 | 三端都要有**能读 HttpOnly Cookie** 的真浏览器 | 无 Cookie API 的壳（Wails）、Android 恒空的（Tauri） |
 | 包体/内存小 | 运行时不能太重（排除 JVM/JCEF 级） | Compose Multiplatform（JBR+JCEF）、Electron |
 | Win + Android + Linux，mac/iOS 预留 | 框架必须**现在**就覆盖这 5 个平台 | 只覆盖两端的（Wails 的 Linux 是 GTK WebKit） |
+
+### 2.1 代码归属硬约束：非 UI 逻辑全部下沉 Go
+
+> **Dart 只允许持有「渲染所需的临时状态」；凡是需要落盘、需要跨页共享、需要被引擎理解、需要单测的业务规则，一律 Go。**
+
+判定三问，命中任一即下沉：① 需要持久化？② 需要跨页面/跨进程一致？③ 需要参与规则求值？
+
+| 必须下沉（现有前端实例） | 允许留 Dart（性能/平台例外） |
+|---|---|
+| 播放队列与续读（`audioPlayer.ts` 802 行） | 排版测量与分页（`TextPainter` 只能在 UI isolate） |
+| 朗读分段与断点（`tts.ts` 375 + `text.ts` 143） | 手势 / 动画 / 滚动位置 |
+| 书源过滤分组（`sourceList.ts` 246） | 图片解码与 `ImageCache` |
+| 偏好合并与迁移（`readerPrefs.ts` 140） | 系统 TTS 合成播放（分段与规则在 Go） |
+| 书源校验（`sourceCheck.ts` 105） | 音频播放控制（队列与续读在 Go） |
+| 进度换算（`chapterProgress.ts` 46） | 文件选择 / 权限 / 分享 / 剪贴板 / 输入法 |
+
+**通道分流**（避免大对象撞 JSON 拷贝）：控制面 < 64 KB 走 FFI `LegadoCall`；章节正文、图片、音频流走 loopback HTTP（`/content` `/img` `/stream`，Range/206），事件走 SSE。
+
+**CI 违约扫描**：`client/lib/**` 出现 `sqflite`/`drift`、`dio`/`http` 直连业务接口、`dart:io` 直接操作书库、`RegExp` 解析书源/HTML/RSS，即判失败。
+
+> 模块如何切、怎么用 worktree 并行 —— 见 **`MODULE-PLAN.md`**（22 个模块、5 个波次、共享区冻结清单、冲突预防规则）。
 
 ---
 
@@ -435,6 +461,9 @@ PrefSection(
 | **E** | 打磨：仿真翻页调优、8 语言、E-Ink 主题、三端打包、性能达标 | 5 周 | 三端同书源 diff 对照无差异 |
 
 **总计 26 周（约 6 个月）纯开发**，加缓冲与验收约 **7~9 个月**。
+
+> 上述是**单人串行**口径。按 `MODULE-PLAN.md` 的模块切分，4~5 路 worktree 并行可压到 **14~16 周**；
+> 关键路径是阅读器（U03，22 人日），必须在 W2 就启动，不能等 Go 侧全部完成。
 
 ---
 
