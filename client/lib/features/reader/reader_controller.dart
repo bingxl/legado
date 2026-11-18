@@ -270,12 +270,15 @@ class ReaderController extends ChangeNotifier {
     if (_pages.isNotEmpty) await saveProgress(force: true);
 
     final chapter = _chapters[target];
+    final fallbackTitle = '${chapter['title'] ?? ''}';
     _chapterIndex = target;
-    _chapterTitle = '${chapter['title'] ?? ''}';
+    // 标题先不落到 _chapterTitle：正文还没到，页脚/菜单仍显示上一章，
+    // 等数据回来再一起切换，避免「新标题 + 旧正文」的错位闪动。
     _chapterLoading = true;
     _error = null;
     if (notifyStart) notifyListeners();
 
+    var loaded = false;
     try {
       final data = await _chapterData(target);
       _paragraphs = data.paragraphs;
@@ -283,8 +286,9 @@ class ReaderController extends ChangeNotifier {
       _hasContent =
           data.paragraphs.any((p) => p.trim().isNotEmpty) ||
           data.images.isNotEmpty;
-      if (data.title.isNotEmpty) _chapterTitle = data.title;
+      _chapterTitle = data.title.isNotEmpty ? data.title : fallbackTitle;
       _repaginate(targetOffset: atEnd ? null : offset, atEnd: atEnd);
+      loaded = true;
     } on LegadoError catch (e) {
       _paragraphs = const [];
       _images = const [];
@@ -304,9 +308,12 @@ class ReaderController extends ChangeNotifier {
       notifyListeners();
     }
 
-    _prefetch(target + 1);
-    _prefetch(target - 1);
-    _scheduleSave();
+    // 加载失败时不能保存：此时页码是 0、标题还是上一章的，写进去会污染进度。
+    if (loaded) {
+      _prefetch(target + 1);
+      _prefetch(target - 1);
+      _scheduleSave();
+    }
   }
 
   // ---------------------------------------------------------------- 分页
@@ -398,6 +405,8 @@ class ReaderController extends ChangeNotifier {
   Future<void> saveProgress({bool force = false}) async {
     if (_closed) return;
     if (_chapters.isEmpty || _chapterIndex >= _chapters.length) return;
+    // 正文没加载成功（pages 与 images 都空）时没有可信位置，不要覆盖旧进度。
+    if (_pages.isEmpty && _images.isEmpty) return;
     if (!force && _savedChapter == _chapterIndex && _savedPage == _pageIndex) {
       return;
     }
