@@ -5,8 +5,12 @@ import 'core/router/routes.dart';
 import 'core/theme/app_theme.dart';
 import 'features/book/book_detail_page.dart';
 import 'features/explore/explore_page.dart';
+import 'features/reader/reader_page.dart';
 import 'features/search/search_page.dart';
 import 'features/shell/home_shell.dart';
+import 'features/source/source_debug_page.dart';
+import 'features/source/source_edit_page.dart';
+import 'features/source/source_list_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,6 +35,10 @@ class LegadoApp extends StatelessWidget {
     RouteNames.explore,
     RouteNames.search,
     RouteNames.bookDetail,
+    RouteNames.reader,
+    RouteNames.sourceList,
+    RouteNames.sourceEdit,
+    RouteNames.sourceDebug,
   };
 
   /// core 连接失败时的提示。为空表示已连上。
@@ -54,6 +62,16 @@ class LegadoApp extends StatelessWidget {
         RouteNames.bookDetail: (ctx) => BookDetailPage.fromRouteArguments(
           ModalRoute.of(ctx)?.settings.arguments,
         ),
+        RouteNames.reader: (ctx) => ReaderPage.fromRouteArguments(
+          ModalRoute.of(ctx)?.settings.arguments,
+        ),
+        RouteNames.sourceList: (_) => const SourceListPage(),
+        RouteNames.sourceEdit: (ctx) {
+          final args = ModalRoute.of(ctx)?.settings.arguments;
+          final map = args is Map ? args : const {};
+          return SourceEditPage(sourceId: (map['sourceId'] as num?)?.toInt());
+        },
+        RouteNames.sourceDebug: (_) => const SourceDebugPage(),
         for (final name in routeTitles.keys)
           if (name != RouteNames.shelf && !_implemented.contains(name))
             name: (ctx) => buildPlaceholderRoute(ctx, name),

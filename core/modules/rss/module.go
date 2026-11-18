@@ -84,14 +84,12 @@ func (m *Module) Register(r *kernel.Registry) {
 	r.Command("rss refresh", m.cliRefresh, "刷新全部启用的订阅源")
 }
 
-// bind 注册手写方法并补齐参数元数据。
+// bind 注册手写方法并补齐参数签名。
 //
-// 手写 handler 的参数在闭包里，反射拿不到；不显式声明的话
-// `legado schema` 会把 arity 导成 0，Dart 侧就无法做参数个数校验。
+// 手写 handler 的参数在闭包里，r.Method 无法像反射那样拿到签名；
+// 不显式声明的话 `legado schema` 会把 arity 导成 0，Dart 侧就无法校验参数个数。
 func bind(r *kernel.Registry, name string, h kernel.Handler, doc string, params ...string) {
-	m := r.Method(name, h, kernel.Doc(doc))
-	m.Arity = len(params)
-	m.ParamTypes = params
+	r.Method(name, h, kernel.Sig(params...), kernel.Doc(doc))
 }
 
 func (m *Module) sourceList(ctx context.Context, args []json.RawMessage) (any, error) {

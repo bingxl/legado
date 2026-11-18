@@ -45,9 +45,11 @@ func RegisterService(r *Registry, domain string, svc any) int {
 }
 
 // lifecycleMethods 是服务对象的生命周期/宿主方法，不属于控制面能力。
+//
+// 只列「确定不是业务」的名字：早期把 Start/Stop 也放进来，
+// 误伤了 SourceDebug.Start 这类真实能力（调试会话必须能启动），已移除。
 var lifecycleMethods = map[string]bool{
 	"Close": true, "StopAll": true, "StopImport": true, "ServeHTTP": true,
-	"Start": true, "Stop": true, "Reload": true,
 }
 
 // skipMethod 过滤掉无法经 JSON 传输的方法（含 http.ResponseWriter 等）、
