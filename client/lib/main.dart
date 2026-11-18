@@ -6,6 +6,10 @@ import 'core/theme/app_theme.dart';
 import 'features/book/book_detail_page.dart';
 import 'features/explore/explore_page.dart';
 import 'features/reader/reader_page.dart';
+import 'features/rss/rss_article_page.dart';
+import 'features/rss/rss_favorite_page.dart';
+import 'features/rss/rss_home_page.dart';
+import 'features/rss/rss_source_edit_page.dart';
 import 'features/search/search_page.dart';
 import 'features/shell/home_shell.dart';
 import 'features/source/source_debug_page.dart';
@@ -39,6 +43,10 @@ class LegadoApp extends StatelessWidget {
     RouteNames.sourceList,
     RouteNames.sourceEdit,
     RouteNames.sourceDebug,
+    RouteNames.rss,
+    RouteNames.rssFavorite,
+    RouteNames.rssSourceEdit,
+    RouteNames.rssRead,
   };
 
   /// core 连接失败时的提示。为空表示已连上。
@@ -72,6 +80,25 @@ class LegadoApp extends StatelessWidget {
           return SourceEditPage(sourceId: (map['sourceId'] as num?)?.toInt());
         },
         RouteNames.sourceDebug: (_) => const SourceDebugPage(),
+        RouteNames.rss: (_) => const RssHomePage(),
+        RouteNames.rssFavorite: (_) => const RssFavoritePage(),
+        RouteNames.rssSourceEdit: (ctx) {
+          final args = ModalRoute.of(ctx)?.settings.arguments;
+          final map = args is Map ? args : const {};
+          return RssSourceEditPage(sourceId: (map['sourceId'] as num?)?.toInt());
+        },
+        RouteNames.rssRead: (ctx) {
+          final args = ModalRoute.of(ctx)?.settings.arguments;
+          final map = args is Map ? args : const {};
+          return RssArticlePage(
+            articleId: (map['articleId'] as num?)?.toInt() ?? 0,
+            title: map['title'] as String?,
+            content: map['content'] as String?,
+            link: map['link'] as String?,
+            favorite: map['favorite'] == true,
+            sourceName: map['sourceName'] as String?,
+          );
+        },
         for (final name in routeTitles.keys)
           if (name != RouteNames.shelf && !_implemented.contains(name))
             name: (ctx) => buildPlaceholderRoute(ctx, name),
