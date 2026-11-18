@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 
-	"github.com/legado/desktop/internal/app/dto"
+	"github.com/legado/core/app/dto"
 )
 
 // ReaderAPI 暴露阅读器所需的目录与正文能力。

@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 
-	"github.com/legado/desktop/internal/app/dto"
+	"github.com/legado/core/app/dto"
 )
 
 // AudioAPI 暴露听书能力：地址解析、离线下载、缓存管理与播放态广播。

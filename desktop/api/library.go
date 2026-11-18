@@ -3,8 +3,8 @@ package api
 import (
 	"context"
 
-	"github.com/legado/desktop/internal/app/dto"
-	"github.com/legado/desktop/internal/domain"
+	"github.com/legado/core/app/dto"
+	"github.com/legado/core/domain"
 )
 
 // LibraryAPI 暴露书籍导入导出能力。

@@ -5,7 +5,7 @@ package verifywails
 import (
 	"log/slog"
 
-	"github.com/legado/desktop/internal/port"
+	"github.com/legado/core/port"
 )
 
 // Install 在安卓端暂不注册人机验证求解器。

@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 
-	"github.com/legado/desktop/internal/app/dto"
+	"github.com/legado/core/app/dto"
 )
 
 // ReplaceRuleAPI 暴露全局替换规则的管理能力。

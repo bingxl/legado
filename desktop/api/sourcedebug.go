@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 
-	"github.com/legado/desktop/internal/app/dto"
+	"github.com/legado/core/app/dto"
 )
 
 // SourceDebugAPI 暴露书源调试能力。

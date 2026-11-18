@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 
-	"github.com/legado/desktop/internal/app/dto"
+	"github.com/legado/core/app/dto"
 )
 
 // WebDAVAPI 暴露 WebDAV 备份与文件浏览能力。

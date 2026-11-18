@@ -18,7 +18,7 @@ import (
 
 	lgnet "github.com/legado/legado-go/pkg/net"
 
-	"github.com/legado/desktop/internal/port"
+	"github.com/legado/core/port"
 )
 
 // 验证窗口的节奏参数。

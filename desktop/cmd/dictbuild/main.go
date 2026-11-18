@@ -19,7 +19,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/legado/desktop/internal/adapter/dictbuild"
+	"github.com/legado/core/adapters/dictbuild"
 )
 
 func main() {

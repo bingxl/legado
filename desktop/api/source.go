@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/legado/desktop/internal/app/dto"
-	"github.com/legado/desktop/internal/port"
+	"github.com/legado/core/app/dto"
+	"github.com/legado/core/port"
 )
 
 // SourceAPI 暴露书源管理能力。

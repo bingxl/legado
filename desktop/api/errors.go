@@ -3,7 +3,7 @@ package api
 import (
 	"fmt"
 
-	"github.com/legado/desktop/internal/domain"
+	"github.com/legado/core/domain"
 )
 
 // errBadRequest 构造参数错误。

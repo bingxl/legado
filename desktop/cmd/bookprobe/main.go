@@ -25,9 +25,9 @@ import (
 
 	"golang.org/x/net/html"
 
-	"github.com/legado/desktop/internal/adapter/bookparser"
-	"github.com/legado/desktop/internal/domain"
-	"github.com/legado/desktop/internal/port"
+	"github.com/legado/core/adapters/bookparser"
+	"github.com/legado/core/domain"
+	"github.com/legado/core/port"
 )
 
 // listLimit 限制目录预览的章节数，避免长篇书籍刷屏。

@@ -27,12 +27,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/legado/desktop/internal/adapter/eventlog"
-	"github.com/legado/desktop/internal/adapter/exporter"
-	"github.com/legado/desktop/internal/app/dto"
+	"github.com/legado/core/adapters/eventlog"
+	"github.com/legado/core/adapters/exporter"
+	"github.com/legado/core/app/dto"
 	"github.com/legado/desktop/internal/bootstrap"
-	"github.com/legado/desktop/internal/domain"
-	"github.com/legado/desktop/internal/port"
+	"github.com/legado/core/domain"
+	"github.com/legado/core/port"
 )
 
 // downloadUA 与站点交互时使用的 UA，书源常据此返回桌面版页面。

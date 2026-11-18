@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/legado/desktop/internal/app/dto"
-	"github.com/legado/desktop/internal/domain"
+	"github.com/legado/core/app/dto"
+	"github.com/legado/core/domain"
 )
 
 // DictAPI 暴露阅读器取词与词库管理能力。
