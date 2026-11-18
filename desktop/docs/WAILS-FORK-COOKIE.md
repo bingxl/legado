@@ -393,6 +393,22 @@ git log --oneline "v3.0.0..upstream/$Tag" -- `
 
 **编译期断言是这里最值钱的设计**：它把"上游悄悄改了，我们运行时静默拿到 0 条 cookie"变成"构建直接失败"。书源类的静默失败（如当年的 `.[?(...)]`）排查成本极高，宁可编译不过。
 
+### 6.6 已知即将发生的上游改动
+
+截至 **2026-11-18** 的实测状态：
+
+| 项 | 状态 |
+|---|---|
+| issue #5799 | **open**，标签 `Bug` + `v3`，里程碑 `Future`（描述注明"不承诺具体版本"），7 条评论，最后更新 2026-10-18 |
+| 导航拦截（issue 的一半） | PR **#6300** `feat(v3): add OnBeforeNavigate navigation policy (macOS, Windows, Linux)`，维护者 leaanthony 提交，**open 未合并**，+698/−8 / 19 文件；报告者实测"works really good" |
+| cookie 访问（我们要的那一半） | **无任何 PR**；#6300 的完整 diff 检索 `cookie` 零命中 |
+
+对我们补丁的影响：
+
+- **#6300 会改 `pkg/application/webview_window_windows.go`（+53/−1）** —— 这是三个锚点之一。它新增的是 `NavigationStarting` 回调接入，不涉及 `impl` 类型与 `chromium` 字段，因此预计不影响我们的类型断言；但同步时 `check-anchors.ps1` 必然报警，需人工确认。
+- 它还会改 `edge/chromium.go`（+42/−3），把 `NavigationStartingCallback` 的签名从 `func(sender *ICoreWebView2)` 改为携带 `*ICoreWebView2NavigationStartingEventArgs` —— **不兼容变更**。我们不用这个符号，无影响。
+- **不要期待 #6300 顺带补上 cookie API**：该 PR 的主题是安全（阻止主 frame 导航离开应用 origin），评审关注点也在那儿。
+
 ---
 
 ## 7. 与现有 CDP 端口方案的关系
@@ -438,7 +454,7 @@ type CookieReader interface {
 
 两条退出路径，都很轻：
 
-1. **上游实现 cookie API**（issue #5799 挂在 `Future` 里程碑）→ 删掉 2 个补丁文件，`verifywails` 改一行调用上游方法。因为我们把方法命名为 `LegadoCookies` 而不是 `GetCookies`，**不会与上游未来 API 撞名**。
+1. **上游实现 cookie API**（issue #5799 挂在 `Future` 里程碑）。截至 2026-11-18：该 issue 仍 open，其中"导航拦截"半边已有 PR #6300 在测试，但"cookie 访问"半边**没有 PR、也没有 diff 命中** —— 所以这个退场条件目前**不成立**，补丁需要长期维护。真到落地时，删掉 2 个补丁文件、`verifywails` 改一行调用上游方法即可；因为我们把方法命名为 `LegadoCookies` 而不是 `GetCookies`，**不会与上游未来 API 撞名**。
 2. **Flutter 迁移完成** → `flutter_inappwebview` 的 `CookieManager` 原生支持读 HttpOnly（Windows/Android 都是），整个补丁连同 `verifywails` 一起废弃。
 
 ---
