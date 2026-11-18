@@ -1,0 +1,13 @@
+{
+  "fontSize": 20,
+  "lineHeight": 1.8,
+  "paragraphSpacing": 10,
+  "indentFirstLine": true,
+  "paddingHorizontal": 20,
+  "paddingVertical": 12,
+  "pageTurn": "cover",
+  "theme": "paper",
+  "showPageNumber": true,
+  "textJustify": true,
+  "promptAddToShelf": false
+}

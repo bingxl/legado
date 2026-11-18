@@ -5,16 +5,24 @@ import 'core/router/routes.dart';
 import 'core/theme/app_theme.dart';
 import 'features/book/book_detail_page.dart';
 import 'features/explore/explore_page.dart';
+import 'features/me/me_page.dart';
 import 'features/reader/reader_page.dart';
 import 'features/rss/rss_article_page.dart';
 import 'features/rss/rss_favorite_page.dart';
 import 'features/rss/rss_home_page.dart';
 import 'features/rss/rss_source_edit_page.dart';
 import 'features/search/search_page.dart';
+import 'features/settings/reader_settings_page.dart';
+import 'features/settings/settings_page.dart';
+import 'features/settings/settings_store.dart';
+import 'features/settings/theme_settings_page.dart';
 import 'features/shell/home_shell.dart';
 import 'features/source/source_debug_page.dart';
 import 'features/source/source_edit_page.dart';
 import 'features/source/source_list_page.dart';
+import 'features/tools/bookmark_page.dart';
+import 'features/tools/cache_page.dart';
+import 'features/tools/record_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,6 +30,12 @@ Future<void> main() async {
   String? bootError;
   try {
     await LegadoClient.connect();
+    // 配置在启动时就拉一次：阅读器打开时要同步拿到字号/背景，
+    // 等到点进阅读页再去请求，第一页必然先按默认值排版再跳一次，会闪。
+    // 失败不影响启动——各页面用默认值，设置页自己会重试。
+    try {
+      await SettingsStore.instance.load();
+    } catch (_) {}
   } on LegadoError catch (e) {
     bootError = '${e.code}: ${e.message}';
   } catch (e) {
@@ -36,6 +50,7 @@ class LegadoApp extends StatelessWidget {
 
   /// 已接线的路由（其余走占位页）。
   static const _implemented = <String>{
+    RouteNames.me,
     RouteNames.explore,
     RouteNames.search,
     RouteNames.bookDetail,
@@ -47,6 +62,12 @@ class LegadoApp extends StatelessWidget {
     RouteNames.rssFavorite,
     RouteNames.rssSourceEdit,
     RouteNames.rssRead,
+    RouteNames.settings,
+    RouteNames.readerSettings,
+    RouteNames.themeSettings,
+    RouteNames.cache,
+    RouteNames.bookmark,
+    RouteNames.readRecord,
   };
 
   /// core 连接失败时的提示。为空表示已连上。
@@ -65,6 +86,7 @@ class LegadoApp extends StatelessWidget {
           : _BootErrorPage(message: bootError!),
       routes: {
         // 已实现的页面显式接在这里；其余仍走占位页，保证任一入口可达。
+        RouteNames.me: (_) => const MePage(),
         RouteNames.explore: (_) => const ExplorePage(),
         RouteNames.search: (_) => const SearchPage(),
         RouteNames.bookDetail: (ctx) => BookDetailPage.fromRouteArguments(
@@ -99,6 +121,12 @@ class LegadoApp extends StatelessWidget {
             sourceName: map['sourceName'] as String?,
           );
         },
+        RouteNames.settings: (_) => const SettingsPage(),
+        RouteNames.readerSettings: (_) => const ReaderSettingsPage(),
+        RouteNames.themeSettings: (_) => const ThemeSettingsPage(),
+        RouteNames.cache: (_) => const CachePage(),
+        RouteNames.bookmark: (_) => const BookmarkPage(),
+        RouteNames.readRecord: (_) => const RecordPage(),
         for (final name in routeTitles.keys)
           if (name != RouteNames.shelf && !_implemented.contains(name))
             name: (ctx) => buildPlaceholderRoute(ctx, name),

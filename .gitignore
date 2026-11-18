@@ -24,3 +24,7 @@ package-lock.json
 
 # AI 助手本地工作状态（目录内是会话记忆与日志，不入库）
 /.workbuddy/
+
+# 构建产物：core 可执行文件与 gomobile 产出的 AAR 都不入库
+/dist/
+/client/android/app/libs/*.aar

@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'reader_controller.dart';
+import 'reader_prefs.dart';
 import 'reader_style.dart';
 import 'widgets/chapter_sheet.dart';
 import 'widgets/reader_menu.dart';
@@ -13,6 +16,9 @@ import 'widgets/tts_sheet.dart';
 ///
 /// 路由参数约定：`{'bookId': int, 'bookName': String?, 'chapterIndex': int?}`。
 /// [initialChapter] 默认 -1，表示按 core 记录的进度续读。
+///
+/// `chapterIndex` 与 `initialChapter` 都收：前者是路由参数名，后者是构造参数名，
+/// 外部（书签/阅读记录/书架）传哪一个都能跳对章节。
 class ReaderPage extends StatefulWidget {
   const ReaderPage({
     super.key,
@@ -28,9 +34,12 @@ class ReaderPage extends StatefulWidget {
   /// 方便壳层用 `onGenerateRoute` 直接接进来（路由表本身是冻结文件，不在本模块改）。
   static Widget fromRouteArguments(Object? args) {
     final map = args is Map ? args : const <String, Object?>{};
+    // 两个键都认（见类注释）；都没传时 -1 表示「续读 core 记录的进度」。
+    final chapter =
+        (map['chapterIndex'] as num?) ?? (map['initialChapter'] as num?);
     return ReaderPage(
       bookId: (map['bookId'] as num?)?.toInt() ?? 0,
-      initialChapter: (map['chapterIndex'] as num?)?.toInt() ?? -1,
+      initialChapter: chapter?.toInt() ?? -1,
       bookName: map['bookName'] as String?,
     );
   }
@@ -48,6 +57,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   late final ReaderController _controller;
   bool _menu = false;
 
+  /// 退出询问的防重入标记：系统返回键与菜单返回按钮可能在同一帧都触发，
+  /// 没有它就会叠出两个对话框。
+  bool _exiting = false;
+
   @override
   void initState() {
     super.initState();
@@ -55,7 +68,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _controller = ReaderController(
       bookId: widget.bookId,
       initialChapter: widget.initialChapter,
-      style: ReaderStyleStore.style,
+      // 首次进入时按 core 里存的偏好排版；之后菜单里的调整会写回 core。
+      style: ReaderPrefs.style,
       initialBookName: widget.bookName,
     )..addListener(_onControllerChanged);
     _controller.load();
@@ -135,8 +149,74 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   }
 
   void _close() {
-    _controller.saveProgress(force: true);
-    Navigator.of(context).maybePop();
+    unawaited(_requestExit());
+  }
+
+  /// 菜单里改完字号/背景/翻页方式后：先应用到当前页面，再写回 core。
+  ///
+  /// 落盘是异步的且不许失败影响阅读，所以不 await；同一批改动在设置存储里
+  /// 会按 key 合并，不会因为连续点几下字号就发一堆请求。
+  void _applyStyle(ReaderStyle next) {
+    _controller.applyStyle(next);
+    ReaderPrefs.persist(next);
+  }
+
+  /// 带「试读转正」询问的退出。
+  ///
+  /// 规则来自设置项 `general.promptAddToShelf`（默认关闭）：
+  /// 开关关着、或这本书已在书架，就直接退；否则问一次。
+  /// 顺序不能反——先看开关再看 inShelf，否则每次退出都要多一次查询。
+  Future<void> _requestExit() async {
+    if (_exiting) return;
+    _exiting = true;
+    // 先取出 navigator：下面要走 await（查书架、弹对话框），
+    // 之后再用 context 就会被 lint 判为跨异步间隙使用。
+    final navigator = Navigator.of(context);
+    try {
+      _controller.saveProgress(force: true);
+      if (ReaderPrefs.promptAddToShelf &&
+          !await ReaderPrefs.inShelf(widget.bookId)) {
+        if (!mounted) return;
+        final added = await _askAddToShelf();
+        if (added) await ReaderPrefs.addToShelf(widget.bookId);
+        if (!mounted) return;
+      }
+      navigator.pop();
+    } finally {
+      _exiting = false;
+    }
+  }
+
+  /// 询问是否加入书架。返回 true 表示用户选了「加入书架」。
+  Future<bool> _askAddToShelf() async {
+    final background = _controller.style.background;
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: background.dark ? const Color(0xFF262626) : null,
+        title: Text(
+          '加入书架？',
+          style: background.dark ? const TextStyle(color: Color(0xFFEDEDED)) : null,
+        ),
+        content: Text(
+          '《${_controller.bookTitle}》还没加入书架，加入后可以在书架继续阅读。',
+          style: background.dark
+              ? const TextStyle(color: Color(0xFFBDBDBD))
+              : null,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('继续试读'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('加入书架'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
   }
 
   void _seek(double percent) {
@@ -163,10 +243,16 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final background = style.background;
 
     return PopScope(
-      // 菜单打开时返回键先关菜单，而不是直接退出阅读器。
-      canPop: !_menu,
+      // 一律拦下来自己做：菜单打开时先关菜单；否则走「试读转正」询问。
+      // canPop 置 false 后必须自己 pop，否则返回键会失效（见 _requestExit）。
+      canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && _menu) _setMenu(false);
+        if (didPop) return;
+        if (_menu) {
+          _setMenu(false);
+          return;
+        }
+        unawaited(_requestExit());
       },
       child: AnnotatedRegion<SystemUiOverlayStyle>(
         // 夜间背景需要浅色状态栏图标，否则系统栏在纯黑背景上看不见。
@@ -207,7 +293,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                           onOpenToc: _openToc,
                           onPrevChapter: _controller.prevChapter,
                           onNextChapter: _controller.nextChapter,
-                          onStyleChanged: _controller.applyStyle,
+                          onStyleChanged: _applyStyle,
                           onSpeak: _openTts,
                           onSeek: _seek,
                         ),

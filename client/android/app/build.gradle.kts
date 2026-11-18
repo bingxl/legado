@@ -20,11 +20,11 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.legado.legado"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // gomobile 绑定按 -androidapi 24 编译，minSdk 必须 >= 24，
+        // 否则装到 21/23 的设备上会在加载 libgojni.so 时崩（UnsatisfiedLinkError）。
+        // 不跟随 flutter.minSdkVersion：那个值随 Flutter 版本变，改一次就得重新验一遍。
+        minSdk = maxOf(24, flutter.minSdkVersion)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -41,4 +41,10 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // gomobile 绑定产物（构建时生成，不入库）：
+    //   hosts/ 下 gomobile bind -target=android -androidapi 24 -o ../client/android/app/libs/legado.aar ...
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
 }

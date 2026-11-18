@@ -39,10 +39,14 @@ require (
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/yuin/goldmark v1.7.13 // indirect
 	go4.org v0.0.0-20260112195520-a5071408f32f // indirect
-	golang.org/x/image v0.32.0 // indirect
-	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/image v0.48.0 // indirect
+	golang.org/x/mobile v0.0.0-20261117202452-47699113848a // indirect
+	golang.org/x/mod v0.43.0 // indirect
+	golang.org/x/net v0.63.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
+	golang.org/x/tools v0.53.0 // indirect
 	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
@@ -52,3 +56,5 @@ require (
 replace github.com/legado/core => ../core
 
 replace github.com/legado/legado-go => ../legado-go
+
+tool golang.org/x/mobile/cmd/gobind

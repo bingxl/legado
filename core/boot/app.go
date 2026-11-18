@@ -9,9 +9,11 @@ package boot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/legado/core/adapters/aihttp"
 	"github.com/legado/core/adapters/bookparser"
@@ -51,6 +53,9 @@ type App struct {
 	Blobs port.BlobStore
 	// Parsers 是按格式分发的本地书解析器注册表。
 	Parsers *bookparser.Registry
+	// Settings 是应用级键值配置（WebDAV、阅读偏好等）。
+	// 各功能服务已经在用同一个实例，这里再暴露一份给 settings 模块注册。
+	Settings port.SettingsStore
 
 	Bookshelf   *app.BookshelfService
 	Reader      *app.ReaderService
@@ -74,6 +79,7 @@ type App struct {
 
 // New 在 root 下装配全部业务依赖。
 func New(root string, opt Options) (*App, error) {
+	installErrorMapper()
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, fmt.Errorf("创建数据目录失败: %w", err)
 	}
@@ -236,6 +242,7 @@ func New(root string, opt Options) (*App, error) {
 		DB:          db,
 		Blobs:       blobs,
 		Parsers:     parsers,
+		Settings:    settings,
 		Bookshelf:   bookshelf,
 		Reader:      reader,
 		Source:      source,
@@ -292,3 +299,38 @@ func DefaultUserAgent() string {
 type nopBus struct{}
 
 func (nopBus) Emit(context.Context, string, any) error { return nil }
+
+// errorMapperOnce 保证映射器只注册一次。
+//
+// boot.New 在测试里会被调用很多次；不加 once 就会往内核的映射器切片里
+// 反复追加同一份逻辑，虽然结果一样但白占内存、也让「注册了几个」不可信。
+var errorMapperOnce sync.Once
+
+// installErrorMapper 把 domain 错误哨兵翻译成控制面错误码。
+//
+// 放在组合根而不是 kernel：kernel 不认识 domain（依赖方向会倒过来），
+// 而 boot 本来就同时知道两者。不装这个映射器的话，128 个反射注册的老方法
+// 返回的 `domain.ErrNotFound` 会全被折叠成 INTERNAL，
+// Dart 侧就没法靠 code 分支（例如「书已被删」要退回书架而不是弹重试）。
+func installErrorMapper() {
+	errorMapperOnce.Do(func() {
+		kernel.RegisterErrorMapper(func(err error) (*kernel.Error, bool) {
+			switch {
+			case errors.Is(err, domain.ErrNotFound):
+				return kernel.E(kernel.CodeNotFound, err.Error()), true
+			case errors.Is(err, domain.ErrInvalidArgument),
+				errors.Is(err, domain.ErrUnsupportedFormat),
+				errors.Is(err, domain.ErrParseFailed):
+				return kernel.E(kernel.CodeInvalid, err.Error()), true
+			case errors.Is(err, domain.ErrAlreadyExists):
+				// 没有专门的「冲突」码，按参数非法处理：调用方要的是「别再试一次」。
+				return kernel.E(kernel.CodeInvalid, err.Error()), true
+			case errors.Is(err, domain.ErrNotConfigured):
+				return kernel.E(kernel.CodeUnsupported, err.Error()), true
+			case errors.Is(err, domain.ErrRemoteFailed):
+				return kernel.E(kernel.CodeNetTimeout, err.Error()), true
+			}
+			return nil, false
+		})
+	})
+}

@@ -43,18 +43,35 @@ func (m *Module) Migrate(ctx context.Context) error {
 func (m *Module) Register(r *kernel.Registry) {
 	// 分段是最小可用能力：不依赖 DB，先给出确定性实现，
 	// UI 与测试可直接调用；后续再补 TTS 规则与合成。
+	//
+	// 参数按**位置**取，与其它模块保持一致：控制面信封是
+	// `{"method":..,"args":[..]}`，参数名只存在于 Sig 声明里。
+	// （早期这里收的是单个对象字面量，导致 schema 导出 arity=0，
+	//  Dart 侧无法校验参数个数，已统一。）
 	r.Method("Tts.Segment", func(ctx context.Context, args []json.RawMessage) (any, error) {
-		type req struct {
-			Text      string `json:"text"`
-			MaxRunes  int    `json:"maxRunes"`
-			Paragraph int    `json:"paragraph"`
+		var text string
+		if err := jsonArg(args, 0, &text); err != nil {
+			return nil, err
 		}
-		var in req
-		if len(args) > 0 {
-			if err := json.Unmarshal(args[0], &in); err != nil {
-				return nil, kernel.Ef(kernel.CodeInvalid, "参数解析失败: %v", err)
-			}
+		var maxRunes int
+		if err := jsonArg(args, 1, &maxRunes); err != nil {
+			return nil, err
 		}
-		return Split(in.Text, in.MaxRunes), nil
-	}, kernel.Doc("把正文切成朗读片段"))
+		if maxRunes <= 0 {
+			maxRunes = 120
+		}
+		return Split(text, maxRunes), nil
+	}, kernel.Sig("text string", "maxRunes int"),
+		kernel.Doc("把正文切成朗读片段；maxRunes<=0 时按 120 字"))
+}
+
+// jsonArg 把第 i 个位置参数解到 dst；越界或 null 视为未传，保持零值。
+func jsonArg(args []json.RawMessage, i int, dst any) error {
+	if i >= len(args) || len(args[i]) == 0 || string(args[i]) == "null" {
+		return nil
+	}
+	if err := json.Unmarshal(args[i], dst); err != nil {
+		return kernel.Ef(kernel.CodeInvalid, "第 %d 个参数解析失败: %v", i+1, err)
+	}
+	return nil
 }

@@ -435,3 +435,51 @@ go run ./cli serve -port 8580                        # /rpc /content /img /event
 
 > 第 5 条 `legado rss list` 值得注意：`hosts/cli` 里没有任何 `rss` 字样，
 > 命令来自 `core/modules/rss` 的 `Register()` —— 这是「模块自描述」第一次被实际验证。
+
+### 13.1 设置中心（`core/modules/settings`）
+
+阅读偏好原先散在桌面端的 `localStorage`（`utils/readerPrefs.ts`），安卓无从共享。
+现在改为 core 持有，UI 按 Schema 渲染：
+
+| 方法 | 作用 |
+|---|---|
+| `Settings.Schema` | 声明式导出：分组、控件类型（switch/slider/select/number/text）、默认值、合法区间、下拉项 |
+| `Settings.Values` | 全量**有效值**（默认值 + 已落库），一律字符串 |
+| `Settings.Update(patch)` | 增量保存，返回保存后的全量有效值 |
+| `Settings.Reset(keys)` | 恢复默认；空数组表示全部 |
+| `Settings.Reader` | 阅读器强类型配置，解析失败静默退回默认值 |
+
+三条设计约束：
+
+1. **校验只在 Go 侧做一次**。滑块越界不报错而是夹住并对齐 `step`（`1.85 → 1.9`），
+   下拉值必须在 options 里，未知键直接 `CodeInvalid`。三个宿主（桌面/安卓/CLI）
+   因此不会各自夹出三套边界。
+2. **Schema 里每个键都必须有真实消费者**。原版 `pref_config_read.xml` 有 30 项、
+   `ReadBookConfig.kt` 40+ 字段，照抄会做出一堆「改了没反应」的开关——
+   当前只启用 11 项，全部接到阅读器的排版/翻页/主题与「退出时询问加入书架」。
+   加新项时先接消费者，再加 Schema。
+3. **`reader.*` 前缀刻意与旧的 `port.SettingReadTheme = "reader.theme"` 对齐**，
+   桌面端旧版本已写入的主题偏好在升级后仍然生效。
+
+阅读器里的字号/背景/翻页调整会经 `ReaderPrefs.persist()` 写回同一份配置，
+不再有「菜单改了、退出就丢」的会话级缓存（`ReaderStyleStore` 已删除）。
+
+> 已知缺口：Wails 桌面端（`desktop/api`）**没有**走内核注册表，它的阅读偏好还在
+> 前端 `localStorage` 里。桌面端是待退役宿主，这一层留到 Vue 页面迁到 Flutter
+> 之后自然消失，不要为它再补一套 Wails 绑定。
+
+```bash
+go run ./cli settings schema            # 设置页声明（Dart 侧据此渲染）
+go run ./cli settings list              # 有效值（按 key 排序，便于 diff）
+go run ./cli settings set reader.fontSize 26
+go run ./cli call Settings.Reader '[]'  # 阅读器要用的强类型配置
+```
+
+### 13.2 `Tts.Segment` 的两处契约修正
+
+- 参数从「单个对象字面量」改成**位置参数** `(text string, maxRunes int)`，
+  否则 `schema` 导出 arity=0，Dart 侧无法校验参数个数。
+- `Segment.Start/End` 从字节偏移改成**字符偏移**：Dart 的 `substring` 按 UTF-16
+  码元计数，一个中文字在 UTF-8 里是 3 字节，按字节返回会让高亮范围错到 3 倍位置。
+- 顺带实现了注释里承诺但没做的「超长单句按软断点二次切分」：没有句号的整段
+  网络小说不会再变成一个几千字的片段。

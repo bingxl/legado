@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../../core/router/routes.dart';
 import '../explore/explore_page.dart';
+import '../me/me_page.dart';
 import '../rss/rss_home_page.dart';
 import '../shelf/shelf_page.dart';
 
@@ -57,7 +57,7 @@ class _HomeShellState extends State<HomeShell> {
                 const ShelfPage(),
                 const ExplorePage(),
                 const RssHomePage(),
-                buildPlaceholderRoute(context, RouteNames.me),
+                const MePage(),
               ],
             ),
             bottomNavigationBar: NavigationBar(

@@ -16,7 +16,12 @@ type Segment struct {
 	Paragraph int `json:"paragraph"`
 	// Text 是要朗读的文本（已去首尾空白）。
 	Text string `json:"text"`
-	// Start / End 是片段在所属段落内的字节偏移。
+	// Start / End 是片段在所属段落内的**字符（rune）偏移**，左闭右开。
+	//
+	// 不用字节偏移：UI 侧（Dart 的 substring / 高亮 Range）按 UTF-16 码元计数，
+	// 一个中文字在 UTF-8 里是 3 字节、在 UTF-16 里是 1 个码元。按字节返回会让
+	// 高亮范围越界到 3 倍位置。BMP 内的中文下 rune 数 == UTF-16 长度，
+	// 只有超出行星平面的 emoji 会差一点，可接受。
 	Start int `json:"start"`
 	End   int `json:"end"`
 }
@@ -55,6 +60,8 @@ func Split(text string, maxRunes int) []Segment {
 		if base < 0 {
 			base = 0
 		}
+		// 偏移一律按字符计（见 Segment.Start 的注释）：先把字节下标换成字符数。
+		base = runeLen(raw[:base])
 
 		sents := splitSentences(trimmed)
 		var buf strings.Builder
@@ -68,9 +75,16 @@ func Split(text string, maxRunes int) []Segment {
 			}
 			buf.Reset()
 		}
+		// 单句就超过上限时必须二次切开，否则「一整段没有句号」的网络小说
+		// 会变成一个几千字的片段，朗读既不能暂停也不能快进。
+		// 先切再进循环：pieces 拼起来仍等于原句，偏移量不受影响。
+		var pieces []string
 		for _, sent := range sents {
+			pieces = append(pieces, splitLong(sent, maxRunes)...)
+		}
+		for _, sent := range pieces {
 			sentStart := cursor
-			cursor += len(sent)
+			cursor += runeLen(sent)
 			if buf.Len() == 0 {
 				bufStart = sentStart
 			}
@@ -148,4 +162,40 @@ func runeLen(s string) int {
 		n++
 	}
 	return n
+}
+
+// softBreaks 是二次切分时的候选断点，优先级从高到低（只影响切点位置）。
+const softBreaks = "，、：；,;: \u3000\t"
+
+// splitLong 把超过 maxRunes 的句子按软断点切成多段。
+//
+// 切点尽量靠近上限，但**必须是**软断点：在词中间断开会让朗读引擎
+// 把「的」「了」这类单字读成独立片段，听感很碎。找不到断点时
+// （比如整句没有标点）才硬切。
+func splitLong(s string, maxRunes int) []string {
+	if maxRunes <= 0 || runeLen(s) <= maxRunes {
+		return []string{s}
+	}
+	rs := []rune(s)
+	out := make([]string, 0, len(rs)/maxRunes+1)
+	for len(rs) > 0 {
+		if len(rs) <= maxRunes {
+			out = append(out, string(rs))
+			break
+		}
+		cut := 0
+		// 从上限往回找最近的软断点；至少切 1 个字，避免零长度循环。
+		for i := maxRunes; i > 0; i-- {
+			if strings.ContainsRune(softBreaks, rs[i-1]) {
+				cut = i
+				break
+			}
+		}
+		if cut <= 0 {
+			cut = maxRunes
+		}
+		out = append(out, string(rs[:cut]))
+		rs = rs[cut:]
+	}
+	return out
 }

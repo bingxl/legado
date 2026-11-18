@@ -1,0 +1,13 @@
+{
+  "general.promptAddToShelf": "false",
+  "reader.fontSize": "20",
+  "reader.indentFirstLine": "true",
+  "reader.lineHeight": "1.8",
+  "reader.paddingHorizontal": "20",
+  "reader.paddingVertical": "12",
+  "reader.pageTurn": "cover",
+  "reader.paragraphSpacing": "10",
+  "reader.showPageNumber": "true",
+  "reader.textJustify": "true",
+  "reader.theme": "paper"
+}

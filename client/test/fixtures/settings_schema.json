@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "pages": [
+    "read",
+    "theme",
+    "general"
+  ],
+  "sections": [
+    {
+      "key": "typography",
+      "page": "read",
+      "title": "排版",
+      "desc": "改动立即作用于阅读器，并重新分页",
+      "items": [
+        {
+          "key": "reader.fontSize",
+          "kind": "slider",
+          "title": "字号",
+          "default": 20,
+          "min": 12,
+          "max": 40,
+          "step": 1,
+          "unit": "px"
+        },
+        {
+          "key": "reader.lineHeight",
+          "kind": "slider",
+          "title": "行距",
+          "desc": "行高倍数，中文正文 1.7~1.9 较透气",
+          "default": 1.8,
+          "min": 1,
+          "max": 3,
+          "step": 0.1,
+          "unit": "倍"
+        },
+        {
+          "key": "reader.paragraphSpacing",
+          "kind": "slider",
+          "title": "段间距",
+          "default": 10,
+          "max": 40,
+          "step": 1,
+          "unit": "px"
+        },
+        {
+          "key": "reader.indentFirstLine",
+          "kind": "switch",
+          "title": "段首缩进",
+          "desc": "两字宽的全角缩进",
+          "default": true
+        },
+        {
+          "key": "reader.paddingHorizontal",
+          "kind": "slider",
+          "title": "左右页边距",
+          "default": 20,
+          "max": 80,
+          "step": 2,
+          "unit": "px"
+        },
+        {
+          "key": "reader.paddingVertical",
+          "kind": "slider",
+          "title": "上下页边距",
+          "default": 12,
+          "max": 80,
+          "step": 2,
+          "unit": "px"
+        },
+        {
+          "key": "reader.textJustify",
+          "kind": "switch",
+          "title": "两端对齐",
+          "desc": "关闭后左对齐，右侧留自然参差",
+          "default": true
+        },
+        {
+          "key": "reader.showPageNumber",
+          "kind": "switch",
+          "title": "显示页码",
+          "desc": "页脚同时显示章节名",
+          "default": true
+        }
+      ]
+    },
+    {
+      "key": "paging",
+      "page": "read",
+      "title": "翻页",
+      "items": [
+        {
+          "key": "reader.pageTurn",
+          "kind": "select",
+          "title": "翻页动画",
+          "default": "cover",
+          "options": [
+            {
+              "value": "cover",
+              "label": "覆盖"
+            },
+            {
+              "value": "slide",
+              "label": "滑动"
+            },
+            {
+              "value": "simulation",
+              "label": "仿真"
+            },
+            {
+              "value": "scroll",
+              "label": "滚动"
+            },
+            {
+              "value": "none",
+              "label": "无动画"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "background",
+      "page": "theme",
+      "title": "背景",
+      "desc": "文字颜色随背景自动切换，夜间模式不会出现黑底黑字",
+      "items": [
+        {
+          "key": "reader.theme",
+          "kind": "select",
+          "title": "阅读背景",
+          "default": "paper",
+          "options": [
+            {
+              "value": "paper",
+              "label": "纸黄"
+            },
+            {
+              "value": "white",
+              "label": "米白"
+            },
+            {
+              "value": "green",
+              "label": "浅绿"
+            },
+            {
+              "value": "gray",
+              "label": "浅灰"
+            },
+            {
+              "value": "night",
+              "label": "夜间"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "behavior",
+      "page": "general",
+      "title": "行为",
+      "items": [
+        {
+          "key": "general.promptAddToShelf",
+          "kind": "switch",
+          "title": "退出时询问加入书架",
+          "desc": "从搜索/发现点开的书只管试读，默认不打扰；打开后退出时会问一次",
+          "default": false
+        }
+      ]
+    }
+  ]
+}

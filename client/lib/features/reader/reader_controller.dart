@@ -355,7 +355,7 @@ class ReaderController extends ChangeNotifier {
 
   void applyStyle(ReaderStyle next) {
     _style = next;
-    ReaderStyleStore.save(next);
+    // 不改这里的分页逻辑：段距/缩进/对齐都可能变，必须整章重排。
     if (_paragraphs.isNotEmpty) _repaginate();
     notifyListeners();
   }
@@ -439,9 +439,9 @@ class ReaderController extends ChangeNotifier {
   Future<List<Map<String, dynamic>>> segmentCurrentPage() async {
     final text = currentPage?.text ?? '';
     if (text.isEmpty) return const [];
-    return LegadoClient.instance.callList(Api.ttsSegment, [
-      {'text': text, 'maxRunes': 120},
-    ]);
+    // 位置参数：core 的信封是 {"method":..,"args":[..]}，参数名只存在于
+    // Go 侧的 Sig 声明里（`Tts.Segment(text string, maxRunes int)`）。
+    return LegadoClient.instance.callList(Api.ttsSegment, [text, 120]);
   }
 
   @override

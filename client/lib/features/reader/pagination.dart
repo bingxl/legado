@@ -10,6 +10,7 @@ class ReaderTypography {
     this.lineHeight = 1.8,
     this.paragraphSpacing = 10,
     this.indent = '　　',
+    this.justify = true,
   });
 
   final double fontSize;
@@ -17,20 +18,29 @@ class ReaderTypography {
   final double paragraphSpacing;
   final String indent;
 
+  /// 两端对齐。**分页测量与渲染必须用同一个值**：justify 只改行内空白的
+  /// 分布、不改断行位置，但 TextPainter 在两种对齐下的行高取整方式略有差异，
+  /// 用错会让页尾多留或少留一行。
+  final bool justify;
+
   /// 空段落占用的高度：按一整行算，保证「空行」在版面上真的空出一行。
   double get blankLineHeight => fontSize * lineHeight;
+
+  TextAlign get align => justify ? TextAlign.justify : TextAlign.start;
 
   ReaderTypography copyWith({
     double? fontSize,
     double? lineHeight,
     double? paragraphSpacing,
     String? indent,
+    bool? justify,
   }) {
     return ReaderTypography(
       fontSize: fontSize ?? this.fontSize,
       lineHeight: lineHeight ?? this.lineHeight,
       paragraphSpacing: paragraphSpacing ?? this.paragraphSpacing,
       indent: indent ?? this.indent,
+      justify: justify ?? this.justify,
     );
   }
 }
@@ -196,7 +206,7 @@ List<_MeasuredLine> _measureParagraph({
   final painter = TextPainter(
     text: TextSpan(text: display, style: style),
     textDirection: TextDirection.ltr,
-    textAlign: TextAlign.justify,
+    textAlign: typography.align,
     textScaler: textScaler,
   )..layout(maxWidth: maxWidth);
 

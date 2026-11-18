@@ -9,6 +9,7 @@ import (
 	"github.com/legado/core/modules/bookmark"
 	"github.com/legado/core/modules/legacy"
 	"github.com/legado/core/modules/rss"
+	"github.com/legado/core/modules/settings"
 	"github.com/legado/core/modules/tts"
 )
 
@@ -19,6 +20,7 @@ func Modules(biz *boot.App, version string) []kernel.Module {
 		rss.New(biz.DB),
 		tts.New(biz.DB),
 		bookmark.New(biz.DB),
+		settings.New(biz.Settings),
 	)
 	return mods
 }

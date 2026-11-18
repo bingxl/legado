@@ -74,7 +74,8 @@ class ReaderPageContent extends StatelessWidget {
         Text(
           block.text,
           style: textStyle,
-          textAlign: TextAlign.justify,
+          // 与分页测量用同一个对齐方式（见 ReaderTypography.justify）。
+          textAlign: style.align,
           // 阅读器有自己的字号设置，不再叠加系统字体缩放，否则分页必然错位。
           textScaler: TextScaler.noScaling,
         ),
@@ -100,11 +101,12 @@ class ReaderPageContent extends StatelessWidget {
             textScaler: TextScaler.noScaling,
           ),
         ),
-        Text(
-          '${page.index + 1}/$pageCount',
-          style: TextStyle(fontSize: 11, color: muted),
-          textScaler: TextScaler.noScaling,
-        ),
+        if (style.showPageNumber)
+          Text(
+            '${page.index + 1}/$pageCount',
+            style: TextStyle(fontSize: 11, color: muted),
+            textScaler: TextScaler.noScaling,
+          ),
       ],
     );
   }
