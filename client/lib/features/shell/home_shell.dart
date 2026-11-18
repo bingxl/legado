@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/router/routes.dart';
+import '../explore/explore_page.dart';
 import '../shelf/shelf_page.dart';
 
 /// 主框架：对应原版 `activity_main.xml` 的 ViewPager + BottomNavigationView。
@@ -53,7 +54,7 @@ class _HomeShellState extends State<HomeShell> {
               index: _index,
               children: [
                 const ShelfPage(),
-                buildPlaceholderRoute(context, RouteNames.explore),
+                const ExplorePage(),
                 buildPlaceholderRoute(context, RouteNames.rss),
                 buildPlaceholderRoute(context, RouteNames.me),
               ],

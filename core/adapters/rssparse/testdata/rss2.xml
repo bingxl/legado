@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>示例科技新闻</title>
+    <link>https://example.com/</link>
+    <description>每日科技资讯</description>
+    <item>
+      <title>Go 1.27 发布</title>
+      <link>https://example.com/posts/go127</link>
+      <description><![CDATA[<p>Go 1.27 带来了若干改进。</p>]]></description>
+      <author>editor@example.com (编辑部)</author>
+      <pubDate>Wed, 18 Nov 2026 09:30:00 +0800</pubDate>
+      <guid>https://example.com/posts/go127</guid>
+    </item>
+    <item>
+      <title>纯文本摘要文章</title>
+      <link>https://example.com/posts/plain</link>
+      <description>这是一段纯文本摘要 &amp; 转义实体。</description>
+      <pubDate>Tue, 17 Nov 2026 23:05:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

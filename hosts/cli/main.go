@@ -49,14 +49,37 @@ func main() {
 		usage()
 		return
 	default:
-		fmt.Fprintf(os.Stderr, "未知命令: %s\n\n", cmd)
-		usage()
-		os.Exit(2)
+		// 交给模块注册的命令（如 `rss list`）——新增模块无需改本文件，
+		// 这正是「模块自描述」在 CLI 上的体现。
+		err = cmdRunCommand(os.Args[1:])
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "错误:", err)
 		os.Exit(1)
 	}
+}
+
+// cmdRunCommand 按「最长匹配」解析命令路径：先试两段（rss list），再试一段。
+func cmdRunCommand(argv []string) error {
+	r, err := rt.Open("", boot.Options{}, "")
+	if err != nil {
+		return err
+	}
+	defer r.Close() //nolint:errcheck
+
+	for n := 2; n >= 1; n-- {
+		if len(argv) < n {
+			continue
+		}
+		path := strings.Join(argv[:n], " ")
+		if c, ok := r.Reg.LookupCommand(path); ok {
+			return c.Run(context.Background(), argv[n:])
+		}
+	}
+	fmt.Fprintf(os.Stderr, "未知命令: %s\n\n", strings.Join(argv, " "))
+	usage()
+	os.Exit(2)
+	return nil
 }
 
 func usage() {

@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'core/bridge/legado_client.dart';
 import 'core/router/routes.dart';
 import 'core/theme/app_theme.dart';
+import 'features/book/book_detail_page.dart';
+import 'features/explore/explore_page.dart';
+import 'features/search/search_page.dart';
 import 'features/shell/home_shell.dart';
 
 Future<void> main() async {
@@ -23,6 +26,13 @@ Future<void> main() async {
 class LegadoApp extends StatelessWidget {
   const LegadoApp({super.key, this.bootError});
 
+  /// 已接线的路由（其余走占位页）。
+  static const _implemented = <String>{
+    RouteNames.explore,
+    RouteNames.search,
+    RouteNames.bookDetail,
+  };
+
   /// core 连接失败时的提示。为空表示已连上。
   final String? bootError;
 
@@ -37,10 +47,15 @@ class LegadoApp extends StatelessWidget {
       home: bootError == null
           ? const HomeShell()
           : _BootErrorPage(message: bootError!),
-      // 28 条路由先全部占位，保证任一入口可达（W0 出口条件）。
       routes: {
+        // 已实现的页面显式接在这里；其余仍走占位页，保证任一入口可达。
+        RouteNames.explore: (_) => const ExplorePage(),
+        RouteNames.search: (_) => const SearchPage(),
+        RouteNames.bookDetail: (ctx) => BookDetailPage.fromRouteArguments(
+          ModalRoute.of(ctx)?.settings.arguments,
+        ),
         for (final name in routeTitles.keys)
-          if (name != RouteNames.shelf)
+          if (name != RouteNames.shelf && !_implemented.contains(name))
             name: (ctx) => buildPlaceholderRoute(ctx, name),
       },
     );

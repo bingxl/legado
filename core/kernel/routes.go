@@ -45,6 +45,14 @@ func (r *Registry) Commands() []Command {
 	return out
 }
 
+// LookupCommand 查找命令。
+func (r *Registry) LookupCommand(path string) (*Command, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	c, ok := r.commands[strings.TrimSpace(path)]
+	return c, ok
+}
+
 // Route 注册 HTTP 路由。
 func (r *Registry) Route(method, path string, h http.HandlerFunc) {
 	r.mu.Lock()
