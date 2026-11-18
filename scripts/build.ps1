@@ -53,6 +53,16 @@ try {
         $outDir = Join-Path $root "client\build\windows\x64\runner\$Configuration"
         Copy-Item (Join-Path $dist "legado-core$ext") (Join-Path $outDir "legado-core$ext") -Force
         Write-Host "    -> $outDir\legado-core$ext"
+
+        # 本仓库位于 C:\Users\<u>\work（Low Mandatory Level）。go build 会重置标签，
+        # 低完整性进程写不了 %LOCALAPPDATA%，表现为 SQLite "unable to open database file (14)"。
+        # 构建后统一提到 Medium，双击才正常。
+        if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+            foreach ($name in @("legado$ext", "legado-core$ext")) {
+                $target = Join-Path $outDir $name
+                if (Test-Path $target) { & icacls $target /setintegritylevel M | Out-Null }
+            }
+        }
     }
 } finally {
     Pop-Location
