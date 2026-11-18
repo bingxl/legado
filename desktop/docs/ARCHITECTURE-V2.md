@@ -396,3 +396,42 @@ make verify-arch     # 跑 §2.2 的三条 go list 检查
 1. **M3 的模块搬迁节奏**：一次搬完（快但 diff 大），还是每模块一个 PR（慢但可 review）？建议后者。
 2. **`repl` 是否本期做**：对书源作者价值很高，但属新增交互，约 3 人日。
 3. **`hosts/mcp` 是否预留**：若希望 AI 直接驱动书源调试，建议在 M4 就把 Registry 的 method 元数据（`Describe`）补全，后面接 MCP 几乎零成本。
+
+---
+
+## 13. 实施现状（2026-11-18，flutter 分支）
+
+落地时对本文做了四处务实调整，均已验证可用，后续不要再按原计划「纠正」回去：
+
+| 调整 | 原因 | 现状 |
+|---|---|---|
+| `core/` 是**独立 Go module**（`github.com/legado/core`），`hosts/` 亦然 | `desktop/internal/*` 是 Go internal 包，跨模块不可 import；M1 已把 domain/port/app/adapters 物理搬进 `core/` | 双端 `go build` 通过，core 全量测试绿，desktop 用 replace 引用 |
+| 目录名是 `core/port`（单数），不是 `ports` | 包声明本来就是 `package port`，改名会在 118 个文件里制造纯噪声 | — |
+| 迁移期用**反射批量注册**已有服务：`kernel.RegisterService(domain, svc)` | `desktop/api/*` 已是薄壳，重写一遍 1667 行没有收益；先让三宿主拿到 128 个方法 | `core/modules/legacy` 集中列出绑定，某个域稳定后逐条摘除 |
+| 控制面参数是**位置数组** `args:[...]`，不是具名对象 | Go 反射拿不到参数名；具名需要手写 128 个解码结构 | 方法表由 `System.Methods` 导出（含 arity/paramTypes），Dart 侧据此校验 |
+
+另外两条与本文预期不同的事实：
+
+1. **FFI 暂缓**：本机 `CGO_ENABLED=0` 且无 gcc，`-buildmode=c-shared` 编不出来。
+   `hosts/ffi/main_cgo.go` 已写好（`//go:build cgo`），当前 Flutter 走 loopback HTTP：
+   启动探测 `127.0.0.1:8580`，失败则 `Process.start("legado-core serve -port 0")` 并解析 stdout。
+   这反而更彻底地验证了「headless 优先」——core 是独立进程，UI 只是客户端。
+2. **core 可执行文件必须叫 `legado-core`**：Flutter 产物也叫 `legado.exe`，
+   同名会在同一目录互相覆盖（构建时真的踩到了）。
+
+已实现的命令与验收路径（可直接复现）：
+
+```bash
+cd hosts
+go run ./cli info                                    # 数据目录、方法数
+go run ./cli methods Reader                          # 按域看签名
+go run ./cli call Library.ImportLocalFiles '[["C:/path/book.txt"], 0]'
+go run ./cli call Shelf.ListBooks '[0]'              # 书架（含 totalChapters/percent）
+go run ./cli call Reader.GetChapters '[1]'
+go run ./cli call Reader.GetContent '[1, 0]'         # 返回 dto.ChapterContent（html）
+go run ./cli rss list                                # 模块自带命令，走注册表回落
+go run ./cli serve -port 8580                        # /rpc /content /img /events
+```
+
+> 第 5 条 `legado rss list` 值得注意：`hosts/cli` 里没有任何 `rss` 字样，
+> 命令来自 `core/modules/rss` 的 `Register()` —— 这是「模块自描述」第一次被实际验证。
