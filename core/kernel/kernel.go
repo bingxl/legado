@@ -74,6 +74,19 @@ type MethodOpt func(*Method)
 // Doc 补充方法说明。
 func Doc(text string) MethodOpt { return func(m *Method) { m.Doc = text } }
 
+// Sig 声明手写方法的参数类型，用于 `legado schema` 导出。
+//
+// 反射注册（RegisterService）能自动得到签名；手写 handler 拿不到，
+// 必须显式声明，否则 Dart 侧无法生成参数校验。示例：
+//
+//	r.Method("Rss.Article.List", h, kernel.Sig("sourceId int64", "onlyUnread bool"))
+func Sig(params ...string) MethodOpt {
+	return func(m *Method) {
+		m.ParamTypes = params
+		m.Arity = len(params)
+	}
+}
+
 // Streaming 标记该方法会产生流式输出（trace / 进度）。
 func Streaming() MethodOpt { return func(m *Method) { m.Streaming = true } }
 

@@ -88,10 +88,14 @@ class LegadoClient {
     final defined = const String.fromEnvironment('LEGADO_CORE');
     if (defined.isNotEmpty && File(defined).existsSync()) return defined;
 
+    // 注意：core 可执行文件**不能**与 Flutter 应用同名（两者都叫 legado.exe 时
+    // 会互相覆盖），因此固定用 legado-core 这个名字，放在应用同目录或 core/ 子目录。
     final exeDir = File(Platform.resolvedExecutable).parent;
+    final name = 'legado-core${Platform.isWindows ? '.exe' : ''}';
+    final sep = Platform.pathSeparator;
     final candidates = <String>[
-      '${exeDir.path}${Platform.pathSeparator}legado${Platform.isWindows ? '.exe' : ''}',
-      '${exeDir.path}${Platform.pathSeparator}core${Platform.pathSeparator}legado${Platform.isWindows ? '.exe' : ''}',
+      '${exeDir.path}$sep$name',
+      '${exeDir.path}${sep}core$sep$name',
     ];
     for (final p in candidates) {
       if (File(p).existsSync()) return p;
