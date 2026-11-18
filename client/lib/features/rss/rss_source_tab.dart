@@ -198,6 +198,8 @@ class _RssSourceTabState extends State<RssSourceTab> {
       onRefresh: _reload,
       child: ListView.separated(
         physics: const AlwaysScrollableScrollPhysics(),
+        // 给 FAB 留出空间，最后一行才不会被压住。
+        padding: const EdgeInsets.only(bottom: 72),
         itemCount: _rows.length,
         separatorBuilder: (_, _) => const Divider(height: 0.6, indent: 16),
         itemBuilder: (_, i) => _row(_rows[i]),
