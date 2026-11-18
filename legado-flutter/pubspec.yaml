@@ -1,0 +1,13 @@
+name: legado_workspace
+description: legado 纯 Dart 内核 + Flutter 应用的 pub workspace 根。
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+
+# 一个 lockfile 管三个包：内核、CLI、应用必须用同一套依赖版本，
+# 否则「dart test 通过、flutter run 挂」这种版本漂移会非常难查。
+workspace:
+  - packages/legado_core
+  - packages/legado_cli
+  - app

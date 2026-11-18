@@ -1,5 +1,16 @@
 # AGENTS.md
 
+> **当前主线（2026-11-19 起）**：`legado-flutter/` —— 纯 Dart 内核 + Flutter 应用，
+> 用 Flutter 全量重写原版 `app/`（Kotlin，119k 行）的全部功能。
+> 非 UI 逻辑在 `legado-flutter/packages/legado_core`（纯 Dart，禁止 import flutter），
+> 可用 `dart run legado_cli:legado` 直接跑；`legado-flutter/packages/legado_cli` 是 CLI 宿主。
+>
+> **已从本分支移除**：`legado-go/`（Go 书源引擎）、`core/`（Go 业务层）、`hosts/`（Go 三宿主）、
+> `desktop/`（Wails 桌面端）、`dist/`。因此下文凡是提到 desktop / hosts / `go build` /
+> `wails3` / `task` 的段落**全部作废**，仅作历史参考（设计文档已归档到 `docs/archive/`）。
+>
+> 迁移计划、里程碑与功能缺口见 `docs/flutter-全量迁移规划.md`。
+
 ## Project Overview
 
 Legado is an Android novel/ebook reader app (Kotlin). It includes a Vue 3 web UI sub-module for remote bookshelf/source management.

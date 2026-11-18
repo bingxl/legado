@@ -1,142 +1,105 @@
-# 构建 legado：先编 core，再编 Flutter，最后把 core 放到应用旁。
+# 构建 legado（Flutter + 纯 Dart 内核）。
 #
 # 用法：
-#   pwsh -File scripts/build.ps1                 # Windows release
-#   pwsh -File scripts/build.ps1 -Target core     # 只编 core 可执行文件
-#   pwsh -File scripts/build.ps1 -Target android  # gomobile bind(AAR) + flutter build apk
+#   pwsh -File scripts/build.ps1                        # Windows release
+#   pwsh -File scripts/build.ps1 -Target android        # Android APK（release）
+#   pwsh -File scripts/build.ps1 -Target cli            # 编译独立 CLI 可执行文件
 #   pwsh -File scripts/build.ps1 -Configuration debug
+#
+# 与旧版的差别：不再有 Go core、不再有 gomobile/AAR/NDK。
+# 「同一套 Dart 代码 + 一条 flutter build」就是全部构建流程。
 param(
-    [ValidateSet('windows', 'android', 'linux', 'core')]
+    [ValidateSet('windows', 'android', 'linux', 'cli')]
     [string]$Target = 'windows',
     [ValidateSet('debug', 'release', 'profile')]
     [string]$Configuration = 'release',
-    [string]$Version = '0.1.0'
+    [string]$Version = '0.2.0'
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+$flutterRoot = Join-Path $root 'legado-flutter'
+$appDir = Join-Path $flutterRoot 'app'
 $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-# Flutter 优先用 PATH，其次用 fvm（本机实证位置）。
+# 本机（以及多数国内网络）代理连不上 pub.dev，pub 会报 "Proxy failed to establish tunnel (502)"。
+# 只在未显式设置时补镜像，CI 想换源直接设 PUB_HOSTED_URL 覆盖即可。
+if (-not $env:PUB_HOSTED_URL) {
+    $env:PUB_HOSTED_URL = 'https://pub.flutter-io.cn'
+}
+
 function Get-Flutter {
     $cmd = Get-Command flutter -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
+    # fvm 是本机实证位置；换机器时优先走 PATH。
     $fvm = 'C:\Users\bingx\fvm\versions\stable\bin\flutter.bat'
     if (Test-Path $fvm) { return $fvm }
     throw '找不到 flutter（PATH 与 fvm 都没有）'
 }
 
-$ext = if ($IsWindows -or $env:OS -eq 'Windows_NT') { '.exe' } else { '' }
-
-Write-Host "==> 构建 core (hosts/cli)" -ForegroundColor Cyan
-Push-Location (Join-Path $root 'hosts')
-try {
-    go build -trimpath `
-        -ldflags "-s -w -X github.com/legado/hosts/rt.Version=$Version" `
-        -o (Join-Path $dist "legado-core$ext") ./cli
-} finally {
-    Pop-Location
+function Get-Dart {
+    $cmd = Get-Command dart -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $fvm = 'C:\Users\bingx\fvm\versions\stable\bin\dart.bat'
+    if (Test-Path $fvm) { return $fvm }
+    throw '找不到 dart（PATH 与 fvm 都没有）'
 }
-Write-Host "    -> dist/legado-core$ext"
-
-if ($Target -eq 'core') { return }
 
 $flutter = Get-Flutter
+$ext = if ($IsWindows -or $env:OS -eq 'Windows_NT') { '.exe' } else { '' }
 
-# Android 需要先把 core 用 gomobile 打成 AAR（Flutter 侧通过 MethodChannel 进程内调用）。
-# 三个坑都在这里固化：
-#   1) javac 按平台编码（GBK）读 gomobile 生成的 Mobile.java，而里面是 Go 的中文注释
-#      → 必须 JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8；
-#   2) gomobile 内部的 `go mod tidy` 会碰 sumdb 缓存，偶发 Access denied → GOSUMDB=off；
-#   3) 默认 4 个 ABI 且不 strip，AAR 90MB → 只留 arm64+amd64 并 -s -w，压到 27MB。
-function Invoke-GomobileBind {
-    $sdk = $env:ANDROID_HOME
-    if (-not $sdk) { $sdk = Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
-    if (-not (Test-Path $sdk)) { throw "找不到 Android SDK：$sdk（设置 ANDROID_HOME）" }
-
-    $gomobile = Join-Path (go env GOPATH) 'bin\gomobile.exe'
-    if (-not (Test-Path $gomobile)) {
-        throw "找不到 gomobile。先执行：go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init"
-    }
-
-    $ndk = $env:ANDROID_NDK_HOME
-    if (-not $ndk) {
-        $latest = Get-ChildItem (Join-Path $sdk 'ndk') -Directory -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending | Select-Object -First 1
-        if (-not $latest) { throw "找不到 NDK（$sdk\ndk 为空）" }
-        $ndk = $latest.FullName
-    }
-
-    $libs = Join-Path $root 'client\android\app\libs'
-    New-Item -ItemType Directory -Force -Path $libs | Out-Null
-    $aar = Join-Path $libs 'legado.aar'
-
-    # 环境变量只在本函数内生效，避免污染后面的 flutter 构建。
-    $saved = @{
-        ANDROID_HOME       = $env:ANDROID_HOME
-        ANDROID_NDK_HOME   = $env:ANDROID_NDK_HOME
-        JAVA_TOOL_OPTIONS  = $env:JAVA_TOOL_OPTIONS
-        GOSUMDB            = $env:GOSUMDB
-        GOFLAGS            = $env:GOFLAGS
-    }
+# CLI 单文件可执行：给不装 Dart 的场景用，同时也是「内核不依赖 Flutter」的最强证明
+# —— 能编译成 exe，就说明它真的没碰 UI 框架。
+if ($Target -eq 'cli') {
+    $dart = Get-Dart
+    $out = Join-Path $dist "legado$ext"
+    Write-Host "==> dart compile exe（$out）" -ForegroundColor Cyan
+    Push-Location $flutterRoot
     try {
-        $env:ANDROID_HOME = $sdk
-        $env:ANDROID_NDK_HOME = $ndk
-        $env:JAVA_TOOL_OPTIONS = '-Dfile.encoding=UTF-8'
-        $env:GOSUMDB = 'off'
-        $env:GOFLAGS = '-mod=mod'
-
-        Write-Host "==> gomobile bind（AAR → client\android\app\libs）" -ForegroundColor Cyan
-        Push-Location (Join-Path $root 'hosts')
-        try {
-            # -target 的值里有逗号，必须加引号：PS 会把裸逗号当数组分隔符。
-            & $gomobile bind '-target=android/arm64,android/amd64' -androidapi 24 `
-                '-ldflags=-s -w' -o $aar 'github.com/legado/hosts/ffi/mobile'
-            if ($LASTEXITCODE -ne 0) { throw "gomobile bind 失败（exit $LASTEXITCODE）" }
-        } finally {
-            Pop-Location
-        }
-    } finally {
-        foreach ($k in $saved.Keys) { Set-Item -Path "env:$k" -Value $saved[$k] }
-    }
-    if (-not (Test-Path $aar)) { throw "AAR 未生成：$aar" }
-    Write-Host "    -> $aar ($([math]::Round((Get-Item $aar).Length / 1MB, 1)) MB)"
-}
-
-if ($Target -eq 'android') {
-    Invoke-GomobileBind
-    Push-Location (Join-Path $root 'client')
-    try {
-        Write-Host "==> flutter build apk --$Configuration" -ForegroundColor Cyan
-        & $flutter build apk "--$Configuration"
-        if ($LASTEXITCODE -ne 0) { throw "flutter build apk 失败（exit $LASTEXITCODE）" }
+        & $dart compile exe 'packages/legado_cli/bin/legado.dart' `
+            "-DLEGADO_VERSION=$Version" -o $out
+        if ($LASTEXITCODE -ne 0) { throw "dart compile exe 失败（exit $LASTEXITCODE）" }
     } finally {
         Pop-Location
+    }
+    Write-Host "    -> $out ($([math]::Round((Get-Item $out).Length / 1MB, 1)) MB)"
+
+    # 与 windows 产物同理：仓库位于 Low Mandatory Level 目录，编译出的 exe 继承受限标签，
+    # 运行时连自己的数据目录都建不了（PathAccessException: 拒绝访问, errno 5）。
+    if (($IsWindows -or $env:OS -eq 'Windows_NT') -and (Test-Path $out)) {
+        & icacls $out /setintegritylevel M | Out-Null
     }
     return
 }
 
-Push-Location (Join-Path $root 'client')
+Push-Location $appDir
 try {
     Write-Host "==> flutter build $Target --$Configuration" -ForegroundColor Cyan
-    & $flutter build $Target "--$Configuration"
+    & $flutter build $Target "--$Configuration" "--dart-define=LEGADO_VERSION=$Version"
     if ($LASTEXITCODE -ne 0) { throw "flutter build 失败（exit $LASTEXITCODE）" }
 
     if ($Target -eq 'windows') {
-        # 必须叫 legado-core：与应用 exe 同名会互相覆盖（踩过一次）。
-        $outDir = Join-Path $root "client\build\windows\x64\runner\$Configuration"
-        Copy-Item (Join-Path $dist "legado-core$ext") (Join-Path $outDir "legado-core$ext") -Force
-        Write-Host "    -> $outDir\legado-core$ext"
+        $outDir = Join-Path $appDir "build\windows\x64\runner\$Configuration"
+        $exe = Join-Path $outDir "legado$ext"
 
-        # 本仓库位于 C:\Users\<u>\work（Low Mandatory Level）。go build 会重置标签，
+        # 本仓库位于 C:\Users\<u>\work（Low Mandatory Level）。go build 时代会重置标签，
         # 低完整性进程写不了 %LOCALAPPDATA%，表现为 SQLite "unable to open database file (14)"。
-        # 构建后统一提到 Medium，双击才正常。
-        if ($IsWindows -or $env:OS -eq 'Windows_NT') {
-            foreach ($name in @("legado$ext", "legado-core$ext")) {
-                $target = Join-Path $outDir $name
-                if (Test-Path $target) { & icacls $target /setintegritylevel M | Out-Null }
-            }
+        # Flutter 产物同样可能继承受限标签，构建后统一提到 Medium，双击才正常。
+        if (($IsWindows -or $env:OS -eq 'Windows_NT') -and (Test-Path $exe)) {
+            & icacls $exe /setintegritylevel M | Out-Null
+        }
+        Write-Host "    -> $exe"
+    }
+
+    if ($Target -eq 'android') {
+        $apk = Join-Path $appDir "build\app\outputs\flutter-apk\app-$Configuration.apk"
+        if (Test-Path $apk) {
+            $target = Join-Path $dist "legado-$Version-$Configuration.apk"
+            Copy-Item $apk $target -Force
+            Write-Host "    -> $target ($([math]::Round((Get-Item $target).Length / 1MB, 1)) MB)"
+        } else {
+            Write-Host "    未找到 APK：$apk" -ForegroundColor Yellow
         }
     }
 } finally {

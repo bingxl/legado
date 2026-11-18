@@ -1,0 +1,15 @@
+# 统一 lint 基线。app/ 有自己的一份（flutter_lints），会覆盖这里的设置。
+include: package:lints/recommended.yaml
+
+analyzer:
+  language:
+    strict-casts: false
+    strict-raw-types: false
+  errors:
+    # 未使用的 import 在并行开发里很常见，但它常常意味着「改了一半」，先降级提醒。
+    unused_import: warning
+
+linter:
+  rules:
+    - prefer_final_locals
+    - unawaited_futures

@@ -242,7 +242,60 @@ M0 完成标志（三条都必须真跑）：
 
 ---
 
-## 八、相对 Go 版的净收益
+## 八、M0 执行记录（2026-11-19 完成）
+
+### 实际做了什么
+
+```
+删除   legado-go/ core/ hosts/ desktop/ dist/        （600 个文件从 git 移除）
+迁移   client/ → legado-flutter/app/                 （123 个文件 git mv，保留历史）
+新增   legado-flutter/{pubspec.yaml,analysis_options.yaml,README.md}
+       legado-flutter/packages/legado_core/          纯 Dart 内核（kernel + System 模块）
+       legado-flutter/packages/legado_cli/           CLI 宿主（info/methods/call/serve）
+       docs/archive/                                 桌面端 6 份设计文档归档
+改写   app/lib/core/bridge/legado_client.dart        HTTP/子进程 → 进程内 LegadoCore.call
+       scripts/build.ps1、scripts/check-methods.ps1  不再依赖 Go
+```
+
+### 验收结果（全部真跑）
+
+| 项 | 结果 |
+| --- | --- |
+| `dart test`（内核） | 13 例通过（注册表、信封、错误码、拓扑装配、纯 Dart 约束） |
+| `dart run bin/legado.dart methods` | 3 个方法，`System.Info` 报 `host: cli` |
+| `flutter test`（应用） | **157 例全绿**（从 client 迁入后零改动） |
+| `flutter analyze` | No issues（内核、CLI、应用三处） |
+| `flutter build windows --debug` | `legado.exe` 1.2MB，完整性级别已提为 Medium |
+| `flutter build apk --debug` | `app-debug.apk` 143MB，4 个 so，**无 libgojni** |
+| `dart compile exe` | `dist/legado.exe` 6.2MB 单文件，可独立运行 |
+| `check-methods.ps1` | 内核 3 / Dart 引用 2，全部命中 |
+
+体积与复杂度对比：Android 构建从「Go + NDK + gomobile + AAR + Gradle」五段式降为
+`flutter build apk` 一条命令；不再需要 `icacls` 修 AAR，不再有 `legado-core.exe` 29.6MB。
+
+### 构建环境踩坑（换机器必看）
+
+| 现象 | 根因 | 处置 |
+| --- | --- | --- |
+| `Proxy failed to establish tunnel (502)` | 内网代理连不上 pub.dev | `PUB_HOSTED_URL=https://pub.flutter-io.cn` |
+| `Unsupported class file major version 69` | Flutter 用 Android Studio 自带 JBR（Java 25），Gradle 8.14 只支持到 21 | `android/gradle.properties` 钉 `org.gradle.java.home` 到 JDK 21 |
+| `Failed to install ndk;28.2...` | `ndkVersion = flutter.ndkVersion` 指向未安装版本；本机 `ndk/27`、`ndk/28` 是下载中断的空壳目录 | app 显式 `ndkVersion = "29.0.14206865"`（本机唯一完整） |
+| `CMake '3.22.1' was not found` | **Flutter 3.38 对每个工程无条件调用 `forceNdkDownload()`**，把 `externalNativeBuild.cmake` 指向空 CMakeLists，逼 AGP 装 NDK，于是纯 Dart 工程也真的需要 CMake；本机 `cmake/3.22.1` 同样是空壳 | `pip install cmake==3.22.1` 的 wheel 解包进 `$ANDROID_HOME/cmake/3.22.1` + 写 `source.properties` |
+| `Could not find io.flutter:arm64_v8a_debug` | tuna 镜像没有 `download.flutter.io` 分支（404） | `FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn` |
+| Gradle 里多出 `:jni` 工程要 NDK | `path_provider_android` 2.3.0+ 改用 jni 直连 | `dependency_overrides: path_provider_android: 2.2.23` |
+| `dart compile exe` 产物运行时报 `拒绝访问 errno 5` | 仓库在 Low Mandatory Level 目录，编译产物继承受限标签，连自己的数据目录都建不了 | 构建后 `icacls <exe> /setintegritylevel M`（build.ps1 已内置） |
+| PowerShell 里方法名解析漏行 | 控制台按 GBK 解码 Dart 的 UTF-8 输出，多字节字符把换行吃掉 | 脚本里设 `[Console]::OutputEncoding = UTF8` |
+
+### M1 开始前要知道的三件事
+
+1. 内核现在**没有数据库**：`sqlite3` 还没进依赖（M0 刻意不加，先验证构建链）。
+   加它需要同时解决 CLI 侧的 `sqlite3.dll` 分发（`packages/legado_cli/native/` + 拉取脚本）。
+2. `Registry` 是显式注册，不存在 Go 反射那套 `RegisterService`；新增域要自己写
+   `register()`，并继承 `CoreModule`（`name` / `dependsOn` / `migrate` / `register` / `close`）。
+3. `check-methods.ps1` 默认只报告不失败（迁移期 UI 引用了 60+ 个尚未注册的方法），
+   CI 里用 `-Strict`。
+
+## 九、相对 Go 版的净收益
 
 1. **构建链简化**：Android 不再需要 Go + NDK + gomobile + AAR + Gradle 五段式；
    `flutter build apk` 一条命令。

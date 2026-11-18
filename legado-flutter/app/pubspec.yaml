@@ -1,0 +1,34 @@
+name: legado
+description: "Legado 跨端阅读器（Flutter + 纯 Dart 内核）"
+publish_to: 'none'
+version: 0.2.0+1
+
+environment:
+  sdk: ^3.10.0
+
+resolution: workspace
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # 非 UI 逻辑全在这里。它与 CLI 共用同一份实现，所以「CLI 能跑 = App 也能跑」。
+  legado_core: ^0.1.0
+  # 唯一用于平台的能力：拿到应用私有目录，交给内核开库。
+  path_provider: ^2.1.5
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+# path_provider_android 从 2.3.0 起改用 jni 直连（带 native 代码），会在 Gradle 里
+# 引入一个需要 NDK 编译的 :jni 工程。本机 NDK 不完整（28.2 是下载中断的空壳），
+# 构建卡在 "NDK at ... did not have a source.properties file"。
+# 我们用 path_provider 只为了拿一个数据目录，不需要它的新版实现。
+# 等本机 NDK 齐了（或改用 flutter 官方 ci 镜像）可以删掉这条 override。
+dependency_overrides:
+  path_provider_android: 2.2.23
+
+flutter:
+  uses-material-design: true
