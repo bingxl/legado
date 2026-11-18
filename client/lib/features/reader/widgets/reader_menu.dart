@@ -53,7 +53,9 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
     final panelColor = background.dark
         ? const Color(0xFF262626)
         : scheme.surface.withValues(alpha: 0.97);
-    final foreground = background.dark ? const Color(0xFFEDEDED) : scheme.onSurface;
+    final foreground = background.dark
+        ? const Color(0xFFEDEDED)
+        : scheme.onSurface;
 
     return IgnorePointer(
       ignoring: !widget.visible,
@@ -100,7 +102,11 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
                     controller.bookTitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: foreground, fontSize: 15, fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                      color: foreground,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   Text(
                     controller.chapterTitle,
@@ -145,12 +151,17 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
                     child: SliderTheme(
                       data: SliderTheme.of(context).copyWith(
                         trackHeight: 2,
-                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                        overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+                        thumbShape: const RoundSliderThumbShape(
+                          enabledThumbRadius: 6,
+                        ),
+                        overlayShape: const RoundSliderOverlayShape(
+                          overlayRadius: 14,
+                        ),
                       ),
                       child: Slider(
                         value: percent.clamp(0.0, 1.0),
-                        onChanged: (value) => setState(() => _seekValue = value),
+                        onChanged: (value) =>
+                            setState(() => _seekValue = value),
                         onChangeEnd: (value) {
                           setState(() => _seekValue = null);
                           widget.onSeek(value);
@@ -163,7 +174,10 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
                     child: Text(
                       '${(percent * 100).toStringAsFixed(1)}%',
                       textAlign: TextAlign.right,
-                      style: TextStyle(fontSize: 12, color: foreground.withValues(alpha: 0.7)),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: foreground.withValues(alpha: 0.7),
+                      ),
                     ),
                   ),
                 ],
@@ -174,20 +188,26 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
                     icon: Icons.skip_previous,
                     label: '上一章',
                     foreground: foreground,
-                    onPressed: controller.chapterIndex > 0 ? widget.onPrevChapter : null,
+                    onPressed: controller.chapterIndex > 0
+                        ? widget.onPrevChapter
+                        : null,
                   ),
                   Expanded(
                     child: Text(
                       controller.chapterLabel,
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12, color: foreground.withValues(alpha: 0.6)),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: foreground.withValues(alpha: 0.6),
+                      ),
                     ),
                   ),
                   _chapterButton(
                     icon: Icons.skip_next,
                     label: '下一章',
                     foreground: foreground,
-                    onPressed: controller.chapterIndex + 1 < controller.chapters.length
+                    onPressed:
+                        controller.chapterIndex + 1 < controller.chapters.length
                         ? widget.onNextChapter
                         : null,
                   ),
@@ -226,7 +246,11 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
   }) {
     return TextButton.icon(
       onPressed: onPressed,
-      icon: Icon(icon, size: 18, color: foreground.withValues(alpha: onPressed == null ? 0.3 : 0.8)),
+      icon: Icon(
+        icon,
+        size: 18,
+        color: foreground.withValues(alpha: onPressed == null ? 0.3 : 0.8),
+      ),
       label: Text(
         label,
         style: TextStyle(
@@ -247,23 +271,36 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
         IconButton(
           tooltip: '减小字号',
           visualDensity: VisualDensity.compact,
-          icon: Icon(Icons.text_decrease,
-              size: 20, color: foreground.withValues(alpha: canShrink ? 0.8 : 0.3)),
+          icon: Icon(
+            Icons.text_decrease,
+            size: 20,
+            color: foreground.withValues(alpha: canShrink ? 0.8 : 0.3),
+          ),
           onPressed: canShrink
-              ? () => widget.onStyleChanged(style.copyWith(fontSize: style.fontSize - 2))
+              ? () => widget.onStyleChanged(
+                  style.copyWith(fontSize: style.fontSize - 2),
+                )
               : null,
         ),
         Text(
           style.fontSize.toStringAsFixed(0),
-          style: TextStyle(fontSize: 12, color: foreground.withValues(alpha: 0.7)),
+          style: TextStyle(
+            fontSize: 12,
+            color: foreground.withValues(alpha: 0.7),
+          ),
         ),
         IconButton(
           tooltip: '增大字号',
           visualDensity: VisualDensity.compact,
-          icon: Icon(Icons.text_increase,
-              size: 20, color: foreground.withValues(alpha: canGrow ? 0.8 : 0.3)),
+          icon: Icon(
+            Icons.text_increase,
+            size: 20,
+            color: foreground.withValues(alpha: canGrow ? 0.8 : 0.3),
+          ),
           onPressed: canGrow
-              ? () => widget.onStyleChanged(style.copyWith(fontSize: style.fontSize + 2))
+              ? () => widget.onStyleChanged(
+                  style.copyWith(fontSize: style.fontSize + 2),
+                )
               : null,
         ),
       ],
@@ -280,7 +317,8 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
             message: ReaderBackground.presets[i].name,
             child: InkWell(
               borderRadius: BorderRadius.circular(20),
-              onTap: () => widget.onStyleChanged(style.copyWith(backgroundIndex: i)),
+              onTap: () =>
+                  widget.onStyleChanged(style.copyWith(backgroundIndex: i)),
               child: Container(
                 margin: const EdgeInsets.symmetric(horizontal: 3),
                 width: 24,
@@ -308,24 +346,33 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
     return PopupMenuButton<PageTurnMode>(
       tooltip: '翻页方式',
       initialValue: style.pageTurn,
-      onSelected: (mode) => widget.onStyleChanged(style.copyWith(pageTurn: mode)),
+      onSelected: (mode) =>
+          widget.onStyleChanged(style.copyWith(pageTurn: mode)),
       itemBuilder: (_) => PageTurnMode.values
-          .map((mode) => PopupMenuItem<PageTurnMode>(
-                value: mode,
-                child: Text(mode.label),
-              ))
+          .map(
+            (mode) => PopupMenuItem<PageTurnMode>(
+              value: mode,
+              child: Text(mode.label),
+            ),
+          )
           .toList(growable: false),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.auto_stories_outlined,
-                size: 20, color: foreground.withValues(alpha: 0.8)),
+            Icon(
+              Icons.auto_stories_outlined,
+              size: 20,
+              color: foreground.withValues(alpha: 0.8),
+            ),
             const SizedBox(height: 2),
             Text(
               style.pageTurn.label,
-              style: TextStyle(fontSize: 10, color: foreground.withValues(alpha: 0.75)),
+              style: TextStyle(
+                fontSize: 10,
+                color: foreground.withValues(alpha: 0.75),
+              ),
             ),
           ],
         ),
@@ -350,7 +397,13 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
           children: [
             Icon(icon, size: 20, color: foreground.withValues(alpha: 0.8)),
             const SizedBox(height: 2),
-            Text(label, style: TextStyle(fontSize: 10, color: foreground.withValues(alpha: 0.75))),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10,
+                color: foreground.withValues(alpha: 0.75),
+              ),
+            ),
           ],
         ),
       ),

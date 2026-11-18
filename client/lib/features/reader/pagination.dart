@@ -98,7 +98,10 @@ List<PageSlice> paginate({
     return const [PageSlice(index: 0, blocks: [], startOffset: 0)];
   }
 
-  final style = TextStyle(fontSize: typography.fontSize, height: typography.lineHeight);
+  final style = TextStyle(
+    fontSize: typography.fontSize,
+    height: typography.lineHeight,
+  );
   final builder = _PageBuilder(pageHeight: pageSize.height);
   final indentLength = typography.indent.length;
   var chapterOffset = 0;
@@ -209,16 +212,18 @@ List<_MeasuredLine> _measureParagraph({
       var end = cursor;
       if (cursor < display.length) {
         final range = painter.getLineBoundary(TextPosition(offset: cursor));
-        end = range.end;
+        end = math.min(range.end, display.length);
         // 防御：极端字体/空白字符下可能拿到退化区间，直接吃掉剩余文本，
         // 否则会出现死循环。
         if (end <= cursor) end = display.length;
       }
-      lines.add(_MeasuredLine(
-        cursor < display.length ? display.substring(cursor, end) : '',
-        metric.height,
-        cursor,
-      ));
+      lines.add(
+        _MeasuredLine(
+          cursor < display.length ? display.substring(cursor, end) : '',
+          metric.height,
+          cursor,
+        ),
+      );
       cursor = end;
       if (cursor >= display.length) break;
     }
@@ -226,7 +231,13 @@ List<_MeasuredLine> _measureParagraph({
     if (cursor < display.length) {
       // 行边界与文本长度不闭合时，把剩余文本挂到最后一行，宁可多一行也不丢字。
       final last = lines.removeLast();
-      lines.add(_MeasuredLine('${last.text}${display.substring(cursor)}', last.height, last.offset));
+      lines.add(
+        _MeasuredLine(
+          '${last.text}${display.substring(cursor)}',
+          last.height,
+          last.offset,
+        ),
+      );
     }
     return lines;
   } finally {
@@ -263,19 +274,23 @@ class _PageBuilder {
     // 也避免每行一个 Text 造成的额外布局开销。
     if (_blocks.isNotEmpty && _blocks.last.paragraphIndex == paragraphIndex) {
       final last = _blocks.removeLast();
-      _blocks.add(PageBlock(
-        paragraphIndex: paragraphIndex,
-        text: '${last.text}$text',
-        endsParagraph: endsParagraph,
-        offset: last.offset,
-      ));
+      _blocks.add(
+        PageBlock(
+          paragraphIndex: paragraphIndex,
+          text: '${last.text}$text',
+          endsParagraph: endsParagraph,
+          offset: last.offset,
+        ),
+      );
     } else {
-      _blocks.add(PageBlock(
-        paragraphIndex: paragraphIndex,
-        text: text,
-        endsParagraph: endsParagraph,
-        offset: offset,
-      ));
+      _blocks.add(
+        PageBlock(
+          paragraphIndex: paragraphIndex,
+          text: text,
+          endsParagraph: endsParagraph,
+          offset: offset,
+        ),
+      );
     }
     _used += lineHeight;
 
@@ -286,11 +301,13 @@ class _PageBuilder {
   }
 
   void _flush() {
-    _pages.add(PageSlice(
-      index: _pages.length,
-      blocks: List<PageBlock>.unmodifiable(_blocks),
-      startOffset: _pageStartOffset,
-    ));
+    _pages.add(
+      PageSlice(
+        index: _pages.length,
+        blocks: List<PageBlock>.unmodifiable(_blocks),
+        startOffset: _pageStartOffset,
+      ),
+    );
     _blocks.clear();
     _used = 0;
   }

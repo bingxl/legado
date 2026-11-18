@@ -70,13 +70,15 @@ class ReaderPageContent extends StatelessWidget {
   List<Widget> _blocks(TextStyle textStyle) {
     final children = <Widget>[];
     for (final block in page.blocks) {
-      children.add(Text(
-        block.text,
-        style: textStyle,
-        textAlign: TextAlign.justify,
-        // 阅读器有自己的字号设置，不再叠加系统字体缩放，否则分页必然错位。
-        textScaler: TextScaler.noScaling,
-      ));
+      children.add(
+        Text(
+          block.text,
+          style: textStyle,
+          textAlign: TextAlign.justify,
+          // 阅读器有自己的字号设置，不再叠加系统字体缩放，否则分页必然错位。
+          textScaler: TextScaler.noScaling,
+        ),
+      );
       if (block.endsParagraph) {
         children.add(SizedBox(height: style.paragraphSpacing));
       }

@@ -41,7 +41,8 @@ class ReaderPage extends StatefulWidget {
 
 class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   final GlobalKey<ReaderPagerState> _pagerKey = GlobalKey<ReaderPagerState>();
-  final GlobalKey<ReaderScrollViewState> _scrollKey = GlobalKey<ReaderScrollViewState>();
+  final GlobalKey<ReaderScrollViewState> _scrollKey =
+      GlobalKey<ReaderScrollViewState>();
   final FocusNode _focus = FocusNode(debugLabel: 'reader');
 
   late final ReaderController _controller;
@@ -116,11 +117,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       }
       return KeyEventResult.ignored;
     }
-    if (key == LogicalKeyboardKey.arrowLeft || key == LogicalKeyboardKey.pageUp) {
+    if (key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.pageUp) {
       _turn(-1);
       return KeyEventResult.handled;
     }
-    if (key == LogicalKeyboardKey.arrowRight || key == LogicalKeyboardKey.pageDown) {
+    if (key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.pageDown) {
       _turn(1);
       return KeyEventResult.handled;
     }
@@ -165,45 +168,54 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop && _menu) _setMenu(false);
       },
-      child: Scaffold(
-        backgroundColor: background.color,
-        body: SafeArea(
-          child: Focus(
-            focusNode: _focus,
-            autofocus: true,
-            onKeyEvent: _onKey,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final size = Size(constraints.maxWidth, constraints.maxHeight);
-                if (size.isFinite && !size.isEmpty) {
-                  // 允许在 build 阶段调用：ensureLayout 内部不 notify，
-                  // 避免「首帧空页 → postFrame 重排」的闪烁。
-                  _controller.ensureLayout(size);
-                }
-                return Stack(
-                  children: [
-                    Positioned.fill(child: _body(background)),
-                    if (_controller.chapterLoading)
-                      const Align(
-                        alignment: Alignment.topCenter,
-                        child: LinearProgressIndicator(minHeight: 2),
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        // 夜间背景需要浅色状态栏图标，否则系统栏在纯黑背景上看不见。
+        value: background.dark
+            ? SystemUiOverlayStyle.light
+            : SystemUiOverlayStyle.dark,
+        child: Scaffold(
+          backgroundColor: background.color,
+          body: SafeArea(
+            child: Focus(
+              focusNode: _focus,
+              autofocus: true,
+              onKeyEvent: _onKey,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final size = Size(
+                    constraints.maxWidth,
+                    constraints.maxHeight,
+                  );
+                  if (size.isFinite && !size.isEmpty) {
+                    // 允许在 build 阶段调用：ensureLayout 内部不 notify，
+                    // 避免「首帧空页 → postFrame 重排」的闪烁。
+                    _controller.ensureLayout(size);
+                  }
+                  return Stack(
+                    children: [
+                      Positioned.fill(child: _body(background)),
+                      if (_controller.chapterLoading)
+                        const Align(
+                          alignment: Alignment.topCenter,
+                          child: LinearProgressIndicator(minHeight: 2),
+                        ),
+                      Positioned.fill(
+                        child: ReaderMenuOverlay(
+                          controller: _controller,
+                          visible: _menu,
+                          onClose: _close,
+                          onOpenToc: _openToc,
+                          onPrevChapter: _controller.prevChapter,
+                          onNextChapter: _controller.nextChapter,
+                          onStyleChanged: _controller.applyStyle,
+                          onSpeak: _openTts,
+                          onSeek: _seek,
+                        ),
                       ),
-                    Positioned.fill(
-                      child: ReaderMenuOverlay(
-                        controller: _controller,
-                        visible: _menu,
-                        onClose: _close,
-                        onOpenToc: _openToc,
-                        onPrevChapter: _controller.prevChapter,
-                        onNextChapter: _controller.nextChapter,
-                        onStyleChanged: _controller.applyStyle,
-                        onSpeak: _openTts,
-                        onSeek: _seek,
-                      ),
-                    ),
-                  ],
-                );
-              },
+                    ],
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -213,7 +225,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   Widget _body(ReaderBackground background) {
     if (_controller.loading) {
-      return Center(child: CircularProgressIndicator(color: background.textColor));
+      return Center(
+        child: CircularProgressIndicator(color: background.textColor),
+      );
     }
     if (_controller.error != null && _controller.pages.isEmpty) {
       return _errorView(background);
@@ -226,7 +240,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       );
     }
     if (_controller.pages.isEmpty) {
-      return _hint(background, '本章暂无正文');
+      return _hint(
+        background,
+        _controller.hasContent ? '本章暂无正文' : '本章内容为空，可能被屏蔽或需要购买',
+      );
     }
     if (_controller.style.pageTurn == PageTurnMode.scroll) {
       return ReaderScrollView(
@@ -253,7 +270,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.cloud_off_outlined, size: 36, color: background.textColor),
+            Icon(
+              Icons.cloud_off_outlined,
+              size: 36,
+              color: background.textColor,
+            ),
             const SizedBox(height: 12),
             Text(
               _controller.error ?? '加载失败',
@@ -270,7 +291,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   Widget _hint(ReaderBackground background, String text) {
     return Center(
-      child: Text(text, style: TextStyle(color: background.textColor.withValues(alpha: 0.7))),
+      child: Text(
+        text,
+        style: TextStyle(color: background.textColor.withValues(alpha: 0.7)),
+      ),
     );
   }
 }
@@ -311,16 +335,26 @@ class _MangaPlaceholder extends StatelessWidget {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.image_outlined, size: 36, color: textColor.withValues(alpha: 0.5)),
+                      Icon(
+                        Icons.image_outlined,
+                        size: 36,
+                        color: textColor.withValues(alpha: 0.5),
+                      ),
                       const SizedBox(height: 8),
                       Text(
                         '第 ${index + 1} 页',
-                        style: TextStyle(fontSize: 12, color: textColor.withValues(alpha: 0.6)),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: textColor.withValues(alpha: 0.6),
+                        ),
                       ),
                       const SizedBox(height: 2),
                       Text(
                         '图片数据面未接入',
-                        style: TextStyle(fontSize: 11, color: textColor.withValues(alpha: 0.4)),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: textColor.withValues(alpha: 0.4),
+                        ),
                       ),
                     ],
                   ),

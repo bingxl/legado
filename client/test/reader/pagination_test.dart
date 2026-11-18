@@ -44,8 +44,13 @@ void main() {
       );
       final blocks = pages.expand((p) => p.blocks).toList();
       expect(blocks.where((b) => b.text.isEmpty), isNotEmpty);
-      expect(blocks.map((b) => b.text).toList(),
-          containsAll(<String>['${typography.indent}第一段', '${typography.indent}第三段']));
+      expect(
+        blocks.map((b) => b.text).toList(),
+        containsAll(<String>[
+          '${typography.indent}第一段',
+          '${typography.indent}第三段',
+        ]),
+      );
       // 空段落自己就是段末，渲染时会少一个段间距。
       final blank = blocks.firstWhere((b) => b.text.isEmpty);
       expect(blank.endsParagraph, isTrue);

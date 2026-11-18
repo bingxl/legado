@@ -30,11 +30,14 @@ class ReaderPager extends StatefulWidget {
   State<ReaderPager> createState() => ReaderPagerState();
 }
 
-class ReaderPagerState extends State<ReaderPager> with SingleTickerProviderStateMixin {
+class ReaderPagerState extends State<ReaderPager>
+    with SingleTickerProviderStateMixin {
   static const _duration = Duration(milliseconds: 240);
 
-  late final AnimationController _anim = AnimationController(vsync: this, duration: _duration)
-    ..addStatusListener(_onStatus);
+  late final AnimationController _anim = AnimationController(
+    vsync: this,
+    duration: _duration,
+  )..addStatusListener(_onStatus);
 
   int _dir = 1;
   PageSlice? _from;
@@ -106,7 +109,9 @@ class ReaderPagerState extends State<ReaderPager> with SingleTickerProviderState
       // 滑动阈值触发：手指/鼠标横拖超过 40px 就翻页。
       // 不做实时跟手，是为了保证覆盖/滑动两种动画的边界行为一致。
       onHorizontalDragStart: widget.menuVisible ? null : (_) => _dragDx = 0,
-      onHorizontalDragUpdate: widget.menuVisible ? null : (details) => _dragDx += details.delta.dx,
+      onHorizontalDragUpdate: widget.menuVisible
+          ? null
+          : (details) => _dragDx += details.delta.dx,
       onHorizontalDragEnd: widget.menuVisible
           ? null
           : (_) {
@@ -152,14 +157,8 @@ class ReaderPagerState extends State<ReaderPager> with SingleTickerProviderState
       // cover：旧页静止，新页从侧面盖上来。simulation 暂用同一路径近似，
       // 等有了更细的绘制管线再换成真正的仿真卷曲。
       layers = _dir > 0
-          ? [
-              _page(from, 0),
-              _page(to, (1 - progress) * width, shadow: true),
-            ]
-          : [
-              _page(to, 0),
-              _page(from, progress * width, shadow: true),
-            ];
+          ? [_page(from, 0), _page(to, (1 - progress) * width, shadow: true)]
+          : [_page(to, 0), _page(from, progress * width, shadow: true)];
     }
     return Stack(children: layers);
   }

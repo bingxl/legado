@@ -44,7 +44,8 @@ class ReaderController extends ChangeNotifier {
   String get chapterTitle => _chapterTitle;
 
   String _bookTitle = '';
-  String get bookTitle => _bookTitle.isNotEmpty ? _bookTitle : (initialBookName ?? '阅读');
+  String get bookTitle =>
+      _bookTitle.isNotEmpty ? _bookTitle : (initialBookName ?? '阅读');
 
   List<String> _paragraphs = const [];
   List<String> _images = const [];
@@ -97,7 +98,10 @@ class ReaderController extends ChangeNotifier {
   /// 全书进度（章节维度）。菜单里的进度条用它。
   double get bookPercent {
     if (_chapters.isEmpty) return 0;
-    return ((_chapterIndex + chapterPercent) / _chapters.length).clamp(0.0, 1.0);
+    return ((_chapterIndex + chapterPercent) / _chapters.length).clamp(
+      0.0,
+      1.0,
+    );
   }
 
   String get chapterLabel =>
@@ -129,7 +133,9 @@ class ReaderController extends ChangeNotifier {
           : (progress?['chapterIndex'] as num?)?.toInt() ?? 0;
       target = target.clamp(0, _chapters.length - 1);
       // 指定章节进入时不沿用旧章节的字符偏移，否则会跳到同章后半段。
-      final offset = initialChapter >= 0 ? 0 : (progress?['chapterPos'] as num?)?.toInt() ?? 0;
+      final offset = initialChapter >= 0
+          ? 0
+          : (progress?['chapterPos'] as num?)?.toInt() ?? 0;
 
       await _openChapter(target, offset: offset, notifyStart: false);
       _loading = false;
@@ -178,8 +184,13 @@ class ReaderController extends ChangeNotifier {
   }
 
   Future<_ChapterData> _fetchChapter(int index) async {
-    final data = await LegadoClient.instance.call(Api.readerGetContent, [bookId, index]);
-    final map = data is Map ? data.cast<String, dynamic>() : <String, dynamic>{};
+    final data = await LegadoClient.instance.call(Api.readerGetContent, [
+      bookId,
+      index,
+    ]);
+    final map = data is Map
+        ? data.cast<String, dynamic>()
+        : <String, dynamic>{};
     final paragraphs = HtmlText.toParagraphs('${map['html'] ?? ''}');
     final rawImages = map['images'];
     final images = rawImages is List
@@ -202,7 +213,9 @@ class ReaderController extends ChangeNotifier {
 
   /// 预取相邻章，翻到章末时不至于等一次 RPC。
   void _prefetch(int index) {
-    if (index < 0 || index >= _chapters.length || _cache.containsKey(index)) return;
+    if (index < 0 || index >= _chapters.length || _cache.containsKey(index)) {
+      return;
+    }
     unawaited(_chapterData(index).then<void>((_) {}, onError: (Object _) {}));
   }
 
@@ -211,14 +224,37 @@ class ReaderController extends ChangeNotifier {
   Future<void> openChapter(int index) => _openChapter(index);
 
   Future<void> nextChapter() async {
-    if (_chapterIndex + 1 >= _chapters.length) return;
-    await _openChapter(_chapterIndex + 1);
+    // 跳过卷标题，直接落到下一个正文章节；没有就停在原处。
+    final next = _readableFrom(_chapterIndex + 1);
+    if (next == null) return;
+    await _openChapter(next);
   }
 
   Future<void> prevChapter() async {
-    if (_chapterIndex <= 0) return;
+    final previous = _readableBackward(_chapterIndex - 1);
+    if (previous == null) return;
     // 上一章落到最后一页，符合「往回翻」的直觉。
-    await _openChapter(_chapterIndex - 1, atEnd: true);
+    await _openChapter(previous, atEnd: true);
+  }
+
+  int? _readableFrom(int start) {
+    for (var i = start; i < _chapters.length; i++) {
+      if (_chapters[i]['isVolume'] != true) return i;
+    }
+    return null;
+  }
+
+  int? _readableBackward(int start) {
+    for (var i = start; i >= 0; i--) {
+      if (_chapters[i]['isVolume'] != true) return i;
+    }
+    return null;
+  }
+
+  /// 卷标题不是可读章节：落到卷上时自动找最近的正文章节，
+  /// 否则 core 会返回空正文，用户看到「本章暂无正文」。
+  int _readableIndex(int index) {
+    return _readableFrom(index) ?? _readableBackward(index) ?? index;
   }
 
   Future<void> _openChapter(
@@ -228,7 +264,7 @@ class ReaderController extends ChangeNotifier {
     bool notifyStart = true,
   }) async {
     if (_chapters.isEmpty) return;
-    final target = index.clamp(0, _chapters.length - 1);
+    final target = _readableIndex(index.clamp(0, _chapters.length - 1));
 
     // 切章前先把上一章的位置落盘，避免「退出后回到更早的位置」。
     if (_pages.isNotEmpty) await saveProgress(force: true);
@@ -244,7 +280,9 @@ class ReaderController extends ChangeNotifier {
       final data = await _chapterData(target);
       _paragraphs = data.paragraphs;
       _images = data.images;
-      _hasContent = data.paragraphs.any((p) => p.trim().isNotEmpty) || data.images.isNotEmpty;
+      _hasContent =
+          data.paragraphs.any((p) => p.trim().isNotEmpty) ||
+          data.images.isNotEmpty;
       if (data.title.isNotEmpty) _chapterTitle = data.title;
       _repaginate(targetOffset: atEnd ? null : offset, atEnd: atEnd);
     } on LegadoError catch (e) {
@@ -289,7 +327,8 @@ class ReaderController extends ChangeNotifier {
   }
 
   void _repaginate({int? targetOffset, bool atEnd = false}) {
-    final boundary = targetOffset ?? _pendingOffset ?? currentPage?.startOffset ?? 0;
+    final boundary =
+        targetOffset ?? _pendingOffset ?? currentPage?.startOffset ?? 0;
     _pendingOffset = boundary;
     if (_viewport.isEmpty) {
       _pages = const [];
@@ -301,7 +340,9 @@ class ReaderController extends ChangeNotifier {
       pageSize: _style.contentSize(_viewport),
       typography: _style.typography,
     );
-    _pageIndex = atEnd ? _pages.length - 1 : pageIndexForOffset(_pages, boundary);
+    _pageIndex = atEnd
+        ? _pages.length - 1
+        : pageIndexForOffset(_pages, boundary);
     _pendingOffset = null;
   }
 
@@ -357,7 +398,9 @@ class ReaderController extends ChangeNotifier {
   Future<void> saveProgress({bool force = false}) async {
     if (_closed) return;
     if (_chapters.isEmpty || _chapterIndex >= _chapters.length) return;
-    if (!force && _savedChapter == _chapterIndex && _savedPage == _pageIndex) return;
+    if (!force && _savedChapter == _chapterIndex && _savedPage == _pageIndex) {
+      return;
+    }
 
     _saveTimer?.cancel();
     final chapterIndex = _chapterIndex;
@@ -404,7 +447,11 @@ class ReaderController extends ChangeNotifier {
 }
 
 class _ChapterData {
-  const _ChapterData({required this.title, required this.paragraphs, required this.images});
+  const _ChapterData({
+    required this.title,
+    required this.paragraphs,
+    required this.images,
+  });
 
   final String title;
   final List<String> paragraphs;

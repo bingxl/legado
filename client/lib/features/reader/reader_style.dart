@@ -105,27 +105,27 @@ class ReaderStyle {
   static const double footerHeight = 18;
 
   ReaderBackground get background =>
-      ReaderBackground.presets[backgroundIndex.clamp(0, ReaderBackground.presets.length - 1)];
+      ReaderBackground.presets[backgroundIndex.clamp(
+        0,
+        ReaderBackground.presets.length - 1,
+      )];
 
   /// 渲染用文本样式。分页测量必须用同一份 style，否则行高会对不上。
-  TextStyle textStyle(Color color) => TextStyle(
-        fontSize: fontSize,
-        height: lineHeight,
-        color: color,
-      );
+  TextStyle textStyle(Color color) =>
+      TextStyle(fontSize: fontSize, height: lineHeight, color: color);
 
   /// 版心尺寸（视口扣除页边距与页脚）。分页与渲染都以它为准。
   Size contentSize(Size viewport) => Size(
-        math.max(1, viewport.width - pagePadding.horizontal),
-        math.max(1, viewport.height - pagePadding.vertical - footerHeight),
-      );
+    math.max(1, viewport.width - pagePadding.horizontal),
+    math.max(1, viewport.height - pagePadding.vertical - footerHeight),
+  );
 
   ReaderTypography get typography => ReaderTypography(
-        fontSize: fontSize,
-        lineHeight: lineHeight,
-        paragraphSpacing: paragraphSpacing,
-        indent: indent,
-      );
+    fontSize: fontSize,
+    lineHeight: lineHeight,
+    paragraphSpacing: paragraphSpacing,
+    indent: indent,
+  );
 
   ReaderStyle copyWith({
     double? fontSize,

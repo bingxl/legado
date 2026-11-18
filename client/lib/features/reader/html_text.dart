@@ -10,10 +10,15 @@ class HtmlText {
   HtmlText._();
 
   static final RegExp _comment = RegExp(r'<!--[\s\S]*?-->');
-  static final RegExp _hiddenBlock =
-      RegExp(r'<(script|style|head)\b[^>]*>[\s\S]*?</\1\s*>', caseSensitive: false);
+  static final RegExp _hiddenBlock = RegExp(
+    r'<(script|style|head)\b[^>]*>[\s\S]*?</\1\s*>',
+    caseSensitive: false,
+  );
   // <br> 是段内换行，<hr> 是场景分隔线，两者对纯文本来说都等于断行。
-  static final RegExp _lineBreak = RegExp(r'<\s*(?:br|hr)\s*/?\s*>', caseSensitive: false);
+  static final RegExp _lineBreak = RegExp(
+    r'<\s*(?:br|hr)\s*/?\s*>',
+    caseSensitive: false,
+  );
   // 结束块标签表示「这一段结束了」，替换成换行；开始块标签只需丢弃。
   // 这样 `<p>A</p><p>B</p>` 恰好得到 A、B 两段，而不是中间多出空行。
   static final RegExp _closingBlock = RegExp(
@@ -89,7 +94,9 @@ class HtmlText {
     var result = s.replaceAllMapped(_numericEntity, (m) {
       final body = m[1]!;
       final hex = body.startsWith('x') || body.startsWith('X');
-      final code = hex ? int.tryParse(body.substring(1), radix: 16) : int.tryParse(body);
+      final code = hex
+          ? int.tryParse(body.substring(1), radix: 16)
+          : int.tryParse(body);
       if (code == null || code <= 0 || code > 0x10FFFF) return m[0]!;
       return String.fromCharCode(code);
     });

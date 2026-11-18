@@ -8,7 +8,10 @@ import '../reader_controller.dart';
 ///
 /// 用固定行高（48）而不是自适应高度：章节动辄几千条，固定 extent 让
 /// ListView 能精确复用、也能直接按 `index * 48` 定位到当前章，不用先 build。
-Future<void> showChapterSheet(BuildContext context, ReaderController controller) {
+Future<void> showChapterSheet(
+  BuildContext context,
+  ReaderController controller,
+) {
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -35,7 +38,10 @@ class _ChapterSheetState extends State<_ChapterSheet> {
 
   late final ScrollController _scroll = ScrollController(
     // 让当前章落在列表偏上的位置，用户还能看到前后几章。
-    initialScrollOffset: math.max(0, widget.controller.chapterIndex * _itemExtent - 120),
+    initialScrollOffset: math.max(
+      0,
+      widget.controller.chapterIndex * _itemExtent - 120,
+    ),
   );
 
   @override
@@ -92,9 +98,11 @@ class _ChapterSheetState extends State<_ChapterSheet> {
                       final isVolume = chapter['isVolume'] == true;
                       final title = '${chapter['title'] ?? ''}';
                       return InkWell(
-                        onTap: () => _open(index),
+                        onTap: isVolume ? null : () => _open(index),
                         child: Container(
-                          color: current ? scheme.primary.withValues(alpha: 0.08) : null,
+                          color: current
+                              ? scheme.primary.withValues(alpha: 0.08)
+                              : null,
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           child: Row(
                             children: [
@@ -104,15 +112,20 @@ class _ChapterSheetState extends State<_ChapterSheet> {
                                   '${index + 1}',
                                   style: TextStyle(
                                     fontSize: 12,
-                                    color: current ? scheme.primary : scheme.outline,
+                                    color: current
+                                        ? scheme.primary
+                                        : scheme.outline,
                                   ),
                                 ),
                               ),
                               if (isVolume)
                                 Padding(
                                   padding: const EdgeInsets.only(right: 6),
-                                  child: Icon(Icons.folder_outlined,
-                                      size: 14, color: scheme.outline),
+                                  child: Icon(
+                                    Icons.folder_outlined,
+                                    size: 14,
+                                    color: scheme.outline,
+                                  ),
                                 ),
                               Expanded(
                                 child: Text(
@@ -121,13 +134,21 @@ class _ChapterSheetState extends State<_ChapterSheet> {
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
                                     fontSize: 14,
-                                    fontWeight: current ? FontWeight.w600 : FontWeight.w400,
-                                    color: current ? scheme.primary : scheme.onSurface,
+                                    fontWeight: current
+                                        ? FontWeight.w600
+                                        : FontWeight.w400,
+                                    color: current
+                                        ? scheme.primary
+                                        : scheme.onSurface,
                                   ),
                                 ),
                               ),
                               if (current)
-                                Icon(Icons.play_arrow, size: 16, color: scheme.primary),
+                                Icon(
+                                  Icons.play_arrow,
+                                  size: 16,
+                                  color: scheme.primary,
+                                ),
                             ],
                           ),
                         ),

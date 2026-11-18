@@ -37,6 +37,10 @@ class ReaderScrollViewState extends State<ReaderScrollView> {
   bool _jumping = false;
   bool _boundaryLock = false;
 
+  /// 每页的实际高度。以 LayoutBuilder 给的为准，和 ListView 的 itemExtent 保持一致，
+  /// 否则滚动偏移换算出的页码会错位（比如外层 inset 变化时）。
+  double _pageExtent = 0;
+
   @override
   void initState() {
     super.initState();
@@ -55,12 +59,16 @@ class ReaderScrollViewState extends State<ReaderScrollView> {
     super.dispose();
   }
 
-  double get _extent => widget.controller.viewport.height;
+  double get _extent =>
+      _pageExtent > 0 ? _pageExtent : widget.controller.viewport.height;
 
   /// 只有「换章」或「重新分页」时才强制对齐，普通滚动不打断用户手势。
   void _syncFromController() {
     final controller = widget.controller;
-    if (controller.chapterIndex == _chapter && controller.pageCount == _pageCount) return;
+    if (controller.chapterIndex == _chapter &&
+        controller.pageCount == _pageCount) {
+      return;
+    }
     _chapter = controller.chapterIndex;
     _pageCount = controller.pageCount;
     // 必须等这一帧重建完再跳：新章页数可能比旧章多，
@@ -84,14 +92,20 @@ class ReaderScrollViewState extends State<ReaderScrollView> {
 
   void _onScroll() {
     if (_jumping || !_scroll.hasClients || _extent <= 0) return;
-    final index = (_scroll.offset / _extent).round().clamp(0, widget.controller.pageCount - 1);
+    final index = (_scroll.offset / _extent).round().clamp(
+      0,
+      widget.controller.pageCount - 1,
+    );
     widget.controller.noteScrollPage(index);
   }
 
   /// 键盘/点击翻页：按一屏高度平滑滚动。
   Future<void> scrollByPage(int dir) async {
     if (!_scroll.hasClients || _extent <= 0) return;
-    final target = (_scroll.offset + dir * _extent).clamp(0.0, _scroll.position.maxScrollExtent);
+    final target = (_scroll.offset + dir * _extent).clamp(
+      0.0,
+      _scroll.position.maxScrollExtent,
+    );
     await _scroll.animateTo(
       target,
       duration: const Duration(milliseconds: 220),
@@ -122,6 +136,13 @@ class ReaderScrollViewState extends State<ReaderScrollView> {
         final extent = constraints.maxHeight;
         if (controller.pages.isEmpty || extent <= 0) {
           return const SizedBox.shrink();
+        }
+        if (extent != _pageExtent) {
+          _pageExtent = extent;
+          // 视口高度变化后页码对应的高度也变了，重新对齐当前页。
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _jumpTo(controller.pageIndex);
+          });
         }
         return GestureDetector(
           behavior: HitTestBehavior.translucent,

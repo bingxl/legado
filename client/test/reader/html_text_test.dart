@@ -29,7 +29,9 @@ void main() {
     });
 
     test('解码命名实体与数字实体', () {
-      final paragraphs = HtmlText.toParagraphs('A&nbsp;&amp;&nbsp;B&#33;&#x4E2D;&hellip;');
+      final paragraphs = HtmlText.toParagraphs(
+        'A&nbsp;&amp;&nbsp;B&#33;&#x4E2D;&hellip;',
+      );
       expect(paragraphs.single, 'A & B!中…');
     });
 

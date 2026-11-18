@@ -31,8 +31,8 @@ class _TtsSheet extends StatefulWidget {
 
 class _TtsSheetState extends State<_TtsSheet> {
   /// 只在打开面板时请求一次分段，避免重建（如键盘事件）把 RPC 重复打出去。
-  late final Future<List<Map<String, dynamic>>> _segments =
-      widget.controller.segmentCurrentPage();
+  late final Future<List<Map<String, dynamic>>> _segments = widget.controller
+      .segmentCurrentPage();
 
   @override
   Widget build(BuildContext context) {
@@ -85,7 +85,10 @@ class _TtsSheetState extends State<_TtsSheet> {
                   return Center(
                     child: Padding(
                       padding: const EdgeInsets.all(24),
-                      child: Text('分段失败：${snapshot.error}', textAlign: TextAlign.center),
+                      child: Text(
+                        '分段失败：${snapshot.error}',
+                        textAlign: TextAlign.center,
+                      ),
                     ),
                   );
                 }
@@ -116,10 +119,16 @@ class _TtsSheetState extends State<_TtsSheet> {
                                 ),
                               ),
                             ),
-                            title: Text(text, style: const TextStyle(fontSize: 13)),
+                            title: Text(
+                              text,
+                              style: const TextStyle(fontSize: 13),
+                            ),
                             subtitle: paragraph == null
                                 ? null
-                                : Text('第 $paragraph 段', style: const TextStyle(fontSize: 11)),
+                                : Text(
+                                    '第 $paragraph 段',
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
                           );
                         },
                       ),
@@ -127,7 +136,9 @@ class _TtsSheetState extends State<_TtsSheet> {
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
-                      color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                      color: scheme.surfaceContainerHighest.withValues(
+                        alpha: 0.4,
+                      ),
                       child: Text(
                         '音频引擎尚未接入，这里只展示 core 的分段结果（每段不超过 120 字）。',
                         style: TextStyle(fontSize: 11, color: scheme.outline),
