@@ -11,7 +11,7 @@ import (
 
 	"github.com/legado/core/boot"
 	"github.com/legado/core/kernel"
-	"github.com/legado/core/modules/legacy"
+	"github.com/legado/core/modules/registry"
 )
 
 // Version 由构建时注入（-ldflags "-X .../rt.Version=..."）。
@@ -48,7 +48,7 @@ func Open(root string, opt boot.Options, version string) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("装配失败: %w", err)
 	}
-	mods := legacy.Modules(biz, version)
+	mods := registry.Modules(biz, version)
 	// 先迁移再注册：模块自带 migration（不要运行时 CREATE TABLE），
 	// 由内核按 DependsOn 顺序调用，避免并行开发各建各的表。
 	for _, m := range mods {

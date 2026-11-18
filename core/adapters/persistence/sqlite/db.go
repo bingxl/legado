@@ -69,6 +69,42 @@ func cantOpenHint(err error) string {
 // Close 关闭底层连接。
 func (d *DB) Close() error { return d.db.Close() }
 
+// SQL 暴露底层连接，供 core/modules/<域> 操作自己的新表。
+//
+// 约定：模块只碰自己的表，SQL 必须参数化；能复用既有仓储时优先复用。
+// 走 Execute/Query 系列可以自动参与 UnitOfWork 事务（与仓储行为一致）。
+func (d *DB) SQL() *sql.DB { return d.db }
+
+// Execute 在当前事务（若有）中执行写语句。
+func (d *DB) Execute(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return d.q(ctx).ExecContext(ctx, query, args...)
+}
+
+// Query 在当前事务（若有）中执行查询。
+func (d *DB) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return d.q(ctx).QueryContext(ctx, query, args...)
+}
+
+// QueryRow 在当前事务（若有）中执行单行查询。
+func (d *DB) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
+	return d.q(ctx).QueryRowContext(ctx, query, args...)
+}
+
+// EnsureSchema 执行模块自带的建表脚本（幂等脚本请用 CREATE TABLE IF NOT EXISTS）。
+//
+// 与内置 migrations 互补：内置迁移用 user_version 记版本，模块表结构相对独立，
+// 用 IF NOT EXISTS 保证重复启动安全。
+func (d *DB) EnsureSchema(ctx context.Context, script string) error {
+	if strings.TrimSpace(script) == "" {
+		return nil
+	}
+	_, err := d.db.ExecContext(ctx, script)
+	if err != nil {
+		return fmt.Errorf("初始化模块表失败: %w", err)
+	}
+	return nil
+}
+
 // migrate 按序执行 migrations/ 下的 SQL 文件，并记录已执行版本。
 // 使用 user_version pragma 记录当前 schema 版本，保证幂等。
 func (d *DB) migrate(ctx context.Context) error {
