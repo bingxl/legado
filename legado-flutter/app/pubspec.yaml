@@ -15,7 +15,9 @@ dependencies:
   legado_core: ^0.1.0
   # 唯一用于平台的能力：拿到应用私有目录，交给内核开库。
   path_provider: ^2.1.5
+  path: ^1.9.1
   cupertino_icons: ^1.0.8
+  file_picker: ^13.4.0
 
 dev_dependencies:
   flutter_test:
@@ -32,3 +34,9 @@ dependency_overrides:
 
 flutter:
   uses-material-design: true
+  # Windows 默认字体的中文回退（宋体）观感差，内置 MiSans 统一全平台字形。
+  # 字重由 Skia 合成，只带 Regular 一份即可，避免 APK/安装包膨胀。
+  fonts:
+    - family: MiSans
+      fonts:
+        - asset: fonts/MiSans-Regular.otf

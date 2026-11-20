@@ -5,6 +5,30 @@ publish_to: none
 environment:
   sdk: ^3.10.0
 
+# Flutter SDK 钉住 meta 1.17，但 sqlite3 ≥3.7 需要的 hooks ≥2.2 依赖 meta ≥1.19。
+# meta 只是注解包、无二进制，提到 1.19 对 Flutter 侧无影响。
+dependency_overrides:
+  meta: ^1.19.0
+
+# sqlite3 的构建钩子默认从 GitHub 下载预编译 .so，本机直连 GitHub 会超时；
+# 同时 Android 系统 libsqlite3.so 不对应用开放（不在 public_libraries.txt），
+# Windows 本机编译又会因 vswhere 输出的中文 VS 描述被 GBK 控制台编码搅坏而崩溃。
+# 所以分平台走不同来源（需要 sqlite3 ≥3.9.1 的按平台 source 配置）：
+# - android: source —— 用 third_party/sqlite 的官方 amalgamation（3.54.1，来自
+#   sqlite.org 而非 GitHub）本地编译，NDK clang 由 Flutter 钩子输入直接提供；
+# - 其它平台（Windows CLI / dart test）: system —— Windows 加载系统自带的
+#   winsqlite3.dll，不下载、不编译。
+hooks:
+  user_defines:
+    sqlite3:
+      source:
+        android: source
+        default: system
+      path: third_party/sqlite/sqlite3.c
+      name:
+        windows: winsqlite3
+        default: sqlite3
+
 # 一个 lockfile 管三个包：内核、CLI、应用必须用同一套依赖版本，
 # 否则「dart test 通过、flutter run 挂」这种版本漂移会非常难查。
 workspace:

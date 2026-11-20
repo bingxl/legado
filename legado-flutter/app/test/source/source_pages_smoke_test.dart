@@ -15,6 +15,18 @@ void main() {
     expect(find.text('搜索名称 / 地址 / 分组'), findsOneWidget);
   });
 
+  testWidgets('书源列表：新建菜单提供从文件导入', (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: SourceListPage()));
+    await tester.pump();
+    await tester.tap(find.byType(FloatingActionButton));
+    await tester.pumpAndSettle();
+
+    expect(find.text('新建书源'), findsOneWidget);
+    expect(find.text('粘贴 JSON 导入'), findsOneWidget);
+    expect(find.text('从文件导入'), findsOneWidget);
+    expect(find.text('从 URL 导入'), findsOneWidget);
+  });
+
   testWidgets('书源列表：pickMode 只读标题', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(home: SourceListPage(pickMode: true)),

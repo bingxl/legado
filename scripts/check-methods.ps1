@@ -51,6 +51,11 @@ if ($LASTEXITCODE -ne 0) {
     throw 'legado methods 执行失败'
 }
 
+# sqlite3 的 native assets 会在首行打 `Running build hooks...`，与第一条方法名粘在一起，
+# 锚定行首的正则就会漏掉它（表现为「方法数少一个」，而且少的总是 alphabet 最前的那个，
+# 极难察觉）。先把这些噪声从行内剥掉。
+$raw = ($raw | Out-String) -replace 'Running (?:build|link) hooks\.\.\.', '' -split "`r?`n"
+
 $coreMethods = $raw |
     ForEach-Object { if ($_ -match '^\s*([A-Za-z]+\.[A-Za-z.]+)') { $Matches[1] } } |
     Sort-Object -Unique
@@ -60,11 +65,29 @@ if ($coreMethods.Count -eq 0) {
 }
 
 # 2) Dart 侧：所有形如 'Domain.Verb' 的字符串字面量。
-#    只认已知域名做前缀，避免把日志文案误判成方法名；
-#    **必须区分大小写**：设置项的键叫 `reader.fontSize`，与域 `Reader` 只差一个字母，
-#    不区分大小写会把它当成方法名报出十条假失败。
-$domains = ($coreMethods | ForEach-Object { ($_ -split '\.')[0] } | Sort-Object -Unique) -join '|'
-$pattern = "'((?:$domains)\.[A-Za-z.]+)'"
+#
+# 域名**不能**从内核已注册的方法里取：迁移期内核只有 4 个方法，域名集合就只有 System，
+# 于是 UI 那 59 个引用一个都扫不出来，脚本会理直气壮地报「全部命中」—— 这是最坏的一种失效，
+# 它让人误以为对账过了。域名一律以 `docs/方法契约表.md` 为准（那是冻结契约），
+# 契约表不在时才退回内核方法。
+#
+# 另外**必须区分大小写**：设置项键叫 `reader.fontSize`，与域 `Reader` 只差大小写，
+# 不区分就会把它当成方法名报出一堆假失败。
+$domains = @()
+$docsDir = Join-Path $root 'docs'
+if (Test-Path $docsDir) {
+    # 不硬编码中文文件名：PowerShell 传参经过不同代码页时，中文路径会解析失败（实测踩过）。
+    # 改为扫 docs 下所有 .md，取形如 `## System（2）` 的小节标题 —— 只有契约表用这个格式。
+    $domains = Get-ChildItem -Path $docsDir -Filter *.md |
+        Select-String -Pattern '^##\s+([A-Za-z]+)\s*[（(]' -CaseSensitive |
+        ForEach-Object { $_.Matches[0].Groups[1].Value } |
+        Sort-Object -Unique
+}
+if ($domains.Count -eq 0) {
+    $domains = $coreMethods | ForEach-Object { ($_ -split '\.')[0] } | Sort-Object -Unique
+}
+
+$pattern = "'((?:$($domains -join '|'))\.[A-Za-z][A-Za-z0-9.]*)'"
 $dartMethods = Get-ChildItem -Path $appLib -Recurse -Filter *.dart |
     ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName } |
     Select-String -Pattern $pattern -AllMatches -CaseSensitive |

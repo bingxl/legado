@@ -37,3 +37,21 @@ package-lock.json
 /legado-flutter/app/ios/Flutter/ephemeral/
 /legado-flutter/app/android/app/libs/
 *.aar
+
+# Flutter workspace 根 / 安卓 Gradle 产物（编译输出、测试缓存、临时可执行文件）
+/legado-flutter/build/
+/legado-flutter/app/android/build/
+
+# 本地运行与调试产物（调试数据库、真实书源、APK 分享页、运行日志）
+/.legado-dev/
+/.apk-share/
+/legado-flutter/*.log
+/legado-flutter/app_test_out.txt
+
+# 本地 AI/Agent 工具链状态：MCP 配置、skills 缓存（含本机绝对路径，不可跨机器复用）
+/legado-flutter/.agents/
+/legado-flutter/.mcp.json
+/legado-flutter/skills-lock.json
+
+# CLI 一次性调试脚本
+/legado-flutter/packages/legado_cli/bin/tmp_*.dart

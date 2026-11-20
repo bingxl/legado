@@ -6,9 +6,36 @@
 /// 对阅读器反而是负担。这里只做容错式压平。
 library;
 
+/// 一章正文的解析结果。
+///
+/// [paragraphs] 与 [imageUrls] 用同一个下标：某段是图片时段落串为空串，
+/// 地址放在 [imageUrls] 里。这样图片在正文里有确定的位置，分页时按独立块
+/// 占位，渲染时才能「图在文中」而不是被当成漫画整章铺开。
+class ChapterContent {
+  const ChapterContent({
+    required this.paragraphs,
+    required this.imageUrls,
+  });
+
+  final List<String> paragraphs;
+  final Map<int, String> imageUrls;
+
+  bool get hasText => paragraphs.any((p) => p.trim().isNotEmpty);
+  bool get isEmpty => paragraphs.isEmpty && imageUrls.isEmpty;
+}
+
 class HtmlText {
   HtmlText._();
 
+  /// 正文图片在段落串里的占位符（U+FFFC OBJECT REPLACEMENT CHARACTER）。
+  static const String imageMarker = '\uFFFC';
+
+  static final RegExp _imgTag = RegExp(r'<img\b[^>]*>', caseSensitive: false);
+  static final RegExp _imgAttr = RegExp(
+    r'''(?:src|data-src|specialdata-src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))''',
+    caseSensitive: false,
+  );
+  static final RegExp _imageLine = RegExp('^$imageMarker(\\d+)\$');
   static final RegExp _comment = RegExp(r'<!--[\s\S]*?-->');
   static final RegExp _hiddenBlock = RegExp(
     r'<(script|style|head)\b[^>]*>[\s\S]*?</\1\s*>',
@@ -62,13 +89,33 @@ class HtmlText {
   /// - `<br>` 视为段内换行；
   /// - 结束块标签切段，开始块标签只丢弃；
   /// - 连续空行压成一段空行（保留场景分隔），段首段尾空行丢弃；
-  /// - HTML 源码里的裸换行无意义，先剔除，避免把格式化缩进变成空段落。
-  static List<String> toParagraphs(String html) {
-    if (html.isEmpty) return const [];
+  /// - HTML 源码里的裸换行无意义，先剔除，避免把格式化缩进变成空段落；
+  /// - `<img>` 独立成段，地址放进 [ChapterContent.imageUrls]。
+  static ChapterContent toContent(String html) {
+    if (html.isEmpty) return const ChapterContent(paragraphs: [], imageUrls: {});
 
+    final imageUrls = <String>[];
     var s = html.replaceAll(_comment, '').replaceAll(_hiddenBlock, '');
     // 源码换行/回车在 HTML 里不产生视觉效果，先去掉，防止被当成空段落。
     s = s.replaceAll('\r', '').replaceAll('\n', '');
+    // 先把图片换成「所在段落的标记」，后续和其它标签一起压平，位置不会丢。
+    s = s.replaceAllMapped(_imgTag, (match) {
+      final tag = match.group(0) ?? '';
+      String? raw;
+      for (final attr in _imgAttr.allMatches(tag)) {
+        final value = attr.group(1) ?? attr.group(2) ?? attr.group(3) ?? '';
+        if (value.trim().isNotEmpty) {
+          raw = value.trim();
+          break;
+        }
+      }
+      if (raw == null) return '';
+      final url = _decodeEntities(raw);
+      if (url.isEmpty) return '';
+      final index = imageUrls.length;
+      imageUrls.add(url);
+      return '\n$imageMarker$index\n';
+    });
     s = s.replaceAll(_lineBreak, '\n');
     s = s.replaceAll(_closingBlock, '\n');
     s = s.replaceAll(_openBlock, '');
@@ -76,19 +123,43 @@ class HtmlText {
     s = _decodeEntities(s).replaceAll(_zeroWidth, '');
 
     final out = <String>[];
+    final positioned = <int, String>{};
     for (final rawLine in s.split('\n')) {
       final line = rawLine.replaceAll(_spaces, ' ').trim();
+      final imageMatch = _imageLine.firstMatch(line);
+      if (imageMatch != null) {
+        final index = int.tryParse(imageMatch.group(1) ?? '');
+        if (index != null && index < imageUrls.length) {
+          // 图片段本身是空串；若紧邻块标签已经产生了一个空段，直接占用它，
+          // 不要留下两个连续空行把版面撑开。
+          if (out.isNotEmpty && out.last.isEmpty) {
+            positioned[out.length - 1] = imageUrls[index];
+          } else {
+            positioned[out.length] = imageUrls[index];
+            out.add('');
+          }
+        }
+        continue;
+      }
       if (line.isEmpty) {
         if (out.isNotEmpty && out.last.isNotEmpty) out.add('');
         continue;
       }
       out.add(line);
     }
-    while (out.isNotEmpty && out.last.isEmpty) {
+    while (out.isNotEmpty &&
+        out.last.isEmpty &&
+        !positioned.containsKey(out.length - 1)) {
       out.removeLast();
     }
-    return out;
+    return ChapterContent(
+      paragraphs: List<String>.unmodifiable(out),
+      imageUrls: Map<int, String>.unmodifiable(positioned),
+    );
   }
+
+  /// 纯文本段落视图（图片位置为空串）。供只关心文字的调用方与旧测试使用。
+  static List<String> toParagraphs(String html) => toContent(html).paragraphs;
 
   static String _decodeEntities(String s) {
     var result = s.replaceAllMapped(_numericEntity, (m) {

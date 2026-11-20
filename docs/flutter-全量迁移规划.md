@@ -295,6 +295,22 @@ M0 完成标志（三条都必须真跑）：
 3. `check-methods.ps1` 默认只报告不失败（迁移期 UI 引用了 60+ 个尚未注册的方法），
    CI 里用 `-Strict`。
 
+### M1 依赖决策（2026-11-19 修正上一条）
+
+上表第 1 条的前提被实测推翻，记在这里免得后人再走一遍：
+
+| 事实 | 影响 |
+| --- | --- |
+| `sqlite3 3.5.2` 走 **native assets**（build hooks 自动编译 sqlite3 源码），Windows 用 MSVC、Android 用 NDK | **不需要**自带 `sqlite3.dll`，也不需要 `sqlite3_flutter_libs` |
+| `dart compile exe` 明确不支持 build hooks（报 `does not support build hooks, use 'dart build' instead`） | CLI 改用 `dart build cli`，产物从「单文件」变「`bundle/bin/legado.exe` + `bundle/lib/sqlite3.dll`」 |
+| `dart build cli` 在 `dart run` 之外单独产出 bundle，exe 按 `../lib` 相对路径找 dll | `dist/cli/bundle/` 整个目录一起分发，不能只拷 exe |
+
+`scripts/build.ps1 -Target cli` 已改为 `dart build cli`，并保留 `icacls /setintegritylevel M`
+（Low Mandatory Level 目录的老问题）。
+
+顺带的好处：`path_provider_android` 的 jni 与 sqlite 的 native 编译**互不相干**，
+`sqlite3` 的 Android 编译只需 NDK（本机 29 已完整），不需要 CMake 那套装 NDK 的把戏。
+
 ## 九、相对 Go 版的净收益
 
 1. **构建链简化**：Android 不再需要 Go + NDK + gomobile + AAR + Gradle 五段式；

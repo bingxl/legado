@@ -74,13 +74,21 @@ void main() {
 
     setUp(() {
       registry = Registry();
-      registry.method('Demo.Echo', (args) async => args, params: const ['v any']);
+      registry.method(
+        'Demo.Echo',
+        (args) async => args,
+        params: const ['v any'],
+      );
     });
 
     test('成功信封带 id 与 data', () async {
       final raw = await Envelope.handle(
         registry,
-        jsonEncode({'id': 7, 'method': 'Demo.Echo', 'args': ['x']}),
+        jsonEncode({
+          'id': 7,
+          'method': 'Demo.Echo',
+          'args': ['x'],
+        }),
       );
       final map = jsonDecode(raw) as Map<String, dynamic>;
       expect(map['id'], 7);
@@ -108,7 +116,11 @@ void main() {
     test('args 不是数组时明确报错', () async {
       final raw = await Envelope.handle(
         registry,
-        jsonEncode({'id': 1, 'method': 'Demo.Echo', 'args': {'a': 1}}),
+        jsonEncode({
+          'id': 1,
+          'method': 'Demo.Echo',
+          'args': {'a': 1},
+        }),
       );
       final map = jsonDecode(raw) as Map<String, dynamic>;
       expect(map['err']['code'], ErrorCode.invalid);
@@ -136,8 +148,24 @@ void main() {
       expect(info['home'], home.path);
 
       final methods = core.methods();
-      expect(methods.map((m) => m.name), contains('System.Info'));
-      expect(core.methods('System').length, methods.length);
+      final names = methods.map((m) => m.name).toList();
+      expect(names, contains('System.Info'));
+      // M0 时内核只有 System 域；M3 之后 Shelf/Settings/Tts 也由同一个
+      // 注册表装配。这里断言「域都在」而不是数量相等，后续加域不用改测试。
+      expect(
+        names,
+        containsAll(<String>[
+          'System.Info',
+          'System.Database',
+          'Settings.Values',
+          'Shelf.ListBooks',
+          'Tts.Segment',
+          'Reader.GetChapters',
+          'Source.List',
+          'Source.Search',
+        ]),
+      );
+      expect(core.methods('System').length, lessThan(methods.length));
     });
 
     test('未初始化调用给出明确错误', () {

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/bridge/legado_client.dart';
 import '../../core/router/routes.dart';
+import '../../core/widgets/book_cover.dart';
 import 'search_results.dart';
 
 /// 搜索页用到的控制面方法（Api 是共享冻结文件，缺的常量由 feature 自带）。
@@ -16,8 +17,13 @@ class _Api {
 ///
 /// 两种范围：默认「全部书源」走 `Source.SearchAll`（core 逐个源并发/串行搜），
 /// 关掉开关则只搜选定书源。结果可按来源分组，也可平铺（每条带来源标签）。
+///
+/// [initialSourceId] 用于原版「发现」页长按书源 → 搜索的场景：
+/// 直接锁定到那一个书源搜，不走全部书源。
 class SearchPage extends StatefulWidget {
-  const SearchPage({super.key});
+  const SearchPage({super.key, this.initialSourceId});
+
+  final int? initialSourceId;
 
   @override
   State<SearchPage> createState() => _SearchPageState();
@@ -54,6 +60,13 @@ class _SearchPageState extends State<SearchPage> {
     _scroll.addListener(_onScroll);
     // 只用于刷新输入框尾部的「清空」按钮。
     _ctrl.addListener(_onTextChanged);
+    final sourceId = widget.initialSourceId;
+    if (sourceId != null && sourceId != 0) {
+      // 从「发现」页长按书源 → 搜索进来的：锁定到该源。
+      _all = false;
+      _sourceId = sourceId;
+      _ensureSources();
+    }
   }
 
   void _onTextChanged() {
@@ -79,8 +92,10 @@ class _SearchPageState extends State<SearchPage> {
   Future<void> _ensureSources() async {
     if (_sources.isNotEmpty) return;
     try {
-      final list = await LegadoClient.instance
-          .callList(_Api.listSources, const ['']);
+      final list = await LegadoClient.instance.callList(
+        _Api.listSources,
+        const [''],
+      );
       if (!mounted) return;
       setState(() {
         _sources = [
@@ -148,8 +163,11 @@ class _SearchPageState extends State<SearchPage> {
     try {
       final data = _all
           ? await LegadoClient.instance.callList(_Api.searchAll, [keyword, 1])
-          : await LegadoClient.instance
-              .callList(_Api.search, [_sourceId, keyword, 1]);
+          : await LegadoClient.instance.callList(_Api.search, [
+              _sourceId,
+              keyword,
+              1,
+            ]);
       if (!mounted || mySeq != _seq) return;
       setState(() {
         _items = mergeSearchResults(const [], data);
@@ -180,10 +198,15 @@ class _SearchPageState extends State<SearchPage> {
     try {
       final next = _page + 1;
       final data = _all
-          ? await LegadoClient.instance
-              .callList(_Api.searchAll, [_keyword, next])
-          : await LegadoClient.instance
-              .callList(_Api.search, [_sourceId, _keyword, next]);
+          ? await LegadoClient.instance.callList(_Api.searchAll, [
+              _keyword,
+              next,
+            ])
+          : await LegadoClient.instance.callList(_Api.search, [
+              _sourceId,
+              _keyword,
+              next,
+            ]);
       if (!mounted || mySeq != _seq) return;
       setState(() {
         _items = mergeSearchResults(_items, data);
@@ -263,9 +286,13 @@ class _SearchPageState extends State<SearchPage> {
         '${item['name'] ?? ''}',
         '${item['author'] ?? ''}',
         '${item['variable'] ?? ''}',
+        // 详情规则常没有 coverUrl，搜索结果的封面在这里兜底（超星就是这种）。
+        '${item['cover'] ?? ''}',
       ]);
       if (!mounted) return;
-      final map = brief is Map<String, dynamic> ? brief : const <String, dynamic>{};
+      final map = brief is Map<String, dynamic>
+          ? brief
+          : const <String, dynamic>{};
       final bookId = (map['id'] as num?)?.toInt() ?? 0;
       if (bookId == 0) {
         _toast('打开书籍失败：没有拿到书籍 ID');
@@ -322,7 +349,9 @@ class _SearchPageState extends State<SearchPage> {
           ),
           IconButton(
             tooltip: _grouped ? '平铺显示' : '按书源分组',
-            icon: Icon(_grouped ? Icons.view_list_outlined : Icons.workspaces_outline),
+            icon: Icon(
+              _grouped ? Icons.view_list_outlined : Icons.workspaces_outline,
+            ),
             onPressed: _items.isEmpty
                 ? null
                 : () => setState(() => _grouped = !_grouped),
@@ -345,16 +374,15 @@ class _SearchPageState extends State<SearchPage> {
       child: Row(
         children: [
           const Text('全部书源', style: TextStyle(fontSize: 13)),
-          Switch(
-            value: _all,
-            onChanged: _setAll,
-          ),
+          Switch(value: _all, onChanged: _setAll),
           if (!_all) ...[
             const SizedBox(width: 4),
             Expanded(
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<int>(
-                  value: _sources.any((s) => _idOf(s) == _sourceId) ? _sourceId : null,
+                  value: _sources.any((s) => _idOf(s) == _sourceId)
+                      ? _sourceId
+                      : null,
                   isExpanded: true,
                   hint: const Text('选择书源', style: TextStyle(fontSize: 13)),
                   items: [
@@ -468,7 +496,8 @@ class _SearchPageState extends State<SearchPage> {
     final author = '${item['author'] ?? ''}';
     final kind = '${item['kind'] ?? ''}';
     final originName = '${item['originName'] ?? ''}';
-    final opening = _openingUrl != null && _openingUrl == '${item['bookUrl'] ?? ''}';
+    final opening =
+        _openingUrl != null && _openingUrl == '${item['bookUrl'] ?? ''}';
 
     final subtitle = [
       if (author.isNotEmpty) author,
@@ -481,7 +510,14 @@ class _SearchPageState extends State<SearchPage> {
       leading: SizedBox(
         width: 40,
         height: 54,
-        child: _CoverPlaceholder(name: name, radius: 4, fontSize: 16),
+        child: BookCover(
+          name: name,
+          url: '${item['cover'] ?? ''}',
+          width: 40,
+          height: 54,
+          radius: 4,
+          fontSize: 16,
+        ),
       ),
       title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: subtitle.isEmpty
@@ -499,21 +535,24 @@ class _SearchPageState extends State<SearchPage> {
               child: CircularProgressIndicator(strokeWidth: 2),
             )
           : (originName.isEmpty
-              ? null
-              : Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: scheme.secondaryContainer,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    originName,
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: scheme.onSecondaryContainer,
+                ? null
+                : Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
                     ),
-                  ),
-                )),
+                    decoration: BoxDecoration(
+                      color: scheme.secondaryContainer,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      originName,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: scheme.onSecondaryContainer,
+                      ),
+                    ),
+                  )),
       onTap: opening ? null : () => _openBook(item),
     );
   }
@@ -586,36 +625,4 @@ class _ItemRow {
   const _ItemRow(this.item);
 
   final Map<String, dynamic> item;
-}
-
-class _CoverPlaceholder extends StatelessWidget {
-  const _CoverPlaceholder({
-    required this.name,
-    required this.radius,
-    required this.fontSize,
-  });
-
-  final String name;
-  final double radius;
-  final double fontSize;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(radius),
-        color: scheme.primaryContainer,
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        name.isEmpty ? '?' : String.fromCharCode(name.runes.first),
-        style: TextStyle(
-          fontSize: fontSize,
-          color: scheme.onPrimaryContainer,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/bridge/legado_client.dart';
+import '../../core/widgets/book_cover.dart';
 import 'tools_api.dart';
 import 'tools_format.dart';
 
@@ -241,7 +242,7 @@ class _CachePageState extends State<CachePage> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _Cover(name: name),
+            _Cover(book: book),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -396,31 +397,21 @@ class _StatCell extends StatelessWidget {
   }
 }
 
-/// 封面占位：core 的 `/img/` 数据面未接入，沿用书架页的首字方案。
+/// 封面：网络图 + 首字兜底。
 class _Cover extends StatelessWidget {
-  const _Cover({required this.name});
+  const _Cover({required this.book});
 
-  final String name;
+  final Map<String, dynamic> book;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
+    return BookCover(
+      name: toolsStr(book['name']).trim(),
+      url: '${book['cover'] ?? ''}',
       width: 40,
       height: 52,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(6),
-        color: scheme.primaryContainer,
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        name.isEmpty ? '?' : String.fromCharCode(name.runes.first),
-        style: TextStyle(
-          fontSize: 16,
-          fontWeight: FontWeight.w600,
-          color: scheme.onPrimaryContainer,
-        ),
-      ),
+      radius: 6,
+      fontSize: 16,
     );
   }
 }

@@ -1,8 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 书源、封面、正文图片全都要联网。Flutter 模板只在 debug/profile 清单里
+         加了 INTERNET，release 包不合并那一份，漏掉这里会导致正式包完全断网。 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="legado"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

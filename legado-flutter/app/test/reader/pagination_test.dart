@@ -170,4 +170,29 @@ void main() {
       expect(pageIndexForOffset(pages, inside), 1);
     });
   });
+
+  group('paginate 内联图片', () {
+    test('图片按给定高度占据独立块，且文字仍在原位置', () {
+      const imageUrl = 'https://img.test/a.jpg';
+      final pages = paginate(
+        paragraphs: ['前文', '', '后文'],
+        pageSize: const Size(320, 600),
+        typography: typography,
+        imageUrls: {1: imageUrl},
+      );
+      final blocks = pages.single.blocks;
+      expect(blocks.length, 3);
+      expect(blocks[0].text, contains('前文'));
+      expect(blocks[1].isImage, isTrue);
+      expect(blocks[1].imageUrl, imageUrl);
+      expect(blocks[1].imageHeight, typography.imageBlockHeight(600));
+      expect(blocks[2].text, contains('后文'));
+    });
+
+    test('图片高度受版心限制，不会把整页文字挤掉', () {
+      final height = typography.imageBlockHeight(100);
+      expect(height, lessThanOrEqualTo(60));
+      expect(height, greaterThanOrEqualTo(48));
+    });
+  });
 }

@@ -48,14 +48,26 @@ class ReaderController extends ChangeNotifier {
       _bookTitle.isNotEmpty ? _bookTitle : (initialBookName ?? '阅读');
 
   List<String> _paragraphs = const [];
+
+  /// 文字章里的内联图片：下标与 [_paragraphs] 对齐（图片段为空串）。
+  Map<int, String> _imageUrls = const {};
+
+  /// 纯图片章（漫画）的地址；文字章即使带图也留空在这里。
   List<String> _images = const [];
   List<PageSlice> _pages = const [];
   int _pageIndex = 0;
 
-  /// 漫画章的图片地址。core 的 `/img` 数据面还没接，UI 只用它渲染占位框。
+  /// 漫画章的图片地址。core 返回的已是绝对直链，UI 直接交给 `Image.network`；
+  /// 为空表示本章是文字章。
   List<String> get images => _images;
 
-  bool get isManga => _images.isNotEmpty;
+  /// 只有「整章只有图片、没有文字」才按漫画铺开。
+  ///
+  /// 文字书源（超星等）正文里常夹插图：core 会把这些图也放进 images，
+  /// 旧判定会把整章正文替换成图片列表，文字全丢。
+  bool get isManga => _images.isNotEmpty && !_hasText;
+
+  bool get _hasText => _paragraphs.any((p) => p.trim().isNotEmpty);
 
   Size _viewport = Size.zero;
   Size get viewport => _viewport;
@@ -191,14 +203,15 @@ class ReaderController extends ChangeNotifier {
     final map = data is Map
         ? data.cast<String, dynamic>()
         : <String, dynamic>{};
-    final paragraphs = HtmlText.toParagraphs('${map['html'] ?? ''}');
+    final content = HtmlText.toContent('${map['html'] ?? ''}');
     final rawImages = map['images'];
     final images = rawImages is List
         ? rawImages.map((e) => '$e').toList(growable: false)
         : const <String>[];
     final result = _ChapterData(
       title: '${map['title'] ?? ''}',
-      paragraphs: paragraphs,
+      paragraphs: content.paragraphs,
+      imageUrls: content.imageUrls,
       images: images,
     );
     _cache[index] = result;
@@ -282,15 +295,18 @@ class ReaderController extends ChangeNotifier {
     try {
       final data = await _chapterData(target);
       _paragraphs = data.paragraphs;
+      _imageUrls = data.imageUrls;
       _images = data.images;
       _hasContent =
-          data.paragraphs.any((p) => p.trim().isNotEmpty) ||
-          data.images.isNotEmpty;
+          _paragraphs.any((p) => p.trim().isNotEmpty) ||
+          _imageUrls.isNotEmpty ||
+          _images.isNotEmpty;
       _chapterTitle = data.title.isNotEmpty ? data.title : fallbackTitle;
       _repaginate(targetOffset: atEnd ? null : offset, atEnd: atEnd);
       loaded = true;
     } on LegadoError catch (e) {
       _paragraphs = const [];
+      _imageUrls = const {};
       _images = const [];
       _pages = const [];
       _hasContent = false;
@@ -299,6 +315,7 @@ class ReaderController extends ChangeNotifier {
       // 传输层异常（core 掉线、JSON 解析失败等）也要落到错误态，
       // 否则会停在「上一章内容 + 进度条" 的半截状态。
       _paragraphs = const [];
+      _imageUrls = const {};
       _images = const [];
       _pages = const [];
       _hasContent = false;
@@ -325,7 +342,7 @@ class ReaderController extends ChangeNotifier {
   void ensureLayout(Size size) {
     if (_viewport == size) return;
     _viewport = size;
-    if (_paragraphs.isEmpty) {
+    if (_paragraphs.isEmpty && _imageUrls.isEmpty) {
       _pages = const [];
       _pageIndex = 0;
       return;
@@ -346,6 +363,7 @@ class ReaderController extends ChangeNotifier {
       paragraphs: _paragraphs,
       pageSize: _style.contentSize(_viewport),
       typography: _style.typography,
+      imageUrls: _imageUrls,
     );
     _pageIndex = atEnd
         ? _pages.length - 1
@@ -356,7 +374,7 @@ class ReaderController extends ChangeNotifier {
   void applyStyle(ReaderStyle next) {
     _style = next;
     // 不改这里的分页逻辑：段距/缩进/对齐都可能变，必须整章重排。
-    if (_paragraphs.isNotEmpty) _repaginate();
+    if (_paragraphs.isNotEmpty || _imageUrls.isNotEmpty) _repaginate();
     notifyListeners();
   }
 
@@ -459,10 +477,12 @@ class _ChapterData {
   const _ChapterData({
     required this.title,
     required this.paragraphs,
+    required this.imageUrls,
     required this.images,
   });
 
   final String title;
   final List<String> paragraphs;
+  final Map<int, String> imageUrls;
   final List<String> images;
 }

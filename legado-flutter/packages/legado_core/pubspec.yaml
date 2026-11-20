@@ -12,8 +12,25 @@ resolution: workspace
 # 一旦出现 flutter/dart:ui，CLI 模式就无法运行，双端共用逻辑的前提就没了。
 # 由 test/no_flutter_import_test.dart 强制检查。
 dependencies:
+  archive: ^4.7.1
+  collection: ^1.19.1
+  crypto: ^3.0.8
+  csslib: ^1.0.2
+  ffi: ^2.1.4
+  gbk_codec: ^0.4.0
+  html: ^0.15.7
+  http: ^1.6.0
   logging: ^1.3.0
+  # QuickJS 宿主回调是同步的，而 Dart 侧的 java.ajax 只能异步返回。
+  # 这里用 NativeCallable + Mailbox 把 worker isolate 阻塞住等主 isolate 回包。
+  native_synchronization: ^0.3.1
   path: ^1.9.1
+  # 书源脚本真正的 JS 引擎。本地 vendor 了一份：pub 上的 0.4.9 在 Windows/MSVC
+  # 下编译不过（缺 __atomic_* 宏、DLL 不导出 qjs_* 符号），补丁见 third_party/。
+  quickjs_runtime:
+    path: ../../third_party/quickjs_runtime
+  sqlite3: ^3.9.1
+  xml: ^6.6.1
 
 dev_dependencies:
   lints: ^6.0.0

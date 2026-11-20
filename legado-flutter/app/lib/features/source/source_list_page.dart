@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/bridge/legado_client.dart';
@@ -191,7 +194,8 @@ class _SourceListPageState extends State<SourceListPage> {
           return ChoiceChip(
             label: Text(name.isEmpty ? '全部 ($count)' : '$name ($count)'),
             selected: selected,
-            onSelected: (_) => setState(() => _groupFilter = selected ? '' : name),
+            onSelected: (_) =>
+                setState(() => _groupFilter = selected ? '' : name),
           );
         },
       ),
@@ -317,10 +321,22 @@ class _SourceListPageState extends State<SourceListPage> {
                   onSelected: (a) => _onAction(a, source),
                   itemBuilder: (_) => const [
                     PopupMenuItem(value: _SourceAction.edit, child: Text('编辑')),
-                    PopupMenuItem(value: _SourceAction.group, child: Text('加入分组')),
-                    PopupMenuItem(value: _SourceAction.check, child: Text('校验')),
-                    PopupMenuItem(value: _SourceAction.debug, child: Text('调试')),
-                    PopupMenuItem(value: _SourceAction.delete, child: Text('删除')),
+                    PopupMenuItem(
+                      value: _SourceAction.group,
+                      child: Text('加入分组'),
+                    ),
+                    PopupMenuItem(
+                      value: _SourceAction.check,
+                      child: Text('校验'),
+                    ),
+                    PopupMenuItem(
+                      value: _SourceAction.debug,
+                      child: Text('调试'),
+                    ),
+                    PopupMenuItem(
+                      value: _SourceAction.delete,
+                      child: Text('删除'),
+                    ),
                   ],
                 ),
               ],
@@ -374,9 +390,17 @@ class _SourceListPageState extends State<SourceListPage> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              _barAction(Icons.check_circle_outline, '启用', () => _batchEnabled(true)),
+              _barAction(
+                Icons.check_circle_outline,
+                '启用',
+                () => _batchEnabled(true),
+              ),
               _barAction(Icons.block, '禁用', () => _batchEnabled(false)),
-              _barAction(Icons.folder_outlined, '分组', () => _moveToGroup(_selected.toList())),
+              _barAction(
+                Icons.folder_outlined,
+                '分组',
+                () => _moveToGroup(_selected.toList()),
+              ),
               _barAction(Icons.delete_outline, '删除', _batchDelete),
               _barAction(Icons.close, '取消', _exitSelection),
             ],
@@ -402,7 +426,10 @@ class _SourceListPageState extends State<SourceListPage> {
 
   // ── 行内动作 ────────────────────────────────────────────
 
-  Future<void> _onAction(_SourceAction action, Map<String, dynamic> source) async {
+  Future<void> _onAction(
+    _SourceAction action,
+    Map<String, dynamic> source,
+  ) async {
     final id = _idOf(source);
     switch (action) {
       case _SourceAction.edit:
@@ -413,7 +440,9 @@ class _SourceListPageState extends State<SourceListPage> {
         await _check(id);
       case _SourceAction.debug:
         await Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => SourceDebugPage(initialSourceId: id)),
+          MaterialPageRoute(
+            builder: (_) => SourceDebugPage(initialSourceId: id),
+          ),
         );
       case _SourceAction.delete:
         await _confirmDelete([id], name: '${source['name'] ?? ''}');
@@ -461,7 +490,11 @@ class _SourceListPageState extends State<SourceListPage> {
   Future<void> _batchDelete() async {
     final ids = _selected.toList();
     if (ids.isEmpty) return;
-    final ok = await _confirmDelete(ids, name: '${ids.length} 个书源', batch: true);
+    final ok = await _confirmDelete(
+      ids,
+      name: '${ids.length} 个书源',
+      batch: true,
+    );
     if (ok != true) return;
     try {
       await SourceApi.deleteBatch(ids);
@@ -474,15 +507,25 @@ class _SourceListPageState extends State<SourceListPage> {
   }
 
   /// 删除确认。返回 true 表示用户确认（调用方负责真正删除）。
-  Future<bool?> _confirmDelete(List<int> ids, {required String name, bool batch = false}) async {
+  Future<bool?> _confirmDelete(
+    List<int> ids, {
+    required String name,
+    bool batch = false,
+  }) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('删除书源'),
         content: Text('确定删除「$name」？该操作不可撤销。'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除'),
+          ),
         ],
       ),
     );
@@ -521,7 +564,8 @@ class _SourceListPageState extends State<SourceListPage> {
                     for (final g in _groups)
                       ActionChip(
                         label: Text('${g['name'] ?? ''}'),
-                        onPressed: () => Navigator.pop(ctx, '${g['name'] ?? ''}'),
+                        onPressed: () =>
+                            Navigator.pop(ctx, '${g['name'] ?? ''}'),
                       ),
                   ],
                 ),
@@ -540,7 +584,10 @@ class _SourceListPageState extends State<SourceListPage> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
             child: const Text('加入'),
@@ -601,7 +648,10 @@ class _SourceListPageState extends State<SourceListPage> {
           onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
             child: const Text('开始校验'),
@@ -645,7 +695,10 @@ class _SourceListPageState extends State<SourceListPage> {
                   itemBuilder: (_, i) {
                     final issue = (issues[i] as Map).cast<String, dynamic>();
                     final level = '${issue['level'] ?? ''}';
-                    final miss = SourceUtils.isMiss(level, '${issue['message'] ?? ''}');
+                    final miss = SourceUtils.isMiss(
+                      level,
+                      '${issue['message'] ?? ''}',
+                    );
                     return Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -653,14 +706,14 @@ class _SourceListPageState extends State<SourceListPage> {
                           miss
                               ? Icons.cancel_outlined
                               : level == 'warning'
-                                  ? Icons.warning_amber_outlined
-                                  : Icons.info_outline,
+                              ? Icons.warning_amber_outlined
+                              : Icons.info_outline,
                           size: 18,
                           color: miss
                               ? Theme.of(ctx).colorScheme.error
                               : level == 'warning'
-                                  ? Colors.orange
-                                  : Theme.of(ctx).colorScheme.outline,
+                              ? Colors.orange
+                              : Theme.of(ctx).colorScheme.outline,
                         ),
                         const SizedBox(width: 8),
                         Expanded(
@@ -685,7 +738,10 @@ class _SourceListPageState extends State<SourceListPage> {
                 ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('关闭'),
+          ),
         ],
       ),
     );
@@ -736,6 +792,14 @@ class _SourceListPageState extends State<SourceListPage> {
               },
             ),
             ListTile(
+              leading: const Icon(Icons.folder_open_outlined),
+              title: const Text('从文件导入'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _importFromFile();
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.link),
               title: const Text('从 URL 导入'),
               onTap: () {
@@ -751,9 +815,9 @@ class _SourceListPageState extends State<SourceListPage> {
   }
 
   Future<void> _openCreate() async {
-    final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const SourceEditPage()),
-    );
+    final changed = await Navigator.of(
+      context,
+    ).push<bool>(MaterialPageRoute(builder: (_) => const SourceEditPage()));
     if (changed == true) await _reload();
   }
 
@@ -792,8 +856,14 @@ class _SourceListPageState extends State<SourceListPage> {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('导入')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('导入'),
+            ),
           ],
         ),
       ),
@@ -842,8 +912,14 @@ class _SourceListPageState extends State<SourceListPage> {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('导入')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('导入'),
+            ),
           ],
         ),
       ),
@@ -852,6 +928,77 @@ class _SourceListPageState extends State<SourceListPage> {
     controller.dispose();
     if (ok != true || url.isEmpty) return;
     await _runImport(() => SourceApi.importFromUrl(url, overwrite: overwrite));
+  }
+
+  /// 从本地文件导入：文件选择器只负责拿到文本，去重/落库仍走 core。
+  Future<void> _importFromFile() async {
+    List<PlatformFile> picked;
+    try {
+      picked = await FilePicker.pickFiles(
+        dialogTitle: '选择书源 JSON 文件',
+        type: FileType.custom,
+        allowedExtensions: const ['json', 'txt'],
+      );
+    } catch (e) {
+      _snack('打开文件失败: $e');
+      return;
+    }
+    if (!mounted || picked.isEmpty) return;
+
+    final file = picked.first;
+    String text;
+    try {
+      // Android 的 content:// 没有可读 path；file_picker 统一封装成 readAsBytes。
+      text = utf8.decode(await file.readAsBytes(), allowMalformed: true);
+    } catch (e) {
+      _snack('读取文件失败: $e');
+      return;
+    }
+    if (text.trim().isEmpty) {
+      _snack('文件内容为空');
+      return;
+    }
+    if (!mounted) return;
+
+    var overwrite = true;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('导入书源文件'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                file.name,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                value: overwrite,
+                onChanged: (v) => setLocal(() => overwrite = v),
+                title: const Text('覆盖同地址书源'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('导入'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    await _runImport(() => SourceApi.importText(text, overwrite: overwrite));
   }
 
   /// 执行导入并展示汇总结果。
@@ -905,7 +1052,10 @@ class _GroupManagerDialogState extends State<_GroupManagerDialog> {
           decoration: const InputDecoration(border: OutlineInputBorder()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
             child: const Text('保存'),
@@ -926,8 +1076,14 @@ class _GroupManagerDialogState extends State<_GroupManagerDialog> {
         title: const Text('删除分组'),
         content: Text('删除分组「$name」？组内书源会变成未分组，不会被删除。'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除'),
+          ),
         ],
       ),
     );
@@ -951,7 +1107,10 @@ class _GroupManagerDialogState extends State<_GroupManagerDialog> {
           onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
             child: const Text('创建'),
@@ -964,9 +1123,9 @@ class _GroupManagerDialogState extends State<_GroupManagerDialog> {
     // 因此这里只能提示用户用「加入分组」落第一个源。
     if (name != null && name.trim().isNotEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('分组「${name.trim()}」会在书源加入后出现')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('分组「${name.trim()}」会在书源加入后出现')));
       }
     }
   }
@@ -981,9 +1140,9 @@ class _GroupManagerDialogState extends State<_GroupManagerDialog> {
       setState(() => _groups = groups);
     } on LegadoError catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${e.code}: ${e.message}')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('${e.code}: ${e.message}')));
     }
   }
 

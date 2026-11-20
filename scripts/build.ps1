@@ -3,7 +3,7 @@
 # 用法：
 #   pwsh -File scripts/build.ps1                        # Windows release
 #   pwsh -File scripts/build.ps1 -Target android        # Android APK（release）
-#   pwsh -File scripts/build.ps1 -Target cli            # 编译独立 CLI 可执行文件
+#   pwsh -File scripts/build.ps1 -Target cli            # 独立 CLI（bundle 目录，exe + sqlite3.dll）
 #   pwsh -File scripts/build.ps1 -Configuration debug
 #
 # 与旧版的差别：不再有 Go core、不再有 gomobile/AAR/NDK。
@@ -49,27 +49,48 @@ function Get-Dart {
 $flutter = Get-Flutter
 $ext = if ($IsWindows -or $env:OS -eq 'Windows_NT') { '.exe' } else { '' }
 
-# CLI 单文件可执行：给不装 Dart 的场景用，同时也是「内核不依赖 Flutter」的最强证明
-# —— 能编译成 exe，就说明它真的没碰 UI 框架。
+# CLI 可执行：给不装 Dart 的场景用，同时也是「内核不依赖 Flutter」的最强证明
+# —— 能编出独立产物，就说明它真的没碰 UI 框架。
+#
+# 为什么不是 `dart compile exe`：M1 引入 sqlite3 3.x 后，它走 native assets
+# （build/link hooks）把 sqlite3 编进产物，而 `dart compile exe` 明确不支持
+# build hooks（"does not support build hooks, use 'dart build' instead"）。
+# `dart build cli` 产出的是 bundle 目录：
+#   <out>/bundle/bin/legado.exe
+#   <out>/bundle/lib/sqlite3.dll      ← exe 按 ../lib 相对路径找它，不能挪
+# 代价是「单文件」变成「目录」，换来的是 Windows/Android 都不用自带 dll。
 if ($Target -eq 'cli') {
     $dart = Get-Dart
-    $out = Join-Path $dist "legado$ext"
-    Write-Host "==> dart compile exe（$out）" -ForegroundColor Cyan
-    Push-Location $flutterRoot
+    $outDir = Join-Path $dist 'cli'
+    $bundle = Join-Path $outDir 'bundle'
+    $exe = Join-Path $bundle "bin\legado$ext"
+
+    # vite 时代留下的教训：递归删除在 Windows 上会撞批量删除保护，
+    # 用 .NET API 一次删干净，别用 Remove-Item -Recurse。
+    if (Test-Path $outDir) {
+        [System.IO.Directory]::Delete($outDir, $true)
+    }
+
+    Write-Host "==> dart build cli（$outDir）" -ForegroundColor Cyan
+    Push-Location (Join-Path $flutterRoot 'packages/legado_cli')
     try {
-        & $dart compile exe 'packages/legado_cli/bin/legado.dart' `
-            "-DLEGADO_VERSION=$Version" -o $out
-        if ($LASTEXITCODE -ne 0) { throw "dart compile exe 失败（exit $LASTEXITCODE）" }
+        $env:LEGADO_VERSION = $Version
+        & $dart build cli -t 'bin/legado.dart' -o $outDir
+        if ($LASTEXITCODE -ne 0) { throw "dart build cli 失败（exit $LASTEXITCODE）" }
     } finally {
         Pop-Location
     }
-    Write-Host "    -> $out ($([math]::Round((Get-Item $out).Length / 1MB, 1)) MB)"
+
+    if (-not (Test-Path $exe)) { throw "未找到产物：$exe" }
 
     # 与 windows 产物同理：仓库位于 Low Mandatory Level 目录，编译出的 exe 继承受限标签，
     # 运行时连自己的数据目录都建不了（PathAccessException: 拒绝访问, errno 5）。
-    if (($IsWindows -or $env:OS -eq 'Windows_NT') -and (Test-Path $out)) {
-        & icacls $out /setintegritylevel M | Out-Null
+    if (($IsWindows -or $env:OS -eq 'Windows_NT')) {
+        & icacls $exe /setintegritylevel M | Out-Null
     }
+    Write-Host "    -> $exe ($([math]::Round((Get-Item $exe).Length / 1MB, 1)) MB)"
+    Get-ChildItem (Join-Path $bundle 'lib') -ErrorAction SilentlyContinue |
+        ForEach-Object { Write-Host "       $($_.Name) ($([math]::Round($_.Length / 1MB, 1)) MB)" }
     return
 }
 

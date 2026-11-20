@@ -5,6 +5,16 @@ import 'package:flutter/material.dart';
 class AppTheme {
   AppTheme._();
 
+  /// 桌面端（尤其 Windows）默认字体的中文回退经常落到宋体，观感很差。
+  /// 内置 MiSans：现代无衬线、字重均匀，且自带完整中文字符；
+  /// 回退列表只用于极少数生僻字，保证任何平台都不会出现豆腐块。
+  static const fontFamily = 'MiSans';
+  static const fontFamilyFallback = <String>[
+    'Microsoft YaHei UI',
+    'PingFang SC',
+    'Noto Sans CJK SC',
+  ];
+
   static const accent = Color(0xFF578FCC);
   static const error = Color(0xFFEB4333);
   static const success = Color(0xFF439B53);
@@ -37,6 +47,8 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
+      fontFamily: fontFamily,
+      fontFamilyFallback: fontFamilyFallback,
       visualDensity: VisualDensity.standard,
       appBarTheme: AppBarTheme(
         centerTitle: false,

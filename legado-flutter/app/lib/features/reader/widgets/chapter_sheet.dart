@@ -55,6 +55,26 @@ class _ChapterSheetState extends State<_ChapterSheet> {
     widget.controller.openChapter(index);
   }
 
+  /// 目录很长（几千章）时，让用户一键滚到列表首尾，不必手动拖很久。
+  /// 用 animateTo 而不是 jumpTo：长列表瞬移会丢失位置感，动画能看清经过的章节。
+  void _scrollToStart() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(
+      0,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _scrollToEnd() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(
+      _scroll.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
@@ -76,6 +96,16 @@ class _ChapterSheetState extends State<_ChapterSheet> {
                   style: TextStyle(fontSize: 12, color: scheme.outline),
                 ),
                 const Spacer(),
+                IconButton(
+                  tooltip: '回到开头',
+                  icon: const Icon(Icons.vertical_align_top),
+                  onPressed: chapters.isEmpty ? null : _scrollToStart,
+                ),
+                IconButton(
+                  tooltip: '跳到最新',
+                  icon: const Icon(Icons.vertical_align_bottom),
+                  onPressed: chapters.isEmpty ? null : _scrollToEnd,
+                ),
                 IconButton(
                   tooltip: '关闭',
                   icon: const Icon(Icons.close),

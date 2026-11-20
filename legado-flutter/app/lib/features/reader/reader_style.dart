@@ -189,8 +189,13 @@ class ReaderStyle {
       )];
 
   /// 渲染用文本样式。分页测量必须用同一份 style，否则行高会对不上。
-  TextStyle textStyle(Color color) =>
-      TextStyle(fontSize: fontSize, height: lineHeight, color: color);
+  TextStyle textStyle(Color color) => TextStyle(
+    fontSize: fontSize,
+    height: lineHeight,
+    color: color,
+    fontFamily: AppTheme.fontFamily,
+    fontFamilyFallback: AppTheme.fontFamilyFallback,
+  );
 
   /// 正文对齐方式。分页测量与渲染必须一致（见 [ReaderTypography.justify]）。
   TextAlign get align => textJustify ? TextAlign.justify : TextAlign.start;

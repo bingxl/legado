@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/bridge/api.dart';
 import '../../core/bridge/legado_client.dart';
 import '../../core/router/routes.dart';
+import '../../core/widgets/book_cover.dart';
 import 'chapter_preview.dart';
 
 /// 书籍详情页（对应原版 `ui/book/info/BookInfoActivity`）。
@@ -72,7 +73,9 @@ class _BookDetailPageState extends State<BookDetailPage> {
       }
       List<Map<String, dynamic>> chapters;
       try {
-        chapters = await client.callList(Api.readerGetChapters, [widget.bookId]);
+        chapters = await client.callList(Api.readerGetChapters, [
+          widget.bookId,
+        ]);
       } on LegadoError catch (e) {
         if (!mounted) return;
         // 目录失败不影响详情：阅读器打开时还会再拉一次目录。
@@ -213,7 +216,14 @@ class _BookDetailPageState extends State<BookDetailPage> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _CoverPlaceholder(name: name),
+        BookCover(
+          name: name,
+          url: '${detail['cover'] ?? ''}',
+          width: 96,
+          height: 132,
+          radius: 8,
+          fontSize: 36,
+        ),
         const SizedBox(width: 16),
         Expanded(
           child: Column(
@@ -294,7 +304,11 @@ class _BookDetailPageState extends State<BookDetailPage> {
         const SizedBox(height: 8),
         Text(
           intro.isEmpty ? '暂无简介' : intro,
-          style: TextStyle(fontSize: 13, height: 1.6, color: scheme.onSurfaceVariant),
+          style: TextStyle(
+            fontSize: 13,
+            height: 1.6,
+            color: scheme.onSurfaceVariant,
+          ),
           maxLines: _introExpanded ? null : 6,
           overflow: _introExpanded ? null : TextOverflow.ellipsis,
         ),
@@ -411,7 +425,10 @@ class _BookDetailPageState extends State<BookDetailPage> {
             return Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 4,
+                  ),
                   child: Row(
                     children: [
                       Expanded(
@@ -462,35 +479,6 @@ class _Tag extends StatelessWidget {
       child: Text(
         label,
         style: TextStyle(fontSize: 11, color: scheme.onSecondaryContainer),
-      ),
-    );
-  }
-}
-
-/// 封面占位：core 的 `/img/` 数据面尚未接入，先用首字色块。
-class _CoverPlaceholder extends StatelessWidget {
-  const _CoverPlaceholder({required this.name});
-
-  final String name;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: 96,
-      height: 132,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        color: scheme.primaryContainer,
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        name.isEmpty ? '?' : String.fromCharCode(name.runes.first),
-        style: TextStyle(
-          fontSize: 36,
-          color: scheme.onPrimaryContainer,
-          fontWeight: FontWeight.w600,
-        ),
       ),
     );
   }

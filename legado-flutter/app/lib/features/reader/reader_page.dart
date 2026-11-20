@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/image_url.dart';
 import 'reader_controller.dart';
 import 'reader_prefs.dart';
 import 'reader_style.dart';
@@ -196,7 +197,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         backgroundColor: background.dark ? const Color(0xFF262626) : null,
         title: Text(
           '加入书架？',
-          style: background.dark ? const TextStyle(color: Color(0xFFEDEDED)) : null,
+          style: background.dark
+              ? const TextStyle(color: Color(0xFFEDEDED))
+              : null,
         ),
         content: Text(
           '《${_controller.bookTitle}》还没加入书架，加入后可以在书架继续阅读。',
@@ -319,7 +322,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       return _errorView(background);
     }
     if (_controller.isManga) {
-      return _MangaPlaceholder(
+      return _MangaView(
         images: _controller.images,
         onTapCenter: _toggleMenu,
         textColor: background.textColor,
@@ -385,10 +388,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   }
 }
 
-/// 漫画章占位。core 的 `/img` 数据面还没接，先按图片数量画占位框，
-/// 让分页/翻页/菜单等交互在漫画书上也能跑通。
-class _MangaPlaceholder extends StatelessWidget {
-  const _MangaPlaceholder({
+/// 漫画章：按顺序铺开图片。
+///
+/// 漫画的「正文」本质是图片直链列表（core 的 `Reader.GetContent.images`），
+/// 没有分页数据，因此这里用 ListView 而不是分页器；单击任意位置仍然呼出菜单，
+/// 与文字章的交互一致。
+class _MangaView extends StatelessWidget {
+  const _MangaView({
     required this.images,
     required this.onTapCenter,
     required this.textColor,
@@ -405,50 +411,105 @@ class _MangaPlaceholder extends StatelessWidget {
       onTap: onTapCenter,
       child: ListView.builder(
         itemCount: images.length,
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
-        itemBuilder: (context, index) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: AspectRatio(
-              aspectRatio: 0.72,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  border: Border.all(color: textColor.withValues(alpha: 0.25)),
-                  borderRadius: BorderRadius.circular(6),
-                  color: textColor.withValues(alpha: 0.05),
-                ),
-                child: Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.image_outlined,
-                        size: 36,
-                        color: textColor.withValues(alpha: 0.5),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '第 ${index + 1} 页',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: textColor.withValues(alpha: 0.6),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '图片数据面未接入',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: textColor.withValues(alpha: 0.4),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+        // 预取两屏，快速下滑时不至于频繁看到加载骨架。
+        cacheExtent: 1200,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        itemBuilder: (context, index) =>
+            _MangaImage(url: images[index], index: index, textColor: textColor),
+      ),
+    );
+  }
+}
+
+/// 单页漫画图片。
+///
+/// 失败/相对地址/空串都渲染成可读的占位块，而不是抛异常或留一片白：
+/// 漫画源常见的图片 CDN 会过期，用户至少要能看出「这一页失败了」。
+class _MangaImage extends StatelessWidget {
+  const _MangaImage({
+    required this.url,
+    required this.index,
+    required this.textColor,
+  });
+
+  final String url;
+  final int index;
+  final Color textColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final src = normalizeImageUrl(url);
+    if (src == null) return _failure('第 ${index + 1} 页图片地址无效');
+
+    // 大图按屏幕宽度解码，避免整章几十张原图把内存打满。
+    final width = MediaQuery.sizeOf(context).width;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final cacheWidth = (width * dpr).round();
+
+    return Image.network(
+      src,
+      // 图片 CDN 防盗链：不带 Referer 会 403（超星图片尤其明显）。
+      headers: imageHeaders(src),
+      width: double.infinity,
+      fit: BoxFit.fitWidth,
+      filterQuality: FilterQuality.medium,
+      cacheWidth: cacheWidth > 0 ? cacheWidth : null,
+      gaplessPlayback: true,
+      semanticLabel: '第 ${index + 1} 页',
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        if (wasSynchronouslyLoaded || frame != null) return child;
+        return _loading();
+      },
+      errorBuilder: (context, error, stackTrace) =>
+          _failure('第 ${index + 1} 页加载失败'),
+    );
+  }
+
+  Widget _loading() {
+    return Container(
+      width: double.infinity,
+      constraints: const BoxConstraints(minHeight: 320),
+      alignment: Alignment.center,
+      color: textColor.withValues(alpha: 0.04),
+      child: SizedBox(
+        width: 22,
+        height: 22,
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          color: textColor.withValues(alpha: 0.35),
+        ),
+      ),
+    );
+  }
+
+  Widget _failure(String message) {
+    return Container(
+      width: double.infinity,
+      height: 200,
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        border: Border.all(color: textColor.withValues(alpha: 0.2)),
+        borderRadius: BorderRadius.circular(6),
+        color: textColor.withValues(alpha: 0.04),
+      ),
+      alignment: Alignment.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.broken_image_outlined,
+            size: 32,
+            color: textColor.withValues(alpha: 0.5),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            message,
+            style: TextStyle(
+              fontSize: 12,
+              color: textColor.withValues(alpha: 0.7),
             ),
-          );
-        },
+          ),
+        ],
       ),
     );
   }

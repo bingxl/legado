@@ -58,4 +58,28 @@ void main() {
       expect(paragraphs.single, '这一行自带缩进');
     });
   });
+
+  group('HtmlText.toContent 正文图片', () {
+    test('图片独立成段并保留在正文中的位置', () {
+      final content = HtmlText.toContent(
+        '<p>前文</p><img src="https://img.test/a.jpg"><p>后文</p>',
+      );
+      expect(content.paragraphs, ['前文', '', '后文']);
+      expect(content.imageUrls, {1: 'https://img.test/a.jpg'});
+      expect(content.hasText, isTrue);
+    });
+
+    test('懒加载属性与转义字符也能取到图片地址', () {
+      final content = HtmlText.toContent(
+        '<p>插图</p><img data-src="https://img.test/x.jpg?a=1&amp;b=2">',
+      );
+      expect(content.imageUrls.values.single, 'https://img.test/x.jpg?a=1&b=2');
+    });
+
+    test('纯图片章节没有文字', () {
+      final content = HtmlText.toContent('<img src="https://img.test/1.jpg">');
+      expect(content.hasText, isFalse);
+      expect(content.imageUrls.length, 1);
+    });
+  });
 }

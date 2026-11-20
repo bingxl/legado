@@ -5,13 +5,16 @@ import 'core/router/routes.dart';
 import 'core/theme/app_theme.dart';
 import 'features/book/book_detail_page.dart';
 import 'features/explore/explore_page.dart';
+import 'features/explore/explore_show_page.dart';
 import 'features/me/me_page.dart';
+import 'features/reader/pdf_reader_page.dart';
 import 'features/reader/reader_page.dart';
 import 'features/rss/rss_article_page.dart';
 import 'features/rss/rss_favorite_page.dart';
 import 'features/rss/rss_home_page.dart';
 import 'features/rss/rss_source_edit_page.dart';
 import 'features/search/search_page.dart';
+import 'features/shelf/webdav_page.dart';
 import 'features/settings/reader_settings_page.dart';
 import 'features/settings/settings_page.dart';
 import 'features/settings/settings_store.dart';
@@ -52,6 +55,7 @@ class LegadoApp extends StatelessWidget {
   static const _implemented = <String>{
     RouteNames.me,
     RouteNames.explore,
+    RouteNames.exploreDetail,
     RouteNames.search,
     RouteNames.bookDetail,
     RouteNames.reader,
@@ -68,9 +72,10 @@ class LegadoApp extends StatelessWidget {
     RouteNames.cache,
     RouteNames.bookmark,
     RouteNames.readRecord,
+    RouteNames.webdav,
   };
 
-  /// core 连接失败时的提示。为空表示已连上。
+  /// 内核初始化失败时的提示。为空表示初始化成功。
   final String? bootError;
 
   @override
@@ -88,13 +93,27 @@ class LegadoApp extends StatelessWidget {
         // 已实现的页面显式接在这里；其余仍走占位页，保证任一入口可达。
         RouteNames.me: (_) => const MePage(),
         RouteNames.explore: (_) => const ExplorePage(),
-        RouteNames.search: (_) => const SearchPage(),
+        RouteNames.exploreDetail: (ctx) => ExploreShowPage.fromRouteArguments(
+          ModalRoute.of(ctx)?.settings.arguments,
+        ),
+        RouteNames.search: (ctx) {
+          final args = ModalRoute.of(ctx)?.settings.arguments;
+          final map = args is Map ? args : const {};
+          return SearchPage(initialSourceId: (map['sourceId'] as num?)?.toInt());
+        },
         RouteNames.bookDetail: (ctx) => BookDetailPage.fromRouteArguments(
           ModalRoute.of(ctx)?.settings.arguments,
         ),
-        RouteNames.reader: (ctx) => ReaderPage.fromRouteArguments(
-          ModalRoute.of(ctx)?.settings.arguments,
-        ),
+        RouteNames.reader: (ctx) {
+          // 本地 PDF 走平台渲染页；其余（本地文本/网络书）仍是文字阅读器。
+          // kind 由书架点击时带过来，缺席时按文字书处理。
+          final args = ModalRoute.of(ctx)?.settings.arguments;
+          final map = args is Map ? args : const <String, Object?>{};
+          if ('${map['kind'] ?? ''}'.toLowerCase() == 'pdf') {
+            return PdfReaderPage.fromRouteArguments(args);
+          }
+          return ReaderPage.fromRouteArguments(args);
+        },
         RouteNames.sourceList: (_) => const SourceListPage(),
         RouteNames.sourceEdit: (ctx) {
           final args = ModalRoute.of(ctx)?.settings.arguments;
@@ -107,7 +126,9 @@ class LegadoApp extends StatelessWidget {
         RouteNames.rssSourceEdit: (ctx) {
           final args = ModalRoute.of(ctx)?.settings.arguments;
           final map = args is Map ? args : const {};
-          return RssSourceEditPage(sourceId: (map['sourceId'] as num?)?.toInt());
+          return RssSourceEditPage(
+            sourceId: (map['sourceId'] as num?)?.toInt(),
+          );
         },
         RouteNames.rssRead: (ctx) {
           final args = ModalRoute.of(ctx)?.settings.arguments;
@@ -127,6 +148,7 @@ class LegadoApp extends StatelessWidget {
         RouteNames.cache: (_) => const CachePage(),
         RouteNames.bookmark: (_) => const BookmarkPage(),
         RouteNames.readRecord: (_) => const RecordPage(),
+        RouteNames.webdav: (_) => const WebDavPage(),
         for (final name in routeTitles.keys)
           if (name != RouteNames.shelf && !_implemented.contains(name))
             name: (ctx) => buildPlaceholderRoute(ctx, name),
@@ -155,15 +177,22 @@ class _BootErrorPage extends StatelessWidget {
               children: [
                 Icon(Icons.link_off, size: 40, color: scheme.error),
                 const SizedBox(height: 16),
-                Text('无法连接 core', style: Theme.of(context).textTheme.titleLarge),
+                Text('内核初始化失败', style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 8),
                 Text(message, style: TextStyle(color: scheme.onSurfaceVariant)),
                 const SizedBox(height: 20),
-                const Text('启动方式：'),
-                const SizedBox(height: 4),
+                // 内核与 UI 在同一进程里，不存在「先启动服务再开界面」这回事。
+                // 走到这里只会是数据目录/数据库层面的故障，提示也要对准它。
+                const Text('内核与应用运行在同一进程，无需单独启动任何服务。'),
+                const SizedBox(height: 8),
+                const Text('常见原因：数据目录不可写、磁盘已满、数据库损坏。'),
+                const SizedBox(height: 8),
                 SelectableText(
-                  'legado serve -port 8580',
-                  style: TextStyle(fontFamily: 'monospace', color: scheme.primary),
+                  '换数据目录：--dart-define=LEGADO_HOME=<路径>',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    color: scheme.primary,
+                  ),
                 ),
                 const SizedBox(height: 20),
                 FilledButton(
@@ -177,7 +206,7 @@ class _BootErrorPage extends StatelessWidget {
                       }
                     } catch (_) {}
                   },
-                  child: const Text('重试连接'),
+                  child: const Text('重试初始化'),
                 ),
               ],
             ),

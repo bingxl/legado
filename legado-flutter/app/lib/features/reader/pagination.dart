@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../core/theme/app_theme.dart';
+
 /// 分页用的排版参数（与 `ReaderStyle` 解耦，方便单测里构造任意值）。
 @immutable
 class ReaderTypography {
@@ -11,12 +13,18 @@ class ReaderTypography {
     this.paragraphSpacing = 10,
     this.indent = '　　',
     this.justify = true,
+    this.fontFamily = AppTheme.fontFamily,
   });
 
   final double fontSize;
   final double lineHeight;
   final double paragraphSpacing;
   final String indent;
+
+  /// 分页测量与渲染必须用同一字体：TextPainter 不会继承 Theme，
+  /// 不显式传就会按系统默认字体（Windows 上中文回退到宋体）测量，
+  /// 与用 MiSans 渲染的结果错位。
+  final String fontFamily;
 
   /// 两端对齐。**分页测量与渲染必须用同一个值**：justify 只改行内空白的
   /// 分布、不改断行位置，但 TextPainter 在两种对齐下的行高取整方式略有差异，
@@ -26,6 +34,11 @@ class ReaderTypography {
   /// 空段落占用的高度：按一整行算，保证「空行」在版面上真的空出一行。
   double get blankLineHeight => fontSize * lineHeight;
 
+  /// 正文内联图片的高度：按字号缩放，同时不超过版心六成，
+  /// 避免一张长图把整页文字挤没。
+  double imageBlockHeight(double pageHeight) =>
+      (fontSize * 8).clamp(fontSize * 3, pageHeight * 0.6).toDouble();
+
   TextAlign get align => justify ? TextAlign.justify : TextAlign.start;
 
   ReaderTypography copyWith({
@@ -34,6 +47,7 @@ class ReaderTypography {
     double? paragraphSpacing,
     String? indent,
     bool? justify,
+    String? fontFamily,
   }) {
     return ReaderTypography(
       fontSize: fontSize ?? this.fontSize,
@@ -41,6 +55,7 @@ class ReaderTypography {
       paragraphSpacing: paragraphSpacing ?? this.paragraphSpacing,
       indent: indent ?? this.indent,
       justify: justify ?? this.justify,
+      fontFamily: fontFamily ?? this.fontFamily,
     );
   }
 }
@@ -53,6 +68,8 @@ class PageBlock {
     required this.text,
     required this.endsParagraph,
     required this.offset,
+    this.imageUrl,
+    this.imageHeight,
   });
 
   /// 段落下标，渲染时同段块之间不加段距。
@@ -66,6 +83,14 @@ class PageBlock {
 
   /// 本块首字符在整章纯文本中的偏移，用于恢复阅读进度。
   final int offset;
+
+  /// 正文内联图片的地址；为空表示这是普通文字块。
+  final String? imageUrl;
+
+  /// 内联图片在版面上占用的高度。
+  final double? imageHeight;
+
+  bool get isImage => imageUrl != null;
 }
 
 /// 一页。
@@ -103,6 +128,7 @@ List<PageSlice> paginate({
   required Size pageSize,
   required ReaderTypography typography,
   TextScaler textScaler = TextScaler.noScaling,
+  Map<int, String>? imageUrls,
 }) {
   if (paragraphs.isEmpty || pageSize.width <= 0 || pageSize.height <= 0) {
     return const [PageSlice(index: 0, blocks: [], startOffset: 0)];
@@ -111,6 +137,8 @@ List<PageSlice> paginate({
   final style = TextStyle(
     fontSize: typography.fontSize,
     height: typography.lineHeight,
+    fontFamily: typography.fontFamily,
+    fontFamilyFallback: AppTheme.fontFamilyFallback,
   );
   final builder = _PageBuilder(pageHeight: pageSize.height);
   final indentLength = typography.indent.length;
@@ -121,6 +149,24 @@ List<PageSlice> paginate({
     final paragraphStart = chapterOffset;
     // 段与段之间在纯文本里用 '\n' 分隔，偏移量按此累计。
     chapterOffset += raw.length + 1;
+
+    final imageUrl = imageUrls?[i];
+    if (imageUrl != null) {
+      // 图片占一个独立块：高度先定死，渲染严格按它裁切，
+      // 这样分页结果与页内图片不会互相挤压。
+      final height = typography.imageBlockHeight(pageSize.height);
+      builder.place(
+        paragraphIndex: i,
+        text: '',
+        lineHeight: height,
+        spacing: 0,
+        offset: paragraphStart,
+        endsParagraph: true,
+        imageUrl: imageUrl,
+        imageHeight: height,
+      );
+      continue;
+    }
 
     final display = raw.trim().isEmpty ? '' : '${typography.indent}$raw';
     final lines = _measureParagraph(
@@ -273,6 +319,8 @@ class _PageBuilder {
     required double spacing,
     required int offset,
     required bool endsParagraph,
+    String? imageUrl,
+    double? imageHeight,
   }) {
     // 本行放不下就换页；页内至少保留一行，避免「行高 > 版心」时死循环。
     if (_blocks.isNotEmpty && _used + lineHeight > pageHeight + 0.01) {
@@ -282,7 +330,9 @@ class _PageBuilder {
 
     // 同一段落的连续行合并成一个块：渲染时才能整体两端对齐，
     // 也避免每行一个 Text 造成的额外布局开销。
-    if (_blocks.isNotEmpty && _blocks.last.paragraphIndex == paragraphIndex) {
+    if (imageUrl == null &&
+        _blocks.isNotEmpty &&
+        _blocks.last.paragraphIndex == paragraphIndex) {
       final last = _blocks.removeLast();
       _blocks.add(
         PageBlock(
@@ -299,6 +349,8 @@ class _PageBuilder {
           text: text,
           endsParagraph: endsParagraph,
           offset: offset,
+          imageUrl: imageUrl,
+          imageHeight: imageHeight,
         ),
       );
     }

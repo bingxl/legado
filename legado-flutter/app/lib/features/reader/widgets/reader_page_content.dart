@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/image_url.dart';
 import '../pagination.dart';
 import '../reader_style.dart';
 
@@ -50,7 +51,7 @@ class ReaderPageContent extends StatelessWidget {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: _blocks(textStyle),
+                        children: _blocks(textStyle, width),
                       ),
                     ),
                   ),
@@ -67,19 +68,29 @@ class ReaderPageContent extends StatelessWidget {
     );
   }
 
-  List<Widget> _blocks(TextStyle textStyle) {
+  List<Widget> _blocks(TextStyle textStyle, double width) {
     final children = <Widget>[];
     for (final block in page.blocks) {
-      children.add(
-        Text(
-          block.text,
-          style: textStyle,
-          // 与分页测量用同一个对齐方式（见 ReaderTypography.justify）。
-          textAlign: style.align,
-          // 阅读器有自己的字号设置，不再叠加系统字体缩放，否则分页必然错位。
-          textScaler: TextScaler.noScaling,
-        ),
-      );
+      if (block.isImage) {
+        children.add(
+          _InlineImage(
+            url: block.imageUrl!,
+            width: width,
+            height: block.imageHeight ?? style.fontSize * 8,
+          ),
+        );
+      } else {
+        children.add(
+          Text(
+            block.text,
+            style: textStyle,
+            // 与分页测量用同一个对齐方式（见 ReaderTypography.justify）。
+            textAlign: style.align,
+            // 阅读器有自己的字号设置，不再叠加系统字体缩放，否则分页必然错位。
+            textScaler: TextScaler.noScaling,
+          ),
+        );
+      }
       if (block.endsParagraph) {
         children.add(SizedBox(height: style.paragraphSpacing));
       }
@@ -110,4 +121,54 @@ class ReaderPageContent extends StatelessWidget {
       ],
     );
   }
+}
+
+/// 正文中的内联图片。
+///
+/// 高度由分页阶段定死，这里只负责按同一高度显示；失败时给一个明确占位，
+/// 不能让一张挂掉的图片把整段正文从版面上抹掉。
+class _InlineImage extends StatelessWidget {
+  const _InlineImage({
+    required this.url,
+    required this.width,
+    required this.height,
+  });
+
+  final String url;
+  final double width;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final src = normalizeImageUrl(url);
+    if (src == null) {
+      return _placeholder(const Icon(Icons.image_not_supported_outlined, size: 22));
+    }
+    return SizedBox(
+      width: width,
+      height: height,
+      child: Image.network(
+        src,
+        headers: imageHeaders(src),
+        fit: BoxFit.contain,
+        width: width,
+        height: height,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.high,
+        errorBuilder: (context, error, stack) =>
+            _placeholder(const Icon(Icons.broken_image_outlined, size: 22)),
+      ),
+    );
+  }
+
+  Widget _placeholder(Widget icon) => SizedBox(
+    width: width,
+    height: height,
+    child: Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [icon, const SizedBox(height: 4), const Text('图片加载失败')],
+      ),
+    ),
+  );
 }
