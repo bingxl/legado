@@ -119,6 +119,7 @@ void main() {
                   onNextChapter: () {},
                   onStyleChanged: (_) {},
                   onSpeak: () {},
+                  onRefresh: () {},
                   onSeek: (_) {},
                 ),
               ),

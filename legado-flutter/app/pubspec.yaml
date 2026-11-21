@@ -18,6 +18,7 @@ dependencies:
   path: ^1.9.1
   cupertino_icons: ^1.0.8
   file_picker: ^13.4.0
+  flutter_tts: ^4.2.5
 
 dev_dependencies:
   flutter_test:

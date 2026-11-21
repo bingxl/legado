@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "pages": [
     "read",
     "theme",
@@ -165,6 +165,41 @@
           "title": "退出时询问加入书架",
           "desc": "从搜索/发现点开的书只管试读，默认不打扰；打开后退出时会问一次",
           "default": false
+        }
+      ]
+    },
+    {
+      "key": "cache",
+      "page": "general",
+      "title": "缓存",
+      "desc": "读到哪存到哪，预取的章节断网也能看",
+      "items": [
+        {
+          "key": "cache.autoCache",
+          "kind": "switch",
+          "title": "自动缓存",
+          "desc": "读完一章自动存入缓存，并按下面的数量往后预取",
+          "default": true
+        },
+        {
+          "key": "cache.preDownloadNum",
+          "kind": "slider",
+          "title": "预取章节数",
+          "desc": "当前章之后自动缓存多少章（0 表示只缓存读过的章）",
+          "default": 10,
+          "max": 50,
+          "step": 1,
+          "unit": "章"
+        },
+        {
+          "key": "cache.expireDays",
+          "kind": "slider",
+          "title": "缓存有效期",
+          "desc": "超过天数自动清理；0 表示永久保留。原版没有过期机制，这里是本实现的扩展",
+          "default": 0,
+          "max": 90,
+          "step": 1,
+          "unit": "天"
         }
       ]
     }

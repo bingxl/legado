@@ -3,6 +3,7 @@ import '../service/bookmark/bookmark_module.dart';
 import '../service/cache/cache_module.dart';
 import '../service/export/export_module.dart';
 import '../service/library/library_module.dart';
+import '../service/login/login_module.dart';
 import '../service/reader/reader_module.dart';
 import '../service/replacerule/replace_rule_module.dart';
 import '../service/rss/rss_module.dart';
@@ -36,6 +37,7 @@ List<CoreModule> buildModules() => [
   ReplaceRuleModule(),
   SourceModule(),
   SourceFetchModule(),
+  LoginModule(),
   RssModule(),
   WebDAVModule(),
   ExportModule(),

@@ -126,6 +126,10 @@ class _ChapterSheetState extends State<_ChapterSheet> {
                       final chapter = chapters[index];
                       final current = index == controller.chapterIndex;
                       final isVolume = chapter['isVolume'] == true;
+                      // 付费章 / VIP 章：书源写在 chapterList 的 `isPay` / `isVip`
+                      // 规则里，目录先标出来，免得点进去只看到空正文以为书源坏了。
+                      final isPay = chapter['isPay'] == true;
+                      final isVip = chapter['isVip'] == true;
                       final title = '${chapter['title'] ?? ''}';
                       return InkWell(
                         onTap: isVolume ? null : () => _open(index),
@@ -173,6 +177,30 @@ class _ChapterSheetState extends State<_ChapterSheet> {
                                   ),
                                 ),
                               ),
+                              if (isPay)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 6),
+                                  child: Tooltip(
+                                    message: '付费章节',
+                                    child: Icon(
+                                      Icons.shopping_cart_outlined,
+                                      size: 14,
+                                      color: scheme.error,
+                                    ),
+                                  ),
+                                )
+                              else if (isVip)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 6),
+                                  child: Tooltip(
+                                    message: 'VIP 章节',
+                                    child: Icon(
+                                      Icons.lock_outline,
+                                      size: 14,
+                                      color: scheme.outline,
+                                    ),
+                                  ),
+                                ),
                               if (current)
                                 Icon(
                                   Icons.play_arrow,

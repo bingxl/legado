@@ -67,16 +67,32 @@ abstract class RuleContext {
   /// 少了这些绑定会直接抛 `ReferenceError: "book" 未定义`。
   Map<String, Object?> get extraBindings => const {};
 
+  /// 书源 `jsLib` 里的公共函数库。
+  ///
+  /// 原版 Kotlin 把 jsLib 预置进 JS 全局作用域，书源规则里才能直接调
+  /// jsLib 定义的 `function getUrls(...)`。这里由 service 层把
+  /// `bookSource.jsLib` 传进来。
+  String get jsLib => '';
+
   /// 执行脚本，注入常用绑定。
   Future<Object?> evalJs(String script, Object? result) {
-    return js.eval(script, bindings: <String, Object?>{
+    final bindings = <String, Object?>{
       'result': result,
       'baseUrl': baseUrl,
       'source': source,
       'java': javaHost,
       ...extraBindings,
       ...variables,
-    });
+    };
+    final lib = jsLib.trim();
+    if (lib.isEmpty) return js.eval(script, bindings: bindings);
+    // 两个引擎都不跨 eval 共享作用域（QuickJS 每段脚本一个 worker，
+    // Dart 解释器每次新建 Interpreter），所以 jsLib 必须和脚本拼成同一段
+    // 执行单元，里面 `function` 声明才对后续语句可见。
+    //
+    // 代价是 JsException 里的行号按拼接后的脚本算，定位 jsLib 错误时
+    // 要减去 jsLib 的行数——比"规则里调不到函数"好排查得多。
+    return js.eval('$lib\n;\n$script', bindings: bindings);
   }
 }
 
@@ -104,10 +120,16 @@ class SimpleRuleContext extends RuleContext {
     this.baseUrl = '',
     Map<String, String>? variables,
     this.source,
-    this.javaHost,
+    Object? javaHost,
     this.extraBindings = const {},
+    this.jsLib = '',
   })  : js = js ?? const NoopJsEngine(),
-        variables = variables ?? <String, String>{};
+        variables = variables ?? <String, String>{},
+        // 不传 javaHost 时回落到「只含纯计算能力」的默认宿主。
+        // 传 null 也走这里：service 层用 `withJava: false` 断开递归，
+        // 断开的是带网络的宿主，不是把 `java` 整个变成 null ——
+        // 否则 jsLib 里 `java.base64Encode` 这类纯函数会一起失效。
+        javaHost = javaHost ?? _defaultJavaHost;
 
   @override
   final JsEngine js;
@@ -126,6 +148,9 @@ class SimpleRuleContext extends RuleContext {
 
   @override
   final Map<String, Object?> extraBindings;
+
+  @override
+  final String jsLib;
 }
 
 /// 规则片段中的一个参数（`{{js}}` / `@get:` / `$1` / 普通文本）。

@@ -5,7 +5,7 @@ description: Use when developing or modifying the Legado Android app (Kotlin): a
 
 # Legado Android App Development
 
-Kotlin Android app in `app/` (namespace `io.legado.app`). Java 17 toolchain, View Binding (no Compose), Room with KSP. Dependencies via Gradle version catalog `gradle/libs.versions.toml`.
+Kotlin Android app in `app/` (namespace `io.legado.app`). JDK 25 toolchain (bytecode target 17, see `AGENTS.md` → 构建环境), View Binding (no Compose), Room with KSP. Dependencies via Gradle version catalog `gradle/libs.versions.toml`.
 
 ## Build commands
 

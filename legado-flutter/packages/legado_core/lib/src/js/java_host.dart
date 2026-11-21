@@ -27,12 +27,17 @@ JsHostObject createJavaObject({
   Object? Function(String url)? get,
   Object? Function(String url, Object? body, Object? headers)? post,
   Object? Function(String url, Object? body, Object? headers)? connect,
+  Object? Function(List<String> urls)? ajaxAll,
   Object? Function(String rule)? getString,
   Object? Function(String rule)? getElements,
   Object? Function(String rule)? getList,
   Object? Function(String? msg)? toast,
   Object? Function(String? msg)? longToast,
   void Function(String msg)? onLog,
+  /// `java.getCookie(url[, key])`：读 CookieStore。返回 `''` 表示没有。
+  String? Function(String url, String? key)? getCookie,
+  /// 繁简转换（`t2s` 第二参为 true，`s2t` 为 false）。未注入时原样返回。
+  String Function(String text, {required bool toSimplified})? chineseConvert,
   Map<String, Object?>? variables,
   Map<String, Object?>? props,
   Map<String, Object? Function(List<Object?>)>? extraMethods,
@@ -79,6 +84,35 @@ JsHostObject createJavaObject({
           }
           return getString(args.isEmpty ? '' : jsToString(args[0]));
         },
+        'ajaxAll': (args) {
+          if (ajaxAll == null) {
+            throw JsException('java.ajaxAll 未接入网络层');
+          }
+          final raw = args.isEmpty ? null : args[0];
+          final urls = raw is List
+              ? [for (final e in raw) jsToString(e)]
+              : <String>[if (raw != null) jsToString(raw)];
+          return ajaxAll(urls);
+        },
+        'getCookie': (args) {
+          if (getCookie == null) {
+            throw JsException('java.getCookie 需要注入 CookieStore');
+          }
+          final url = args.isEmpty ? '' : jsToString(args[0]);
+          final key = args.length > 1 && args[1] != null
+              ? jsToString(args[1])
+              : null;
+          return getCookie(url, key) ?? '';
+        },
+        // 繁简转换：原版由 quick.transfer 的完整字表实现。这里没接字表时
+        // 原样返回 —— 书源拿它多用于标题/搜索词的字体归一，
+        // 退化成「不转换」比抛 ReferenceError 把整条规则打断要好。
+        't2s': (args) =>
+            chineseConvert?.call(_argStr(args), toSimplified: true) ??
+            _argStr(args),
+        's2t': (args) =>
+            chineseConvert?.call(_argStr(args), toSimplified: false) ??
+            _argStr(args),
         'getElements': (args) {
           if (getElements == null) {
             throw JsException('java.getElements 需要规则层注入');

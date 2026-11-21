@@ -142,6 +142,27 @@ class ShelfModule extends CoreModule {
     );
 
     registry.method(
+      'Shelf.SaveBook',
+      (args) async => shelf.saveBook(
+        _asInt(_arg(args, 0)),
+        name: _asText(_arg(args, 1)),
+        author: _asText(_arg(args, 2)),
+        coverUrl: _asText(_arg(args, 3)),
+        intro: _asText(_arg(args, 4)),
+        groupId: _asInt(_arg(args, 5)),
+      ),
+      params: const [
+        'bookID int',
+        'name string',
+        'author string',
+        'coverURL string',
+        'intro string',
+        'groupID int',
+      ],
+      doc: '编辑书名/作者/封面/简介/分组；groupID<0 不改，封面简介空串=回落书源值',
+    );
+
+    registry.method(
       'Shelf.DeleteGroup',
       (args) async {
         shelf.deleteGroup(_asInt(_arg(args, 0)));

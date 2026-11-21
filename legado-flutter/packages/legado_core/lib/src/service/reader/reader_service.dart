@@ -1,15 +1,19 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
 import '../../domain/domain.dart';
+import '../../format/comic_parser.dart';
 import '../../format/format.dart';
 import '../../format/text_codec.dart';
 import '../../format/txt_parser.dart';
 import '../../kernel/errors.dart';
 import '../../store/database.dart';
 import '../../store/store.dart';
+import '../replacerule/replacement_processor.dart';
+import '../setting/settings_service.dart';
 import '../shelf/shelf_service.dart';
 import '../source/source_fetch_service.dart';
 
@@ -22,20 +26,52 @@ class ReaderService {
     required StoreDaos daos,
     required ShelfService shelf,
     SourceFetchService? sourceFetch,
+    SettingsService? settings,
+    String homeDir = '',
   })  : _daos = daos,
         _shelf = shelf,
-        _sourceFetch = sourceFetch;
+        _sourceFetch = sourceFetch,
+        _settings = settings,
+        _homeDir = homeDir;
 
   final StoreDaos _daos;
   final ShelfService _shelf;
 
+  /// 设置域；为 null（CLI/测试未装配设置域）时用下面的内置默认值。
+  final SettingsService? _settings;
+
+  /// 数据目录：本地漫画解压出的图片缓存在 `<home>/cache/comic/<bookId>`。
+  final String _homeDir;
+
   /// 网络书正文抓取链路；为 null 时只支持本地书。
   final SourceFetchService? _sourceFetch;
+
+  /// 自动缓存的偏好值（键在 `settings/setting_schema.dart`）。
+  bool get _autoCache =>
+      (_settings?.value('cache.autoCache') ?? 'true') == 'true';
+
+  /// 预取章节数：当前章之后自动缓存多少章。0 只缓存读过的章。
+  int get _preDownloadNum =>
+      int.tryParse(_settings?.value('cache.preDownloadNum') ?? '10') ?? 10;
+
+  /// 缓存有效期（天）。0 = 永不过期（原版行为）。
+  int get _cacheExpireDays =>
+      int.tryParse(_settings?.value('cache.expireDays') ?? '0') ?? 0;
+
+  /// 替换净化（正文与标题都过一遍，口径与网络书一致）。
+  late final ReplacementProcessor _replacer =
+      ReplacementProcessor(_daos.replaceRule);
+
+  ReplacementTarget _targetOf(Book book) =>
+      ReplacementTarget(bookName: book.name, origin: book.origin);
 
   static const HtmlEscape _escape = HtmlEscape();
 
   List<Map<String, Object?>> getChapters(int bookId) {
     final book = _requireBook(bookId);
+    // 自愈：历史数据里 index 可能有空洞（见 BookChapterDao.renumberIfNeeded），
+    // 前端一律按列表下标取章节，序号不连续就会跳到错误的章。
+    _daos.chapter.renumberIfNeeded(book.bookUrl);
     return [
       for (final chapter in _daos.chapter.getChapterList(book.bookUrl))
         <String, Object?>{
@@ -43,6 +79,10 @@ class ReaderService {
           'title': _normalizeTitle(chapter.title),
           'url': chapter.url,
           'isVolume': chapter.isVolume,
+          // 付费/VIP 标记：目录里要给用户看得出哪章要买、哪章要会员，
+          // 否则点进去只看到空正文会以为是书源坏了。
+          if (chapter.isVip) 'isVip': true,
+          if (chapter.isPay) 'isPay': true,
           if (book.type & BookType.audio != 0 && chapter.end != null)
             'duration': chapter.end,
         },
@@ -51,10 +91,15 @@ class ReaderService {
 
   /// 取正文。
   ///
-  /// 本地书按「书 + 章节序号」从源文件读；网络书要经书源抓取，
-  /// 那条链路（rules/net/js → Source 域）还没接上，此时明确报 NOT_IMPLEMENTED，
-  /// 而不是返回空 html 让 UI 显示一页空白却查不出原因。
-  Future<Map<String, Object?>> getContent(int bookId, int index) async {
+  /// 本地书按「书 + 章节序号」从源文件读；网络书先查离线缓存，未命中才走书源抓取。
+  /// 抓到的新章节会按设置自动入库（`cache.autoCache`），并预取后续若干章。
+  ///
+  /// [refresh] 为 true 时跳过缓存强制联网（缓存管理页的「重新缓存」用）。
+  Future<Map<String, Object?>> getContent(
+    int bookId,
+    int index, {
+    bool refresh = false,
+  }) async {
     if (index < 0) {
       throw const LegadoException(ErrorCode.invalid, '章节序号不能为负');
     }
@@ -66,14 +111,66 @@ class ReaderService {
     final total = book.totalChapterNum > 0
         ? book.totalChapterNum
         : _daos.chapter.getChapterCount(book.bookUrl);
-    final (html, images) = await _contentOf(book, chapter);
+    _purgeExpiredCacheIfNeeded();
+
+    String html;
+    List<String> images;
+    String? fetchedTitle;
+    final cached = refresh ? null : _cacheHit(book, chapter);
+    if (cached != null) {
+      html = cached.html;
+      images = _decodeImages(cached.images);
+      fetchedTitle = cached.title.trim().isEmpty ? null : cached.title;
+    } else {
+      (String, List<String>, String?) rawContent;
+      try {
+        rawContent = await _contentOf(book, chapter);
+      } on LegadoException catch (e) {
+        // 付费/VIP 章抓不到正文是常态（书源本来就不给），别把「解析不出内容」
+        // 直接抛给用户当成故障；给一句说明，配上目录里的付费标记。
+        final paid = chapter.isPay || chapter.isVip;
+        if (!paid || e.code != ErrorCode.invalid) rethrow;
+        rawContent = (
+          '<p>本章为${chapter.isPay ? '付费' : 'VIP'}章节，书源未提供正文。</p>',
+          const <String>[],
+          null,
+        );
+      }
+      (html, images, fetchedTitle) = rawContent;
+      // refresh=true 是「用户明确要求重抓」（阅读器刷新正文、缓存管理页的
+      // Cache.Start），这类写入不受 cache.autoCache 约束，否则关掉自动缓存后
+      // 手动缓存会一直显示不出进度、下次读又回落到旧内容。
+      _autoCacheChapter(
+        book,
+        chapter,
+        html,
+        images,
+        fetchedTitle,
+        force: refresh,
+      );
+      _schedulePrefetch(book, index, total);
+    }
+
+    // `ruleContent.title`：标题只在正文页才完整的源（目录里是「第1章」或空串）。
+    // 解出来就回写 chapters.title，下一次打开目录/翻页都直接是正确标题。
+    var chapterTitle = chapter.title;
+    if (fetchedTitle != null &&
+        fetchedTitle.trim().isNotEmpty &&
+        fetchedTitle.trim() != chapter.title) {
+      chapterTitle = fetchedTitle.trim();
+      chapter.title = chapterTitle;
+      _daos.chapter.update(chapter);
+    }
 
     return <String, Object?>{
       'bookId': bookId,
       'index': index,
-      'title': _normalizeTitle(chapter.title),
+      'title': _replacer.title(_normalizeTitle(chapterTitle), _targetOf(book)),
       'html': html,
       'images': images,
+      if (cached != null) 'fromCache': true,
+      if (chapter.isVip) 'isVip': true,
+      if (chapter.isPay) 'isPay': true,
       'prevIndex': index > 0 ? index - 1 : -1,
       'nextIndex': index + 1 < total ? index + 1 : -1,
       'totalChapters': total,
@@ -88,6 +185,89 @@ class ReaderService {
     final book = _requireBook(bookId);
     return book.isLocal ? book.bookUrl : '';
   }
+
+  /// 取本地漫画的某一页：解压到缓存目录并返回文件路径。
+  ///
+  /// 为什么返回路径而不是字节：一页漫画动辄 1~2MB，走 JSON 控制面要 base64
+  /// 膨胀 33%，还会把整页塞进内存。落盘后 UI 直接用 `Image.file` 读，
+  /// 相邻页的预加载也交给 Flutter 的图片缓存。
+  ///
+  /// zip 每次都要重新解析（没有持久化索引）。这是有意的折中：解析 800 页
+  /// 的 zip 约 100~300ms，而缓存失效/换文件带来的「读到旧页」更难排查。
+  Future<Map<String, Object?>> getLocalPage(int bookId, int index) async {
+    if (index < 0) {
+      throw const LegadoException(ErrorCode.invalid, '页码不能为负');
+    }
+    final book = _requireBook(bookId);
+    if (!book.isLocal) {
+      throw const LegadoException(
+        ErrorCode.invalid,
+        '网络漫画请通过 Reader.GetContent 的 images 渲染',
+      );
+    }
+    final file = File(book.bookUrl);
+    if (!file.existsSync()) {
+      throw LegadoException(
+        ErrorCode.notFound,
+        '本地书源文件不存在: ${book.bookUrl}',
+      );
+    }
+    final parsed = await BookParser.parse(
+      await file.readAsBytes(),
+      fileName: p.basename(book.bookUrl),
+      charset: book.charset,
+    );
+    if (parsed.format != BookFormat.comic) {
+      throw LegadoException(
+        ErrorCode.invalid,
+        '该文件不是漫画包（zip/cbz）: ${book.bookUrl}',
+      );
+    }
+    if (index >= parsed.pages.length) {
+      throw LegadoException(
+        ErrorCode.notFound,
+        '页码超出范围: $index / ${parsed.pages.length}',
+      );
+    }
+    final page = parsed.pages[index];
+    final bytes = page.bytes();
+    if (bytes.isEmpty) {
+      throw LegadoException(ErrorCode.internal, '第 ${index + 1} 页解压为空');
+    }
+    final ext = _imageExtension(page.name);
+    final dir = Directory(p.join(_homeDir, 'cache', 'comic', '$bookId'));
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    final target = File(p.join(dir.path, '${index + 1}.$ext'));
+    // 长度相同就复用：漫画页内容几乎不会变，重复写盘只会拖慢翻页。
+    if (!target.existsSync() || target.lengthSync() != bytes.length) {
+      await target.writeAsBytes(bytes, flush: true);
+    }
+    return <String, Object?>{
+      'index': index,
+      'pageCount': parsed.pages.length,
+      'name': page.name,
+      'path': target.path,
+      'mime': _imageMime(ext),
+    };
+  }
+
+  /// 图片扩展名（小写，不含点）；不认识的按 jpg 存，Flutter 按内容也能解。
+  static String _imageExtension(String name) {
+    final dot = name.lastIndexOf('.');
+    if (dot < 0 || dot == name.length - 1) return 'jpg';
+    final ext = name.substring(dot + 1).toLowerCase();
+    return ComicParser.imageExtensions.contains(ext) ? ext : 'jpg';
+  }
+
+  static String _imageMime(String ext) => switch (ext) {
+        'png' => 'image/png',
+        'gif' => 'image/gif',
+        'webp' => 'image/webp',
+        'bmp' => 'image/bmp',
+        'avif' => 'image/avif',
+        'heic' => 'image/heic',
+        _ => 'image/jpeg',
+      };
 
   Map<String, Object?> getProgress(int bookId) => _shelf.getProgress(bookId);
 
@@ -160,11 +340,11 @@ class ReaderService {
     return book;
   }
 
-  Future<(String, List<String>)> _contentOf(
+  Future<(String, List<String>, String?)> _contentOf(
     Book book,
     BookChapter chapter,
   ) async {
-    if (chapter.isVolume) return ('', const <String>[]);
+    if (chapter.isVolume) return ('', const <String>[], null);
     if (!book.isLocal) {
       // 网络书：走书源抓取链路的正文规则。
       final fetch = _sourceFetch;
@@ -186,12 +366,14 @@ class ReaderService {
       final nextChapterUrl =
           _daos.chapter.getChapter(book.bookUrl, chapter.index + 1)?.url ??
           _daos.chapter.getChapter(book.bookUrl, 0)?.url;
-      return fetch.fetchContent(
+      final fetched = await fetch.fetchContent(
         source,
         book.bookUrl,
         chapter.url,
+        chapterTitle: chapter.title,
         nextChapterUrl: nextChapterUrl,
       );
+      return (fetched.html, fetched.images, fetched.title);
     }
     final file = File(book.bookUrl);
     if (!file.existsSync()) {
@@ -211,7 +393,11 @@ class ReaderService {
         book.charset,
       );
       final cleaned = TxtParser.cleanTxtChapterBody(raw, chapter.title);
-      return (_toHtml(cleaned), const <String>[]);
+      return (
+        _replacer.content(_toHtml(cleaned), _targetOf(book)),
+        const <String>[],
+        null,
+      );
     }
 
     final parsed = await BookParser.parse(
@@ -222,7 +408,7 @@ class ReaderService {
     if (parsed.format == BookFormat.comic) {
       throw const LegadoException(
         ErrorCode.notImplemented,
-        '漫画图片的数据面尚未接入',
+        '本地漫画请用漫画阅读器（Reader.GetLocalPage 逐页取图）',
       );
     }
     if (parsed.format == BookFormat.pdf) {
@@ -232,13 +418,162 @@ class ReaderService {
       return (
         '<p>PDF 文档（共 $pageCount 页），请在 PDF 阅读器中打开。</p>',
         const <String>[],
+        null,
       );
     }
     final target = parsed.chapters.length > chapter.index
         ? parsed.chapters[chapter.index]
         : (parsed.chapters.isEmpty ? null : parsed.chapters.last);
     final text = target?.readContent() ?? '';
-    return (_toHtml(text), const <String>[]);
+    return (
+      _replacer.content(_toHtml(text), _targetOf(book)),
+      const <String>[],
+      null,
+    );
+  }
+
+  // ---- 自动缓存 --------------------------------------------------------
+  //
+  // 对齐原版：`BookHelp.saveContent` 在读到哪存到哪（每章一个缓存文件），
+  // `ReadBook.preDownload` 在当前章 +2..+N、-2..-min(5,N) 的范围里预取。
+  // 差别只在存储：原版落 `downloadDir/cache/<book>/<chapter>` 文本文件，
+  // 这里落 `chapter_cache` 表（UI 的缓存管理页直接读它）。
+  //
+  // 原版**没有时间过期**：缓存只在「目录 URL 变了」或用户手动清理时失效。
+  // `cache.expireDays` 是本实现的扩展，默认 0（永不过期）。
+
+  /// 预取队列（key 是 bookUrl）；同一本书串行抓，不并发打源。
+  final Map<String, List<int>> _prefetchQueue = <String, List<int>>{};
+  final Set<String> _prefetchRunning = <String>{};
+  bool _cachePurged = false;
+  bool _closed = false;
+
+  /// 停掉后台预取（模块 close 时调）。已经排队的任务直接丢弃。
+  Future<void> close() async {
+    _closed = true;
+    _prefetchQueue.clear();
+  }
+
+  /// 命中条件：同序号同 URL 且正文非空。目录改版后章节换地址时，
+  /// 旧缓存必须当作未命中，否则读到的是上一版内容。
+  CachedChapter? _cacheHit(Book book, BookChapter chapter) {
+    if (book.isLocal || chapter.isVolume) return null;
+    final cached = _daos.chapterCache.get(book.bookUrl, chapter.index);
+    if (cached == null || cached.html.trim().isEmpty) return null;
+    if (cached.url.isNotEmpty &&
+        chapter.url.isNotEmpty &&
+        cached.url != chapter.url) {
+      return null;
+    }
+    return cached;
+  }
+
+  List<String> _decodeImages(String json) {
+    if (json.trim().isEmpty) return const <String>[];
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is List) return [for (final item in decoded) '$item'];
+    } on FormatException {
+      // 坏数据当作没有图片，不能让整章打不开。
+    }
+    return const <String>[];
+  }
+
+  /// 把刚读完的一章写进缓存。付费/VIP 章与空正文不写。
+  void _autoCacheChapter(
+    Book book,
+    BookChapter chapter,
+    String html,
+    List<String> images,
+    String? title, {
+    bool force = false,
+  }) {
+    if (!force && !_autoCache) return;
+    if (book.isLocal || chapter.isVolume) return;
+    if (chapter.isPay || chapter.isVip) return;
+    if (html.trim().isEmpty) return;
+    final imageJson = jsonEncode(images);
+    _daos.chapterCache.put(
+      CachedChapter(
+        bookUrl: book.bookUrl,
+        index: chapter.index,
+        title: (title ?? chapter.title).trim(),
+        url: chapter.url,
+        html: html,
+        images: imageJson,
+        size: utf8.encode(html).length + utf8.encode(imageJson).length,
+        createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      ),
+    );
+  }
+
+  /// 按 `cache.expireDays` 清理过期缓存；一个进程只扫一次。
+  void _purgeExpiredCacheIfNeeded() {
+    if (_cachePurged) return;
+    _cachePurged = true;
+    final days = _cacheExpireDays;
+    if (days <= 0) return;
+    try {
+      _daos.chapterCache.purgeExpired(days);
+    } on Object {
+      // 清理失败不该影响阅读；下次进程启动再试。
+    }
+  }
+
+  /// 排入预取任务（原版 `ReadBook.preDownload` 的章节范围）。
+  void _schedulePrefetch(Book book, int currentIndex, int total) {
+    if (!_autoCache) return;
+    if (book.isLocal) return;
+    final num = _preDownloadNum;
+    if (num < 1 || total <= 0) return;
+
+    final queue = _prefetchQueue.putIfAbsent(book.bookUrl, () => <int>[]);
+    void add(int index) {
+      if (index < 0 || index >= total || index == currentIndex) return;
+      if (!queue.contains(index)) queue.add(index);
+    }
+
+    // 往后：跳过后一章（很可能是正在预加载的下一章），对齐原版 `+2..+N`。
+    final end = currentIndex + num < total - 1 ? currentIndex + num : total - 1;
+    for (var i = currentIndex + 2; i <= end; i++) {
+      add(i);
+    }
+    // 往前回补，最多 5 章（原版 `-min(5, preDownloadNum)`）。
+    final back = num < 5 ? num : 5;
+    for (var i = currentIndex - 2; i >= currentIndex - back; i--) {
+      add(i);
+    }
+
+    if (_prefetchRunning.contains(book.bookUrl)) return;
+    unawaited(_runPrefetch(book));
+  }
+
+  /// 预取 worker：单书串行，命中缓存就跳过；单章失败不重试（下次阅读会再排）。
+  Future<void> _runPrefetch(Book book) async {
+    final key = book.bookUrl;
+    _prefetchRunning.add(key);
+    try {
+      // 开关只在这里读一次：预取过程中改设置不需要立刻生效，少查一次库。
+      while (!_closed) {
+        final queue = _prefetchQueue[key];
+        if (queue == null || queue.isEmpty) break;
+        final index = queue.removeAt(0);
+        try {
+          final chapter = _daos.chapter.getChapter(key, index);
+          if (chapter == null || chapter.isVolume) continue;
+          if (_cacheHit(book, chapter) != null) continue;
+          final (html, images, title) = await _contentOf(book, chapter);
+          _autoCacheChapter(book, chapter, html, images, title);
+        } on Object {
+          // 单章失败继续下一章；原版也是重试 3 次后放弃。
+          // 库已关闭/模块已卸载时这里也会抛，直接退出循环。
+          if (_closed) break;
+        }
+      }
+    } finally {
+      _prefetchRunning.remove(key);
+      _prefetchQueue.remove(key);
+    }
   }
 
   /// 本地书是不是 txt：优先用入库时的 kind/charset，再回落到扩展名。

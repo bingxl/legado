@@ -1081,6 +1081,29 @@ int _siblingCount(dom.Element e) {
   return parent.nodes.whereType<dom.Element>().length;
 }
 
+/// jsoup `:nth-child` 语义：支持整数、`odd`/`even` 与 `an+b` 表达式。
+///
+/// `an+b` 里的 `a` 允许负数（`-n+3` 表示前 3 个），`b` 可省略。
+bool _matchNth(String? arg, int index1) {
+  final text = (arg ?? '').trim().toLowerCase().replaceAll(' ', '');
+  if (text.isEmpty) return false;
+  if (text == 'odd') return index1.isOdd;
+  if (text == 'even') return index1.isEven;
+  final plain = int.tryParse(text);
+  if (plain != null) return plain > 0 && index1 == plain;
+  final m = RegExp(r'^([+-]?\d*)n([+-]\d+)?$').firstMatch(text);
+  if (m == null) return false;
+  final aText = m.group(1) ?? '';
+  final a = aText.isEmpty || aText == '+'
+      ? 1
+      : (aText == '-' ? -1 : int.tryParse(aText) ?? 1);
+  final b = int.tryParse(m.group(2) ?? '') ?? 0;
+  if (a == 0) return index1 == b;
+  final diff = index1 - b;
+  if (diff % a != 0) return false;
+  return diff ~/ a >= 0;
+}
+
 bool _matchesPseudo(dom.Element element, String name, String? arg) {
   switch (name) {
     case 'first-child':
@@ -1090,9 +1113,9 @@ bool _matchesPseudo(dom.Element element, String name, String? arg) {
     case 'only-child':
       return _siblingCount(element) == 1;
     case 'nth-child':
-      final n = int.tryParse((arg ?? '').trim());
-      if (n == null || n <= 0) return false;
-      return _siblingIndex(element) == n - 1;
+      return _matchNth(arg, _siblingIndex(element) + 1);
+    case 'nth-last-child':
+      return _matchNth(arg, _siblingCount(element) - _siblingIndex(element));
     case 'first':
       return _siblingIndex(element) == 0;
     case 'last':
@@ -1122,14 +1145,40 @@ bool _matchesPseudo(dom.Element element, String name, String? arg) {
       return jsoupOwnText(element)
           .toLowerCase()
           .contains((arg ?? '').toLowerCase());
+    case 'containswholetext':
+      return jsoupText(element).contains(arg ?? '');
+    case 'containswholeowntext':
+      return jsoupOwnText(element).contains(arg ?? '');
     case 'matches':
       try {
         return RegExp(arg ?? '').hasMatch(jsoupText(element));
       } catch (_) {
         return false;
       }
+    case 'matchesown':
+      try {
+        return RegExp(arg ?? '').hasMatch(jsoupOwnText(element));
+      } catch (_) {
+        return false;
+      }
     case 'has':
       return selectElements(element, arg ?? '').isNotEmpty;
+    case 'hasown':
+      for (final g in splitTopLevel(arg ?? '', ',')) {
+        final selector = g.trim();
+        if (selector.isEmpty) continue;
+        for (final child in element.children) {
+          if (_matchesSelectorText(child, selector)) return true;
+        }
+      }
+      return false;
+    case 'is':
+      for (final g in splitTopLevel(arg ?? '', ',')) {
+        final selector = g.trim();
+        if (selector.isEmpty) continue;
+        if (_matchesSelectorText(element, selector)) return true;
+      }
+      return false;
     case 'not':
       for (final g in splitTopLevel(arg ?? '', ',')) {
         if (g.trim().isEmpty) continue;

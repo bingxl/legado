@@ -38,6 +38,7 @@ export 'http_client.dart'
         sanitizeUri,
         splitSetCookieHeader;
 export 'rate_limiter.dart';
+export 'source_rate_gate.dart';
 
 /// 面向业务的门面：把 cookie / 限流 / 反爬 / 编码几件事组装好。
 ///

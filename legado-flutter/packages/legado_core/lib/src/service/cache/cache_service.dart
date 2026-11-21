@@ -92,7 +92,9 @@ class CacheService {
       if (chapter == null) continue;
       job.message = chapter.title;
       try {
-        final content = await _reader.getContent(job.bookId, index);
+        // refresh：手动缓存要拿「当前」正文，不能被上一次自动缓存的旧内容骗过去
+        // （站点改错字/换图后，用户点「重新缓存」就是想刷新）。
+        final content = await _reader.getContent(job.bookId, index, refresh: true);
         final html = '${content['html'] ?? ''}';
         final images = content['images'];
         final imageJson = jsonEncode(images is List ? images : const []);

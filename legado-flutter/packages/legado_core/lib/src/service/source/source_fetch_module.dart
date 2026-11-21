@@ -40,7 +40,11 @@ class SourceFetchModule extends CoreModule {
     if (store == null) throw StateError('source 抓取链路依赖 store');
     final shelf = ShelfModule.instance;
     if (shelf == null) throw StateError('source 抓取链路依赖 shelf');
-    final fetch = SourceFetchService(daos: store.daos, shelf: shelf.service);
+    final fetch = SourceFetchService(
+      daos: store.daos,
+      shelf: shelf.service,
+      homeDir: ctx.homeDir,
+    );
     _fetch = fetch;
     instance = this;
 
@@ -126,6 +130,16 @@ class SourceFetchModule extends CoreModule {
       ),
       params: const ['urls string', 'groupID int'],
       doc: '多行 URL；按域名/bookUrlPattern 匹配书源后解析入库',
+    );
+    registry.method(
+      'Source.ChangeSource',
+      (args) async => fetch.changeSource(
+        asInt(arg(args, 0)),
+        asInt(arg(args, 1)),
+        asText(arg(args, 2)),
+      ),
+      params: const ['bookID int', 'sourceID int', 'bookURL string'],
+      doc: '换源：重建目录并按章节序号保留进度；bookURL 空则沿用原地址',
     );
     registry.method(
       'Source.AddToShelf',

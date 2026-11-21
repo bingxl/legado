@@ -39,7 +39,8 @@ class StoreDaos {
         readingProgress = ReadingProgressDao(db),
         bookmarkItem = BookmarkItemDao(db),
         recordItem = RecordItemDao(db),
-        chapterCache = ChapterCacheDao(db);
+        chapterCache = ChapterCacheDao(db),
+        sourceLogin = SourceLoginDao(db);
 
   /// 服务层做跨 DAO 事务时用。
   final Database db;
@@ -72,6 +73,9 @@ class StoreDaos {
   final BookmarkItemDao bookmarkItem;
   final RecordItemDao recordItem;
   final ChapterCacheDao chapterCache;
+
+  /// 书源登录态（粘贴的请求头、登录回执）。
+  final SourceLoginDao sourceLogin;
 }
 
 /// 存储模块。

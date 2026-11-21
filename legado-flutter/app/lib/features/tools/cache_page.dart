@@ -88,6 +88,26 @@ class _CachePageState extends State<CachePage> {
     );
   }
 
+  /// 手动补缓存：自动缓存只覆盖读过的章与预取的窗口，
+  /// 想整本离线就得点这里（对应原版 CacheActivity 的「缓存全书」）。
+  Future<void> _cacheBook(Map<String, dynamic> book) async {
+    final name = _bookName(book);
+    await _run(
+      () => ToolsApi.cacheStart(toolsInt(book['bookId']), 'missing'),
+      '已开始缓存《$name》未缓存的章节',
+    );
+  }
+
+  /// 全部重新缓存：已缓存的章也重抓一遍（`Cache.Start` 内部走 refresh，
+  /// 不会命中旧缓存）。书源修了正文、或缓存里是防爬占位页时用这个。
+  Future<void> _recacheBook(Map<String, dynamic> book) async {
+    final name = _bookName(book);
+    await _run(
+      () => ToolsApi.cacheStart(toolsInt(book['bookId']), 'all'),
+      '已开始重新缓存《$name》全部章节',
+    );
+  }
+
   Future<void> _cancel(Map<String, dynamic> book) async {
     final name = _bookName(book);
     await _run(
@@ -280,6 +300,10 @@ class _CachePageState extends State<CachePage> {
               tooltip: '更多',
               onSelected: (action) {
                 switch (action) {
+                  case _BookAction.cache:
+                    _cacheBook(book);
+                  case _BookAction.recache:
+                    _recacheBook(book);
                   case _BookAction.chapters:
                     _openChapters(book);
                   case _BookAction.purge:
@@ -289,6 +313,16 @@ class _CachePageState extends State<CachePage> {
                 }
               },
               itemBuilder: (_) => [
+                if (!running)
+                  const PopupMenuItem(
+                    value: _BookAction.cache,
+                    child: Text('缓存未缓存章节'),
+                  ),
+                if (!running)
+                  const PopupMenuItem(
+                    value: _BookAction.recache,
+                    child: Text('全部重新缓存'),
+                  ),
                 const PopupMenuItem(
                   value: _BookAction.chapters,
                   child: Text('查看已缓存章节'),
@@ -369,7 +403,7 @@ class _CachePageState extends State<CachePage> {
   }
 }
 
-enum _BookAction { chapters, purge, cancel }
+enum _BookAction { cache, recache, chapters, purge, cancel }
 
 class _StatCell extends StatelessWidget {
   const _StatCell({required this.value, required this.label});

@@ -2,6 +2,7 @@ import '../../kernel/errors.dart';
 import '../../kernel/module.dart';
 import '../../kernel/registry.dart';
 import '../../store/store.dart';
+import '../setting/settings_module.dart';
 import '../shelf/shelf_module.dart';
 import '../source/source_fetch_module.dart';
 import 'reader_service.dart';
@@ -42,6 +43,10 @@ class ReaderModule extends CoreModule {
       daos: store.daos,
       shelf: shelf.service,
       sourceFetch: sourceFetch?.service,
+      // 设置域在自己的依赖之前注册（见 modules.dart），这里直接取同一个实例；
+      // 未装配（CLI 精简模式/单测）时为 null，阅读器用内置默认值。
+      settings: SettingsModule.instance?.service,
+      homeDir: ctx.homeDir,
     );
     _service = reader;
     instance = this;
@@ -58,9 +63,11 @@ class ReaderModule extends CoreModule {
       (args) async => reader.getContent(
         _asInt(_arg(args, 0)),
         _asInt(_arg(args, 1)),
+        refresh: _arg(args, 2) == true,
       ),
-      params: const ['bookID int', 'index int'],
-      doc: '章节正文 + 上下章序号；支持本地 txt/epub/umd，PDF 返回阅读提示',
+      params: const ['bookID int', 'index int', 'refresh bool?'],
+      doc: '章节正文 + 上下章序号；网络书优先读离线缓存，refresh=true 强制联网；'
+          '支持本地 txt/epub/umd，PDF 返回阅读提示',
     );
 
     registry.method(
@@ -68,6 +75,16 @@ class ReaderModule extends CoreModule {
       (args) async => reader.getLocalFilePath(_asInt(_arg(args, 0))),
       params: const ['bookID int'],
       doc: '本地书源文件绝对路径，供 UI 用平台渲染器打开 PDF；网络书返回空串',
+    );
+
+    registry.method(
+      'Reader.GetLocalPage',
+      (args) async => reader.getLocalPage(
+        _asInt(_arg(args, 0)),
+        _asInt(_arg(args, 1)),
+      ),
+      params: const ['bookID int', 'index int'],
+      doc: '本地漫画单页：解压到 <home>/cache/comic 并返回 path/mime/pageCount',
     );
 
     registry.method(
@@ -112,6 +129,9 @@ class ReaderModule extends CoreModule {
 
   @override
   Future<void> close() async {
+    // 先停自动缓存的预取 worker：它还握着数据库句柄，
+    // 走完再 close 会在已经关掉的库上查询。
+    await _service?.close();
     _service = null;
     if (identical(instance, this)) instance = null;
   }

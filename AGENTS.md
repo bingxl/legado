@@ -17,6 +17,33 @@ Legado is an Android novel/ebook reader app (Kotlin). It includes a Vue 3 web UI
 
 ## Build Commands
 
+### 构建环境（Java 25 / Gradle 9.2.1）
+
+2026-11 起本仓库统一用 **JDK 25** 构建，版本组合已实测通过（app APK、cli、Flutter APK）：
+
+| 组件 | 版本 | 说明 |
+|---|---|---|
+| JDK | 25 | Gradle daemon 与所有编译任务都用它 |
+| Gradle | 9.2.1 | Java 25 运行 Gradle 的最低要求是 9.1 |
+| AGP | 8.13.2 | 8.x 末代；Gradle 9 上可用（官方只对 9.x 测 AGP 9.x，故不再往上） |
+| Kotlin | 2.4.21 | 支持 Gradle ≤9.7 / AGP ≤9.3 |
+| KSP | 2.3.12 | KSP2 独立版本号，与 Kotlin 版本解耦 |
+
+- **daemon JVM 由仓库固定**：`gradle/gradle-daemon-jvm.properties`（`toolchainVersion=25`）。
+  `JAVA_HOME` 指向别的版本也不会偷偷换 JDK；换机器只需装任一 JDK 25。
+  该文件是手写的 —— `gradle updateDaemonJvm` 要求先在 `settings.gradle` 配 foojay 下载仓库，
+  本项目不需要自动下载 JDK。
+- **字节码目标不要跟着提到 25**：Android 模块（`app`、`modules/*`）必须保持
+  `sourceCompatibility/targetCompatibility = 17` + `jvmTarget = JVM_17`。
+  D8/AGP 8.x 不认 class file 69，dex 阶段会直接失败。
+  注意 `jvmToolchain(25)` 会把 Kotlin 的默认 `jvmTarget` 也带到 25，必须显式钉回 17，
+  否则报 `Inconsistent JVM-target compatibility ... (17) and (25)`。
+- `cli` 是纯 JVM 模块，产物就是 **class file 69**，运行需要 JDK 25
+  （`JAVA_HOME` 或 PATH 上的 java 必须是 25）。
+- Flutter 宿主 `legado-flutter/app/android` 用同一套版本（Gradle 9.2.1 / AGP 8.13.2 / Kotlin 2.4.21），
+  也有自己的 `gradle/gradle-daemon-jvm.properties`。Kotlin 2.3 起 `kotlinOptions` 已移除，
+  用 project 作用域的 `kotlin { compilerOptions { jvmTarget } }`。
+
 ### Android App (Gradle)
 - `./gradlew assembleAppDebug` — debug APK
 - `./gradlew assembleAppRelease` — release APK (requires signing keys in `gradle.properties`)
@@ -25,7 +52,8 @@ Legado is an Android novel/ebook reader app (Kotlin). It includes a Vue 3 web UI
 - Cronet update: `./gradlew app:downloadCronet` (update `CronetVersion` in `gradle.properties` first)
 
 ### Desktop CLI (cli)
-Pure-JVM module that reuses the book-source rule engine sources from `app/`. Requires JDK 17+.
+Pure-JVM module that reuses the book-source rule engine sources from `app/`.
+编译用 JDK 25、产物目标 25（class file 69），因此运行环境也必须是 JDK 25。
 - `./gradlew :cli:run --args="selftest"` — verify CSS/XPath/JSONPath/JS rule execution on desktop JVM
 - `./gradlew :cli:installDist` — build runnable distribution at `cli/build/install/legado-cli/bin/`
 - CLI commands (run the built binary, or via `:cli:run --args="..."`):
@@ -335,7 +363,7 @@ scrcpy **≤ 3.3.2 在 Android 16+ 上创建虚拟显示会直接崩**，服务�
 
 ## Conventions
 
-- Kotlin with Java 17 toolchain
+- Kotlin with JDK 25 toolchain, bytecode target 17（Android/D8 上限，见「构建环境」）
 - Room database with KSP annotation processing (schemas in `app/schemas/`)
 - View Binding enabled (not Compose)
 - Dependencies managed via Gradle version catalog (`gradle/libs.versions.toml`)

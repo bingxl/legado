@@ -55,3 +55,10 @@ package-lock.json
 
 # CLI 一次性调试脚本
 /legado-flutter/packages/legado_cli/bin/tmp_*.dart
+
+# 通用系统/编辑器临时文件（跨平台）
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~

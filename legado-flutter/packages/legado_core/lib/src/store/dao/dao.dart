@@ -26,4 +26,5 @@ export 'search_book_dao.dart';
 export 'search_keyword_dao.dart';
 export 'server_dao.dart';
 export 'settings_dao.dart';
+export 'source_login_dao.dart';
 export 'txt_toc_rule_dao.dart';

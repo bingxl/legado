@@ -10,6 +10,8 @@ import 'package:legado_core/src/service/shelf/shelf_module.dart';
 import 'package:legado_core/src/store/store.dart';
 import 'package:test/test.dart';
 
+import '../../format/support/fixtures.dart';
+
 /// 阅读器域测试：目录、本地 txt 正文、进度委托、大纲整表回写。
 /// 网络书正文要等 Source 域，这里只验证它明确报 NOT_IMPLEMENTED。
 void main() {
@@ -88,7 +90,7 @@ void main() {
     return (store.daos.book.idOf(file.path)!, file.path);
   }
 
-  test('依赖声明与 6 个方法', () {
+  test('依赖声明与 7 个方法', () {
     expect(reader.name, 'reader');
     expect(reader.dependsOn, containsAll(<String>['store', 'shelf']));
     expect(
@@ -97,6 +99,7 @@ void main() {
         'Reader.GetChapters',
         'Reader.GetContent',
         'Reader.GetLocalFile',
+        'Reader.GetLocalPage',
         'Reader.GetProgress',
         'Reader.SaveProgress',
         'Reader.SyncOutline',
@@ -186,6 +189,94 @@ void main() {
 
     await expectLater(
       call('Reader.SyncOutline', [id, const []]),
+      throwsA(isA<LegadoException>().having((e) => e.code, 'code', ErrorCode.invalid)),
+    );
+  });
+
+  test('本地漫画：GetLocalPage 逐页解压落盘并给出 mime', () async {
+    final cbz = File('${home.path}/comic.cbz');
+    cbz.writeAsBytesSync(
+      buildZip({
+        'p1.jpg': [0xFF, 0xD8, 0x01, 0x02],
+        'p10.jpg': [0xFF, 0xD8, 0x03],
+        'p2.png': [0x89, 0x50, 0x4E, 0x47],
+        '__MACOSX/._p1.jpg': [0x00],
+      }),
+    );
+    store.daos.book.insert(
+      Book(
+        bookUrl: cbz.path,
+        name: '样例漫画',
+        origin: BookType.localTag,
+        type: BookType.local | BookType.image,
+      ),
+    );
+    final id = store.daos.book.idOf(cbz.path)!;
+
+    final first = await call('Reader.GetLocalPage', [id, 0]) as Map<String, Object?>;
+    expect(first['index'], 0);
+    // __MACOSX 垃圾条目被过滤，剩 p1/p2/p10 三页
+    expect(first['pageCount'], 3);
+    expect(first['name'], 'p1.jpg');
+    expect(first['mime'], 'image/jpeg');
+    final page = File(first['path']! as String);
+    expect(page.existsSync(), isTrue);
+    expect(page.readAsBytesSync(), [0xFF, 0xD8, 0x01, 0x02]);
+    final sep = Platform.pathSeparator;
+    expect(page.parent.path, endsWith('${sep}comic${sep}$id'));
+
+    // 自然排序：p10 排在 p2 之后
+    final png = await call('Reader.GetLocalPage', [id, 1]) as Map<String, Object?>;
+    expect(png['name'], 'p2.png');
+    expect(png['mime'], 'image/png');
+    final tenth = await call('Reader.GetLocalPage', [id, 2]) as Map<String, Object?>;
+    expect(tenth['name'], 'p10.jpg');
+  });
+
+  test('GetLocalPage：非漫画包 / 越界 / 网络书 / 负页码各自报错', () async {
+    final (txtId, _) = makeLocalBook();
+    await expectLater(
+      call('Reader.GetLocalPage', [txtId, 0]),
+      throwsA(
+        isA<LegadoException>()
+            .having((e) => e.code, 'code', ErrorCode.invalid)
+            .having((e) => e.message, 'message', contains('不是漫画包')),
+      ),
+    );
+
+    final cbz = File('${home.path}/one.cbz');
+    cbz.writeAsBytesSync(buildZip({'1.jpg': [0xFF, 0xD8]}));
+    store.daos.book.insert(
+      Book(
+        bookUrl: cbz.path,
+        name: '一页漫画',
+        origin: BookType.localTag,
+        type: BookType.local | BookType.image,
+      ),
+    );
+    final comicId = store.daos.book.idOf(cbz.path)!;
+    await expectLater(
+      call('Reader.GetLocalPage', [comicId, 1]),
+      throwsA(isA<LegadoException>().having((e) => e.code, 'code', ErrorCode.notFound)),
+    );
+    await expectLater(
+      call('Reader.GetLocalPage', [comicId, -1]),
+      throwsA(isA<LegadoException>().having((e) => e.code, 'code', ErrorCode.invalid)),
+    );
+
+    store.daos.book.insert(
+      Book(
+        bookUrl: 'https://example.test/comic',
+        name: '网络漫画',
+        origin: 'https://example.test/s',
+        type: BookType.image,
+      ),
+    );
+    await expectLater(
+      call('Reader.GetLocalPage', [
+        store.daos.book.idOf('https://example.test/comic')!,
+        0,
+      ]),
       throwsA(isA<LegadoException>().having((e) => e.code, 'code', ErrorCode.invalid)),
     );
   });

@@ -50,6 +50,16 @@ class ToolsApi {
   static Future<void> cacheCancel(int bookId) =>
       _c.call('Cache.Cancel', [bookId]);
 
+  /// 启动缓存任务（立即回执，进度看 `Cache.Books` 里的 `job`）。
+  ///
+  /// [scope]：`all` 整本 / `remaining` 当前进度之后 / `missing` 只补没缓存的
+  /// （阅读时的自动缓存会留下空洞，用这个补齐最省流量）。
+  static Future<void> cacheStart(
+    int bookId,
+    String scope, {
+    List<int> indexes = const [],
+  }) => _c.call('Cache.Start', [bookId, scope, indexes]);
+
   // ── 书签 ────────────────────────────────────────────────
 
   /// bookId=0 表示全部，按创建时间倒序。

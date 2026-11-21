@@ -102,5 +102,28 @@ class ChapterCacheDao {
   void deleteByBook(String bookUrl) =>
       _db.execute('delete from `$_table` where `bookUrl` = ?', [bookUrl]);
 
+  /// 删除超过 [days] 天的缓存，返回删除条数。
+  ///
+  /// 原版 Kotlin 的章节缓存**没有时间过期**，只有「目录 URL 变了视为失效」
+  /// 与手动清理；这里的 TTL 是本实现的扩展，默认 0（永不过期）。
+  int purgeExpired(int days, {int? nowSeconds}) {
+    if (days <= 0) return 0;
+    final now = nowSeconds ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final before = now - days * 86400;
+    final rows = _db.select(
+      'select count(*) as c from `$_table` '
+      'where `created_at` > 0 and `created_at` < ?',
+      [before],
+    );
+    final count = rows.isEmpty ? 0 : asInt(rows.first['c']);
+    if (count > 0) {
+      _db.execute(
+        'delete from `$_table` where `created_at` > 0 and `created_at` < ?',
+        [before],
+      );
+    }
+    return count;
+  }
+
   void clear() => _db.execute('delete from `$_table`');
 }

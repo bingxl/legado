@@ -142,9 +142,73 @@ class SourceApi {
     return _c.callList('Source.Search', [id, keyword, page]);
   }
 
+  /// 全源搜索（换源时找同名书的其它来源）。
+  static Future<List<Map<String, dynamic>>> searchAll(
+    String keyword, {
+    int page = 1,
+  }) {
+    return _c.callList('Source.SearchAll', [keyword, page]);
+  }
+
   /// 当前是否有调试会话在跑（core 的 SourceDebug 只暴露了 Running）。
   static Future<Map<String, dynamic>> debugRunning() async {
     final data = await _c.call('SourceDebug.Running');
+    return _jsonMap(data);
+  }
+
+  // ── 登录 ────────────────────────────────────────────────
+
+  /// 登录面板信息（登录方式、表单字段、是否已有 cookie、粘贴的请求头）。
+  static Future<Map<String, dynamic>> loginProfile(int sourceId) async {
+    final data = await _c.call('SourceLogin.Profile', [sourceId]);
+    return _jsonMap(data);
+  }
+
+  /// 登录。`kind=page` 时返回的 `openUrl` 需要用户自己去浏览器打开。
+  static Future<Map<String, dynamic>> login(
+    int sourceId,
+    Map<String, String> form,
+  ) async {
+    final data = await _c.call('SourceLogin.Login', [sourceId, form]);
+    return _jsonMap(data);
+  }
+
+  /// 执行 `loginUi` 里的自定义按钮。
+  static Future<Map<String, dynamic>> runLoginAction(
+    int sourceId,
+    String action,
+    Map<String, String> form,
+  ) async {
+    final data = await _c.call('SourceLogin.RunAction', [
+      sourceId,
+      action,
+      form,
+    ]);
+    return _jsonMap(data);
+  }
+
+  /// 保存粘贴的请求头；空串表示清除。
+  static Future<Map<String, dynamic>> saveLoginHeader(
+    int sourceId,
+    String header,
+  ) async {
+    final data = await _c.call('SourceLogin.SaveHeader', [sourceId, header]);
+    return _jsonMap(data);
+  }
+
+  /// 粘贴的请求头原文。
+  static Future<String> loginHeader(int sourceId) async =>
+      '${await _c.call('SourceLogin.Header', [sourceId])}';
+
+  static Future<void> clearLogin(int sourceId, bool withForm) =>
+      _c.call('SourceLogin.Clear', [sourceId, withForm]);
+
+  /// 探测当前账号是否需要登录。
+  static Future<Map<String, dynamic>> checkLogin(
+    int sourceId,
+    String probeUrl,
+  ) async {
+    final data = await _c.call('SourceLogin.Check', [sourceId, probeUrl]);
     return _jsonMap(data);
   }
 

@@ -47,6 +47,13 @@ class ReaderController extends ChangeNotifier {
   String get bookTitle =>
       _bookTitle.isNotEmpty ? _bookTitle : (initialBookName ?? '阅读');
 
+  /// 书籍地址（网络书是书源详情页，本地书是文件路径）。
+  ///
+  /// 只有「复制地址」用得到，所以顺手从 `Shelf.GetBook`（本来就要调它取书名）
+  /// 里带回来，不为它多发一次请求。
+  String _bookUrl = '';
+  String get bookUrl => _bookUrl;
+
   List<String> _paragraphs = const [];
 
   /// 文字章里的内联图片：下标与 [_paragraphs] 对齐（图片段为空串）。
@@ -119,6 +126,12 @@ class ReaderController extends ChangeNotifier {
   String get chapterLabel =>
       _chapters.isEmpty ? '' : '${_chapterIndex + 1}/${_chapters.length}';
 
+  /// 当前章地址（正文页的 `url`，来自 `Reader.GetChapters`）。
+  String get chapterUrl {
+    if (_chapterIndex < 0 || _chapterIndex >= _chapters.length) return '';
+    return '${_chapters[_chapterIndex]['url'] ?? ''}';
+  }
+
   // ---------------------------------------------------------------- 加载
 
   Future<void> load() async {
@@ -177,28 +190,41 @@ class ReaderController extends ChangeNotifier {
   Future<String?> _readBookName(LegadoClient client) async {
     try {
       final data = await client.call(Api.shelfGetBook, [bookId]);
-      if (data is Map) return '${data['name'] ?? ''}';
+      if (data is Map) {
+        // 书名和书籍地址一起带回来（复制地址要用），不额外加一次 RPC。
+        _bookUrl = '${data['bookUrl'] ?? ''}';
+        return '${data['name'] ?? ''}';
+      }
     } catch (_) {
       // 书不在书架也能阅读，书名回落到路由参数。
     }
     return null;
   }
 
-  Future<_ChapterData> _chapterData(int index) {
-    final cached = _cache[index];
-    if (cached != null) return Future.value(cached);
-    final pending = _inflight[index];
-    if (pending != null) return pending;
+  Future<_ChapterData> _chapterData(int index, {bool refresh = false}) {
+    if (refresh) {
+      // 手动刷新要连本地内存这一层也掀掉：只让 core 跳过 chapter_cache 不够，
+      // 否则 UI 立刻又把 _cache 里的旧正文还回来，看起来像「刷新没生效」。
+      _cache.remove(index);
+      _inflight.remove(index);
+    } else {
+      final cached = _cache[index];
+      if (cached != null) return Future.value(cached);
+      final pending = _inflight[index];
+      if (pending != null) return pending;
+    }
 
-    final future = _fetchChapter(index);
+    final future = _fetchChapter(index, refresh: refresh);
     _inflight[index] = future;
     return future.whenComplete(() => _inflight.remove(index));
   }
 
-  Future<_ChapterData> _fetchChapter(int index) async {
+  Future<_ChapterData> _fetchChapter(int index, {bool refresh = false}) async {
     final data = await LegadoClient.instance.call(Api.readerGetContent, [
       bookId,
       index,
+      // 只有强制刷新才把 true 发过去；平时省略第三参，走 core 的自动缓存。
+      if (refresh) true,
     ]);
     final map = data is Map
         ? data.cast<String, dynamic>()
@@ -236,6 +262,29 @@ class ReaderController extends ChangeNotifier {
 
   Future<void> openChapter(int index) => _openChapter(index);
 
+  /// 手动刷新当前章：绕过 app 内存缓存与 core 的 `chapter_cache`，重新联网抓取。
+  ///
+  /// 用到的场景：书源修正了正文、上次抓到的是防爬占位页、缓存内容本身坏了。
+  /// 成功后新正文照常回写缓存（`Reader.GetContent` 抓完就写库），
+  /// 也就是说手动刷新是「丢旧缓存 + 重新缓存」而不是「以后都不缓存」。
+  ///
+  /// 返回是否真的换成了新内容。抓取失败时不清 core 里的缓存，并把内存里
+  /// 那一版放回去继续读——总比甩给用户一页错误提示强。
+  Future<bool> refreshChapter() async {
+    if (_chapters.isEmpty || _chapterLoading) return false;
+    final index = _chapterIndex;
+    final previous = _cache[index];
+    final offset = currentPage?.startOffset ?? 0;
+
+    await _openChapter(index, keepPosition: true, refresh: true);
+    if (_error == null) return true;
+
+    if (previous == null) return false;
+    _cache[index] = previous;
+    await _openChapter(index, offset: offset);
+    return false;
+  }
+
   Future<void> nextChapter() async {
     // 跳过卷标题，直接落到下一个正文章节；没有就停在原处。
     final next = _readableFrom(_chapterIndex + 1);
@@ -249,6 +298,11 @@ class ReaderController extends ChangeNotifier {
     // 上一章落到最后一页，符合「往回翻」的直觉。
     await _openChapter(previous, atEnd: true);
   }
+
+  /// 前后是否还有可读章节。点击翻页到边界时用它区分
+  /// 「换章」和「已经是最后一章/第一章」——后者要给提示，否则就是点了没反应。
+  bool get hasNextChapter => _readableFrom(_chapterIndex + 1) != null;
+  bool get hasPrevChapter => _readableBackward(_chapterIndex - 1) != null;
 
   int? _readableFrom(int start) {
     for (var i = start; i < _chapters.length; i++) {
@@ -275,6 +329,8 @@ class ReaderController extends ChangeNotifier {
     int offset = 0,
     bool atEnd = false,
     bool notifyStart = true,
+    bool refresh = false,
+    bool keepPosition = false,
   }) async {
     if (_chapters.isEmpty) return;
     final target = _readableIndex(index.clamp(0, _chapters.length - 1));
@@ -293,7 +349,7 @@ class ReaderController extends ChangeNotifier {
 
     var loaded = false;
     try {
-      final data = await _chapterData(target);
+      final data = await _chapterData(target, refresh: refresh);
       _paragraphs = data.paragraphs;
       _imageUrls = data.imageUrls;
       _images = data.images;
@@ -302,7 +358,12 @@ class ReaderController extends ChangeNotifier {
           _imageUrls.isNotEmpty ||
           _images.isNotEmpty;
       _chapterTitle = data.title.isNotEmpty ? data.title : fallbackTitle;
-      _repaginate(targetOffset: atEnd ? null : offset, atEnd: atEnd);
+      // keepPosition：刷新当前章时停在原来那句话附近。
+      // 传 null 让 _repaginate 回落到 currentPage.startOffset（此时还是旧分页）。
+      _repaginate(
+        targetOffset: (atEnd || keepPosition) ? null : offset,
+        atEnd: atEnd,
+      );
       loaded = true;
     } on LegadoError catch (e) {
       _paragraphs = const [];

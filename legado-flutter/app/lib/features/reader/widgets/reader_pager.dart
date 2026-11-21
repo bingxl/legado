@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../pagination.dart';
 import '../reader_controller.dart';
 import '../reader_style.dart';
+import '../tap_zone.dart';
 import 'reader_page_content.dart';
 
 /// 分页翻页区（none / cover / slide / simulation）。
@@ -17,14 +18,19 @@ class ReaderPager extends StatefulWidget {
     required this.style,
     required this.menuVisible,
     required this.onTapCenter,
+    this.onBoundary,
   });
 
   final ReaderController controller;
   final ReaderStyle style;
   final bool menuVisible;
 
-  /// 点击中间 1/3（或菜单打开时任意点击）：呼出/关闭菜单。
+  /// 点击正中格（或菜单打开时任意点击）：呼出/关闭菜单。
   final VoidCallback onTapCenter;
+
+  /// 翻到第一章/最后一章的边界还要继续翻时回调（1=向后，-1=向前）。
+  /// 父级用来提示「已经是最后一章」，不然用户只看到点击没反应。
+  final ValueChanged<int>? onBoundary;
 
   @override
   State<ReaderPager> createState() => ReaderPagerState();
@@ -72,8 +78,27 @@ class ReaderPagerState extends State<ReaderPager>
     final controller = widget.controller;
     if (controller.chapterLoading) return;
     final target = controller.neighborPage(dir);
-    // 章末/章首或「无动画」：交给 controller 处理（可能是换章）。
-    if (target == null || widget.style.pageTurn == PageTurnMode.none) {
+
+    // 章末/章首：下一动作是换章（要等网络），期间必须锁住，
+    // 否则快速连点两下会连续 nextChapter 跳过一章。
+    if (target == null) {
+      final hasChapter = dir > 0
+          ? controller.hasNextChapter
+          : controller.hasPrevChapter;
+      if (!hasChapter) {
+        // 全书边界：给提示，别让用户以为点坏了。
+        widget.onBoundary?.call(dir);
+        return;
+      }
+      _turning = true;
+      controller.turnPage(dir).whenComplete(() {
+        _turning = false;
+        if (mounted) setState(() {});
+      });
+      return;
+    }
+
+    if (widget.style.pageTurn == PageTurnMode.none) {
       controller.turnPage(dir);
       return;
     }
@@ -97,13 +122,18 @@ class ReaderPagerState extends State<ReaderPager>
           widget.onTapCenter();
           return;
         }
-        final x = details.localPosition.dx;
-        if (x < width / 3) {
-          _begin(-1);
-        } else if (x > width * 2 / 3) {
-          _begin(1);
-        } else {
-          widget.onTapCenter();
+        // 原版 3×3 分区：只有正中格是菜单，中上/中下也是翻页。
+        final zone = readerTapZoneAt(
+          details.localPosition,
+          Size(width, controller.viewport.height),
+        );
+        switch (zone) {
+          case ReaderTapZone.prev:
+            _begin(-1);
+          case ReaderTapZone.next:
+            _begin(1);
+          case ReaderTapZone.menu:
+            widget.onTapCenter();
         }
       },
       // 滑动阈值触发：手指/鼠标横拖超过 40px 就翻页。

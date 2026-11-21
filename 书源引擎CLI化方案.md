@@ -82,8 +82,8 @@ flowchart LR
 ## 四、已完成的验证（仓库内可复跑）
 
 ```bash
-# 需要 JDK 17+（本机 C:\Program Files\Microsoft\jdk-21.0.7.6-hotspot）
-export JAVA_HOME="C:/Program Files/Microsoft/jdk-21.0.7.6-hotspot"
+# 需要 JDK 25（仓库已用 gradle/gradle-daemon-jvm.properties 固定；本机 C:\Program Files\Java\jdk-25.0.5.1）
+export JAVA_HOME="C:/Program Files/Java/jdk-25.0.5.1"
 ./gradlew :cli:run --args="selftest"
 ```
 

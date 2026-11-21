@@ -3,14 +3,17 @@ plugins {
     alias libs.plugins.kotlin.android
 }
 
+// 用 JDK 25 编译，字节码目标保持 17（Android/D8 上限，见 app/build.gradle 注释）
+kotlin {
+    jvmToolchain(25)
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
 android {
     compileSdk = compile_sdk_version
     namespace = 'me.ag2s'
-    kotlin {
-        jvmToolchain {
-            languageVersion.set(JavaLanguageVersion.of(17))
-        }
-    }
     defaultConfig {
         minSdk 21
         targetSdk 36

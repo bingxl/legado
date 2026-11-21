@@ -23,14 +23,20 @@ def name = "legado"
 def version = "3." + releaseTime()
 def gitCommits = Integer.parseInt('git rev-list HEAD --count'.execute().text.trim())
 
+// 编译用 JDK 25（项目统一，见 gradle/gradle-daemon-jvm.properties）。
+// 字节码目标仍是 17：D8/AGP 8.x 不支持 class file 69，改 target 会直接崩在 dex 阶段。
+// 注意 toolchain 会把 Kotlin 的默认 jvmTarget 也带到 25，必须显式钉回 17，
+// 否则报 "Inconsistent JVM-target compatibility ... (17) and (25)"。
+kotlin {
+    jvmToolchain(25)
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
 android {
     compileSdk = compile_sdk_version
     namespace = 'io.legado.app'
-    kotlin {
-        jvmToolchain {
-            languageVersion.set(JavaLanguageVersion.of(17))
-        }
-    }
 
     signingConfigs {
         if (project.hasProperty("RELEASE_STORE_FILE")) {

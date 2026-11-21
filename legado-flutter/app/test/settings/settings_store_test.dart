@@ -97,8 +97,13 @@ void main() {
     expect(store.values.length, core.current.length);
 
     final general = store.sectionsForPage('general');
-    expect(general.length, 1);
-    expect(general.single.items.single.key, 'general.promptAddToShelf');
+    expect(general.length, 2);
+    expect(general.first.items.single.key, 'general.promptAddToShelf');
+    // 自动缓存的三个开关由内核直接读，UI 只负责渲染。
+    expect(
+      general.last.items.map((item) => item.key),
+      <String>['cache.autoCache', 'cache.preDownloadNum', 'cache.expireDays'],
+    );
   });
 
   test('readerConfig 与 Settings.Reader fixture 一致', () async {

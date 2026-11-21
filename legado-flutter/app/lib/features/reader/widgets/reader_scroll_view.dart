@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../reader_controller.dart';
 import '../reader_style.dart';
+import '../tap_zone.dart';
 import 'reader_page_content.dart';
 
 /// 滚动模式：整章按页纵向排列，滚动位置换算成页码。
@@ -18,12 +19,16 @@ class ReaderScrollView extends StatefulWidget {
     required this.style,
     required this.menuVisible,
     required this.onTapCenter,
+    this.onBoundary,
   });
 
   final ReaderController controller;
   final ReaderStyle style;
   final bool menuVisible;
   final VoidCallback onTapCenter;
+
+  /// 到第一章开头 / 最后一章末尾还继续拖时回调（1=向后，-1=向前）。
+  final ValueChanged<int>? onBoundary;
 
   @override
   State<ReaderScrollView> createState() => ReaderScrollViewState();
@@ -36,6 +41,11 @@ class ReaderScrollViewState extends State<ReaderScrollView> {
   late int _pageCount = widget.controller.pageCount;
   bool _jumping = false;
   bool _boundaryLock = false;
+
+  /// 到底/到顶后继续拖拽的累计距离。超过阈值才换章：
+  /// 轻微回弹、橡皮筋抖动不应该直接翻到下一章。
+  double _overscroll = 0;
+  static const double _overscrollThreshold = 56;
 
   /// 每页的实际高度。以 LayoutBuilder 给的为准，和 ListView 的 itemExtent 保持一致，
   /// 否则滚动偏移换算出的页码会错位（比如外层 inset 变化时）。
@@ -114,18 +124,58 @@ class ReaderScrollViewState extends State<ReaderScrollView> {
     // 到顶/到底再翻就换章，和分页模式的手感保持一致。
     final atEnd = _scroll.offset >= _scroll.position.maxScrollExtent - 1;
     final atStart = _scroll.offset <= 1;
-    if (dir > 0 && atEnd) {
-      _swapChapter(widget.controller.nextChapter);
-    } else if (dir < 0 && atStart) {
-      _swapChapter(widget.controller.prevChapter);
+    if ((dir > 0 && atEnd) || (dir < 0 && atStart)) {
+      _crossBoundary(dir);
     }
   }
 
   void _swapChapter(Future<void> Function() action) {
     if (_boundaryLock) return;
     _boundaryLock = true;
+    _overscroll = 0;
     unawaited(action());
     Timer(const Duration(milliseconds: 350), () => _boundaryLock = false);
+  }
+
+  /// 滚动模式也能「滚到底接着读下一章」：原版 `moveToNext` 就是这么做的。
+  ///
+  /// 我们的列表是本章的分页快照，滚到边界就停住了，没有可继续滚的内容，
+  /// 只能靠 `OverscrollNotification` 判断「用户还在往同一方向拖」。
+  /// 用 ClampingScrollPhysics，到边界后继续拖会稳定地产生这个通知。
+  bool _onScrollNotification(ScrollNotification notification) {
+    if (notification.depth != 0) return false;
+    if (notification is OverscrollNotification) {
+      final delta = notification.overscroll;
+      // 换方向就重新累计，避免来回蹭两下凑够阈值。
+      if (_overscroll != 0 && delta.sign != _overscroll.sign) _overscroll = 0;
+      _overscroll += delta;
+      if (_overscroll >= _overscrollThreshold) {
+        _crossBoundary(1);
+      } else if (_overscroll <= -_overscrollThreshold) {
+        _crossBoundary(-1);
+      }
+    } else if (notification is ScrollEndNotification) {
+      _overscroll = 0;
+    }
+    return false;
+  }
+
+  void _crossBoundary(int dir) {
+    if (_boundaryLock) return;
+    final controller = widget.controller;
+    if (controller.chapterLoading) return;
+    final hasChapter = dir > 0
+        ? controller.hasNextChapter
+        : controller.hasPrevChapter;
+    if (!hasChapter) {
+      _overscroll = 0;
+      // 边界提示也要节流：一次长拖会连发几十个 overscroll 通知。
+      _boundaryLock = true;
+      Timer(const Duration(milliseconds: 800), () => _boundaryLock = false);
+      widget.onBoundary?.call(dir);
+      return;
+    }
+    _swapChapter(dir > 0 ? controller.nextChapter : controller.prevChapter);
   }
 
   @override
@@ -144,32 +194,40 @@ class ReaderScrollViewState extends State<ReaderScrollView> {
             if (mounted) _jumpTo(controller.pageIndex);
           });
         }
-        return GestureDetector(
-          behavior: HitTestBehavior.translucent,
-          onTapUp: (details) {
-            if (widget.menuVisible) {
-              widget.onTapCenter();
-              return;
-            }
-            final x = details.localPosition.dx;
-            if (x < constraints.maxWidth / 3) {
-              scrollByPage(-1);
-            } else if (x > constraints.maxWidth * 2 / 3) {
-              scrollByPage(1);
-            } else {
-              widget.onTapCenter();
-            }
-          },
-          child: ListView.builder(
-            controller: _scroll,
-            itemExtent: extent,
-            physics: const ClampingScrollPhysics(),
-            itemCount: controller.pageCount,
-            itemBuilder: (context, index) => ReaderPageContent(
-              page: controller.pages[index],
-              style: widget.style,
-              pageCount: controller.pageCount,
-              chapterTitle: controller.chapterTitle,
+        return NotificationListener<ScrollNotification>(
+          onNotification: _onScrollNotification,
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTapUp: (details) {
+              if (widget.menuVisible) {
+                widget.onTapCenter();
+                return;
+              }
+              // 与分页模式同一套 3×3 分区，滚动模式也不该「点中下部弹菜单」。
+              final zone = readerTapZoneAt(
+                details.localPosition,
+                Size(constraints.maxWidth, constraints.maxHeight),
+              );
+              switch (zone) {
+                case ReaderTapZone.prev:
+                  scrollByPage(-1);
+                case ReaderTapZone.next:
+                  scrollByPage(1);
+                case ReaderTapZone.menu:
+                  widget.onTapCenter();
+              }
+            },
+            child: ListView.builder(
+              controller: _scroll,
+              itemExtent: extent,
+              physics: const ClampingScrollPhysics(),
+              itemCount: controller.pageCount,
+              itemBuilder: (context, index) => ReaderPageContent(
+                page: controller.pages[index],
+                style: widget.style,
+                pageCount: controller.pageCount,
+                chapterTitle: controller.chapterTitle,
+              ),
             ),
           ),
         );

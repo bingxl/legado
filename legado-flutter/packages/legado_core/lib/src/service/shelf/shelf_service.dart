@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
+import 'package:sqlite3/sqlite3.dart';
 
 import '../../domain/domain.dart';
 import '../../kernel/errors.dart';
@@ -147,8 +148,57 @@ class ShelfService {
     });
   }
 
-  Map<String, Object?> createGroup(String name) {
-    final trimmed = name.trim();
+  /// 编辑书籍信息。
+  ///
+  /// 字段语义（与 `Book.displayCover` / `displayIntro` 配套）：
+  /// - 书名、作者直接写：用户就是想改展示值，原版也这么做；
+  /// - 封面、简介写 `custom*`：清空即回落到书源抓来的值，不丢原始数据；
+  /// - [groupId] < 0 表示不改分组。
+  ///
+  /// `books` 上有 `(name, author)` 唯一索引，改名撞库要转成可读错误，
+  /// 否则 UI 只会看到一条 SQLite 异常字符串。
+  Map<String, Object?> saveBook(
+    int id, {
+    required String name,
+    required String author,
+    required String coverUrl,
+    required String intro,
+    int groupId = -1,
+  }) {
+    final (bookId, book) = _requireBook(id);
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) {
+      throw const LegadoException(ErrorCode.invalid, '书名不能为空');
+    }
+    if (groupId >= 0 && groupId > 1) {
+      if (_daos.bookGroup.getById(groupId) == null) {
+        throw LegadoException(ErrorCode.notFound, '分组不存在: $groupId');
+      }
+    }
+    book
+      ..name = trimmedName
+      ..author = author.trim()
+      ..customCoverUrl = _blankToNull(coverUrl)
+      ..customIntro = _blankToNull(intro);
+    if (groupId >= 0) book.group = groupId;
+    try {
+      _daos.book.update(book);
+    } on SqliteException catch (e) {
+      // UNIQUE constraint failed: 2067 是 SQLITE_CONSTRAINT_UNIQUE。
+      if (e.extendedResultCode == 2067 || '${e.message}'.contains('UNIQUE')) {
+        throw const LegadoException(ErrorCode.invalid, '已有同名同作者的书，请换个书名');
+      }
+      rethrow;
+    }
+    return getBook(bookId);
+  }
+
+  String? _blankToNull(String value) {
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  Map<String, Object?> createGroup(String name) {    final trimmed = name.trim();
     if (trimmed.isEmpty) {
       throw const LegadoException(ErrorCode.invalid, '分组名不能为空');
     }

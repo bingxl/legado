@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/widgets/copy_links.dart';
 import '../reader_controller.dart';
 import '../reader_style.dart';
 
@@ -18,6 +19,7 @@ class ReaderMenuOverlay extends StatefulWidget {
     required this.onNextChapter,
     required this.onStyleChanged,
     required this.onSpeak,
+    required this.onRefresh,
     required this.onSeek,
   });
 
@@ -31,6 +33,9 @@ class ReaderMenuOverlay extends StatefulWidget {
   final VoidCallback onNextChapter;
   final ValueChanged<ReaderStyle> onStyleChanged;
   final VoidCallback onSpeak;
+
+  /// 强制重抓当前章（跳过离线缓存）。
+  final VoidCallback onRefresh;
 
   /// 全书进度 0~1，父级换算成章节跳转。
   final ValueChanged<double> onSeek;
@@ -229,6 +234,13 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
                     label: '朗读',
                     onTap: widget.onSpeak,
                   ),
+                  _actionChip(
+                    foreground: foreground,
+                    icon: Icons.refresh,
+                    label: '刷新正文',
+                    onTap: widget.onRefresh,
+                  ),
+                  _copyChip(foreground),
                 ],
               ),
             ],
@@ -407,6 +419,64 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
           ],
         ),
       ),
+    );
+  }
+
+  /// 复制地址：菜单项按可用性生成（本地书没有书源地址等），点一项复制一项。
+  ///
+  /// 和 [_turnModeChip] 一样用 PopupMenuButton 而不是二级面板：
+  /// 地址最多 3 条，一眼能选完。
+  Widget _copyChip(Color foreground) {
+    final controller = widget.controller;
+    final links = bookCopyLinks(
+      bookUrl: controller.bookUrl,
+      chapterUrl: controller.chapterUrl,
+    );
+    final visual = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.link,
+            size: 20,
+            color: foreground.withValues(alpha: links.isEmpty ? 0.3 : 0.8),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '复制',
+            style: TextStyle(
+              fontSize: 10,
+              color: foreground.withValues(alpha: links.isEmpty ? 0.3 : 0.75),
+            ),
+          ),
+        ],
+      ),
+    );
+    // 地址一个都没有（书不在书架、目录还没到）时不弹空菜单。
+    if (links.isEmpty) return visual;
+    return PopupMenuButton<int>(
+      tooltip: '复制地址',
+      onSelected: (index) => copyLink(context, links[index]),
+      itemBuilder: (_) => [
+        for (var i = 0; i < links.length; i++)
+          PopupMenuItem<int>(
+            value: i,
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              leading: const Icon(Icons.link, size: 20),
+              title: Text('复制${links[i].label}'),
+              subtitle: Text(
+                links[i].value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 11),
+              ),
+            ),
+          ),
+      ],
+      child: visual,
     );
   }
 }

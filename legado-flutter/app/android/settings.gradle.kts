@@ -19,8 +19,9 @@ pluginManagement {
 
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
-    id("com.android.application") version "8.11.1" apply false
-    id("org.jetbrains.kotlin.android") version "2.2.20" apply false
+    // 与仓库根工程的 Kotlin/AGP 版本保持一致（AGP 8.13.x 是 Gradle 9.2.1 上验证过的最后一档 8.x）
+    id("com.android.application") version "8.13.2" apply false
+    id("org.jetbrains.kotlin.android") version "2.4.21" apply false
 }
 
 include(":app")

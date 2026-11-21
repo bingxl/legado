@@ -7,6 +7,7 @@ import 'features/book/book_detail_page.dart';
 import 'features/explore/explore_page.dart';
 import 'features/explore/explore_show_page.dart';
 import 'features/me/me_page.dart';
+import 'features/reader/comic_reader_page.dart';
 import 'features/reader/pdf_reader_page.dart';
 import 'features/reader/reader_page.dart';
 import 'features/rss/rss_article_page.dart';
@@ -23,6 +24,7 @@ import 'features/shell/home_shell.dart';
 import 'features/source/source_debug_page.dart';
 import 'features/source/source_edit_page.dart';
 import 'features/source/source_list_page.dart';
+import 'features/source/source_login_page.dart';
 import 'features/tools/bookmark_page.dart';
 import 'features/tools/cache_page.dart';
 import 'features/tools/record_page.dart';
@@ -62,6 +64,7 @@ class LegadoApp extends StatelessWidget {
     RouteNames.sourceList,
     RouteNames.sourceEdit,
     RouteNames.sourceDebug,
+    RouteNames.sourceLogin,
     RouteNames.rss,
     RouteNames.rssFavorite,
     RouteNames.rssSourceEdit,
@@ -105,12 +108,16 @@ class LegadoApp extends StatelessWidget {
           ModalRoute.of(ctx)?.settings.arguments,
         ),
         RouteNames.reader: (ctx) {
-          // 本地 PDF 走平台渲染页；其余（本地文本/网络书）仍是文字阅读器。
+          // 本地 PDF 走平台渲染页；本地漫画走逐页取图；其余是文字阅读器。
           // kind 由书架点击时带过来，缺席时按文字书处理。
           final args = ModalRoute.of(ctx)?.settings.arguments;
           final map = args is Map ? args : const <String, Object?>{};
-          if ('${map['kind'] ?? ''}'.toLowerCase() == 'pdf') {
+          final kind = '${map['kind'] ?? ''}'.toLowerCase();
+          if (kind == 'pdf') {
             return PdfReaderPage.fromRouteArguments(args);
+          }
+          if (map['localComic'] == true) {
+            return ComicReaderPage.fromRouteArguments(args);
           }
           return ReaderPage.fromRouteArguments(args);
         },
@@ -121,6 +128,11 @@ class LegadoApp extends StatelessWidget {
           return SourceEditPage(sourceId: (map['sourceId'] as num?)?.toInt());
         },
         RouteNames.sourceDebug: (_) => const SourceDebugPage(),
+        RouteNames.sourceLogin: (ctx) {
+          final args = ModalRoute.of(ctx)?.settings.arguments;
+          final map = args is Map ? args : const {};
+          return SourceLoginPage(sourceId: (map['sourceId'] as num?)?.toInt() ?? 0);
+        },
         RouteNames.rss: (_) => const RssHomePage(),
         RouteNames.rssFavorite: (_) => const RssFavoritePage(),
         RouteNames.rssSourceEdit: (ctx) {

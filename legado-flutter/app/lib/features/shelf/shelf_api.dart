@@ -12,6 +12,12 @@ import '../../core/bridge/legado_client.dart';
 class ShelfApi {
   ShelfApi._();
 
+  /// 编辑书籍信息（书名/作者/封面/简介/分组）。
+  static const saveBookMethod = 'Shelf.SaveBook';
+
+  /// 换源（core 负责重建目录与迁移进度）。
+  static const changeSourceMethod = 'Source.ChangeSource';
+
   // 本地书籍
   static const importLocalFiles = 'Library.ImportLocalFiles';
   // 网址加书
@@ -125,4 +131,41 @@ class ShelfApi {
   ) async =>
       ((await _c.call(exportBookMethod, [bookId, format, outputDir])) as Map)
           .cast<String, dynamic>();
+
+  /// 编辑书籍信息。封面/简介传空串表示回落到书源值，`groupId<0` 不改分组。
+  static Future<Map<String, dynamic>> saveBook({
+    required int bookId,
+    required String name,
+    required String author,
+    required String coverUrl,
+    required String intro,
+    required int groupId,
+  }) async =>
+      ((await _c.call(saveBookMethod, [
+        bookId,
+        name,
+        author,
+        coverUrl,
+        intro,
+        groupId,
+      ])) as Map)
+          .cast<String, dynamic>();
+
+  /// 换源。`sourceId=0` 时由 core 按新地址自动匹配书源。
+  static Future<Map<String, dynamic>> changeSource({
+    required int bookId,
+    required int sourceId,
+    required String bookUrl,
+  }) async =>
+      ((await _c.call(changeSourceMethod, [bookId, sourceId, bookUrl]))
+              as Map)
+          .cast<String, dynamic>();
+
+  /// 这本书是否有本地源文件（本地 txt/epub/漫画返回 true，网络书 false）。
+  ///
+  /// 书架点击时用来区分「本地漫画逐页取图」与「网络漫画按 images 渲染」。
+  static Future<bool> isLocalBook(int bookId) async {
+    final path = await _c.call('Reader.GetLocalFile', [bookId]);
+    return '${path ?? ''}'.trim().isNotEmpty;
+  }
 }

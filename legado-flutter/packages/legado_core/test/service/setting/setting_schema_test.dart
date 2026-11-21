@@ -41,6 +41,10 @@ void main() {
         'reader.showPageNumber',
         'reader.textJustify',
         'general.promptAddToShelf',
+        // 阅读器的自动缓存读这三项。
+        'cache.autoCache',
+        'cache.preDownloadNum',
+        'cache.expireDays',
       ];
       for (final key in keys) {
         expect(schema.itemByKey(key), isNotNull, reason: key);
@@ -49,18 +53,21 @@ void main() {
   });
 
   group('结构完整性', () {
-    test('4 个分组按页面分布', () {
-      expect(schema.sections.length, 4);
+    test('5 个分组按页面分布', () {
+      expect(schema.sections.length, 5);
       expect(
         schema.sectionsForPage('read').map((section) => section.key),
         <String>['typography', 'paging'],
       );
       expect(schema.sectionsForPage('theme').single.key, 'background');
-      expect(schema.sectionsForPage('general').single.key, 'behavior');
+      expect(
+        schema.sectionsForPage('general').map((section) => section.key),
+        <String>['behavior', 'cache'],
+      );
     });
 
-    test('共 11 个设置项，key 全局唯一', () {
-      expect(items.length, 11);
+    test('共 14 个设置项，key 全局唯一', () {
+      expect(items.length, 14);
       expect(items.map((item) => item.key).toSet().length, items.length);
       for (final item in items) {
         expect(schema.itemByKey(item.key), same(item));

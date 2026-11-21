@@ -1,4 +1,7 @@
 {
+  "cache.autoCache": "true",
+  "cache.expireDays": "0",
+  "cache.preDownloadNum": "10",
   "general.promptAddToShelf": "false",
   "reader.fontSize": "20",
   "reader.indentFirstLine": "true",

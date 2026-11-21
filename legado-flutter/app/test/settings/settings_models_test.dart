@@ -15,14 +15,17 @@ void main() {
 
   group('SettingsSchema', () {
     test('版本、页面与分组数量与 fixture 一致', () {
-      expect(schema.version, 1);
+      expect(schema.version, 2);
       expect(schema.pages, <String>['read', 'theme', 'general']);
-      expect(schema.sections.length, 4);
+      expect(schema.sections.length, 5);
       expect(
         schema.sectionsForPage('read').map((section) => section.key),
         <String>['typography', 'paging'],
       );
-      expect(schema.sectionsForPage('general').single.key, 'behavior');
+      expect(
+        schema.sectionsForPage('general').map((section) => section.key),
+        <String>['behavior', 'cache'],
+      );
       // 未知页面返回空列表，页面渲染成空态而不是抛异常。
       expect(schema.sectionsForPage('nope'), isEmpty);
     });

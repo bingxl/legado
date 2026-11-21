@@ -67,7 +67,7 @@ void main() {
     return store.daos.book.idOf(url)!;
   }
 
-  test('依赖与 11 个方法都已注册', () {
+  test('依赖与 12 个方法都已注册', () {
     expect(shelf.name, 'shelf');
     expect(shelf.dependsOn, contains('store'));
     expect(
@@ -81,10 +81,73 @@ void main() {
         'Shelf.MoveToGroup',
         'Shelf.SaveProgress',
         'Shelf.GetProgress',
+        'Shelf.SaveBook',
         'Shelf.CreateGroup',
         'Shelf.UpdateGroup',
         'Shelf.DeleteGroup',
       },
+    );
+  });
+
+  test('SaveBook：改书名/作者/封面/简介落库，留空则清掉自定义字段', () async {
+    final id = addBook('https://example.test/edit');
+
+    final saved =
+        await call('Shelf.SaveBook', [
+              id,
+              '  新书名  ',
+              ' 新作者 ',
+              'https://example.test/c.jpg',
+              '新的简介',
+              0,
+            ])
+            as Map<String, Object?>;
+    expect(saved['name'], '新书名'); // 首尾空白被 trim
+    expect(saved['author'], '新作者');
+    expect(saved['intro'], '新的简介');
+
+    final book = store.daos.book.getById(id)!;
+    expect(book.name, '新书名');
+    expect(book.customCoverUrl, 'https://example.test/c.jpg');
+    expect(book.customIntro, '新的简介');
+
+    // 封面/简介传空串 → 清空（回到书源给的默认值）
+    await call('Shelf.SaveBook', [id, '新书名', '新作者', '', '']);
+    final cleared = store.daos.book.getById(id)!;
+    expect(cleared.customCoverUrl, isNull);
+    expect(cleared.customIntro, isNull);
+
+    // groupId 传 -1 表示"不动分组"
+    expect(cleared.group, 0);
+  });
+
+  test('SaveBook：空书名 / 同名同作者 / 分组不存在各自报错', () async {
+    final id = addBook('https://example.test/a1', name: '甲书');
+    addBook('https://example.test/a2', name: '乙书');
+
+    await expectLater(
+      call('Shelf.SaveBook', [id, '   ', '作者', '', '']),
+      throwsA(
+        isA<LegadoException>()
+            .having((e) => e.code, 'code', ErrorCode.invalid)
+            .having((e) => e.message, 'message', contains('书名不能为空')),
+      ),
+    );
+
+    await expectLater(
+      call('Shelf.SaveBook', [id, '乙书', '作者', '', '']),
+      throwsA(
+        isA<LegadoException>()
+            .having((e) => e.code, 'code', ErrorCode.invalid)
+            .having((e) => e.message, 'message', contains('同名同作者')),
+      ),
+    );
+
+    await expectLater(
+      call('Shelf.SaveBook', [id, '甲书', '作者', '', '', 999]),
+      throwsA(
+        isA<LegadoException>().having((e) => e.code, 'code', ErrorCode.notFound),
+      ),
     );
   });
 

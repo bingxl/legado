@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/bridge/api.dart';
 import '../../core/bridge/legado_client.dart';
+import '../../core/widgets/copy_links.dart';
 import 'pdf_channel.dart';
 
 /// 与 core 的 `PdfParser.pagesPerChapter`（及原版 PdfFile.PAGE_SIZE）一致。
@@ -232,6 +233,12 @@ class _PdfReaderPageState extends State<PdfReaderPage> {
             icon: const Icon(Icons.list_alt_outlined),
             tooltip: '目录',
             onPressed: _chapters.isEmpty ? null : _openToc,
+          ),
+          IconButton(
+            icon: const Icon(Icons.link),
+            tooltip: '复制地址',
+            onPressed: () =>
+                showCopyLinkSheet(context, bookId: widget.bookId, title: '复制地址'),
           ),
         ],
       ),

@@ -12,6 +12,9 @@ import 'settings_service.dart';
 /// 和 `shelf` 同时开工，也是「内核能不能跑通」的最短验证路径：
 /// `legado call Settings.Values` 有输出，说明装配、迁移、信封三条链路都活着。
 class SettingsModule extends CoreModule {
+  /// 供读取配置的其它域（如阅读器的自动缓存）复用同一个实例。
+  static SettingsModule? instance;
+
   SettingsService? _service;
 
   @override
@@ -40,6 +43,7 @@ class SettingsModule extends CoreModule {
       schema: defaultSettingsSchema,
     );
     _service = service;
+    instance = this;
 
     registry.method(
       'Settings.Schema',

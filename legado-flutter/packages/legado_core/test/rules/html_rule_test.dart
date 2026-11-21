@@ -266,6 +266,40 @@ void main() {
           ['书名三 作者丙', '书名二 作者乙', '书名一 作者甲']);
     });
 
+    test('nth-child 支持 odd/even 与 an+b 表达式', () {
+      expect(rule().getStringList('ul#list > li:nth-child(odd) span@text'),
+          ['作者甲', '作者丙']);
+      expect(rule().getStringList('ul#list > li:nth-child(2n) span@text'),
+          ['作者乙', '作者丁']);
+      expect(rule().getStringList('ul#list > li:nth-child(-n+2) span@text'),
+          ['作者甲', '作者乙']);
+    });
+
+    test('nth-last-child 从末尾数', () {
+      expect(rule().getStringList('ul#list > li:nth-last-child(1) span@text'),
+          ['作者丁']);
+    });
+
+    test('hasOwn 只匹配直接子元素', () {
+      expect(rule().getStringList('ul#list > li:hasOwn(span.author) span@text'),
+          hasLength(4));
+      // div#own 的 span 是直接子元素，div#desc 的 p 也是；但 ul#list 没有 span 子元素
+      expect(rule().getStringList('ul#list:hasOwn(span)@text'), isEmpty);
+    });
+
+    test('matchesOwn 只匹配自身文本节点', () {
+      expect(rule().getStringList('span:matchesOwn(^作者[甲乙]\$)@text'),
+          ['作者甲', '作者乙']);
+    });
+
+    test('is 选择器组', () {
+      expect(
+        rule().getStringList('#next:is(a, button)@text'),
+        ['下一页'],
+      );
+      expect(rule().getStringList('#next:is(div)@text'), isEmpty);
+    });
+
     test('不存在的选择器返回空', () {
       expect(rule().getStringList('li.nope@text'), isEmpty);
       expect(rule().getString('li.nope@text'), isNull);

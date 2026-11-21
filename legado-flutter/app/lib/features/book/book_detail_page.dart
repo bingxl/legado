@@ -4,6 +4,9 @@ import '../../core/bridge/api.dart';
 import '../../core/bridge/legado_client.dart';
 import '../../core/router/routes.dart';
 import '../../core/widgets/book_cover.dart';
+import '../../core/widgets/copy_links.dart';
+import '../shelf/shelf_api.dart';
+import 'book_edit_dialogs.dart';
 import 'chapter_preview.dart';
 
 /// 书籍详情页（对应原版 `ui/book/info/BookInfoActivity`）。
@@ -125,6 +128,13 @@ class _BookDetailPageState extends State<BookDetailPage> {
       'bookName': _title,
     };
     if (chapterIndex != null) arguments['chapterIndex'] = chapterIndex;
+    // 本地漫画（bookUrl 是文件路径）走漫画阅读器；网络漫画走文字阅读器 images。
+    final bookUrl = '${_detail?['bookUrl'] ?? ''}';
+    final isLocalFile =
+        bookUrl.startsWith('/') || RegExp(r'^[A-Za-z]:[\\/]').hasMatch(bookUrl);
+    if ('${_detail?['format'] ?? ''}' == 'comic' && isLocalFile) {
+      arguments['localComic'] = true;
+    }
     Navigator.pushNamed(context, RouteNames.reader, arguments: arguments);
   }
 
@@ -140,22 +150,129 @@ class _BookDetailPageState extends State<BookDetailPage> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  /// 编辑书名/作者/封面/简介/分组。
+  Future<void> _editBook() async {
+    final detail = _detail;
+    if (detail == null) return;
+    final saved = await showBookEditDialog(context, detail);
+    if (saved == true) {
+      _toast('已保存');
+      await _load();
+    }
+  }
+
+  /// 换源：全源搜索同名书 → 选中 → core 重建目录并迁移进度。
+  ///
+  /// 换源后 `bookUrl` 变了，书的 rowid 也会变（实现是删旧插新），
+  /// 所以成功后必须用返回的新 id 替换当前路由，否则详情页还指着旧书。
+  Future<void> _changeSource() async {
+    final detail = _detail;
+    if (detail == null) return;
+    final picked = await showChangeSourceDialog(context, detail);
+    if (picked == null) return;
+    final bookUrl = '${picked['bookUrl'] ?? ''}';
+    if (bookUrl.isEmpty) {
+      _toast('该搜索结果没有书籍地址');
+      return;
+    }
+    _toast('正在换源…');
+    try {
+      final result = await ShelfApi.changeSource(
+        bookId: widget.bookId,
+        sourceId: 0,
+        bookUrl: bookUrl,
+      );
+      if (!mounted) return;
+      final newId = (result['bookId'] as num?)?.toInt() ?? widget.bookId;
+      if (newId != widget.bookId) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => BookDetailPage(
+              bookId: newId,
+              bookName: '${result['book']?['name'] ?? picked['name'] ?? ''}',
+            ),
+          ),
+        );
+      } else {
+        _toast('已换源');
+        await _load();
+      }
+    } on LegadoError catch (e) {
+      if (!mounted) return;
+      _toast('换源失败：${e.message}');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final detail = _detail ?? const <String, dynamic>{};
+    // 复制项随详情变化：本地书没有书源地址、无封面时没有封面地址。
+    final links = bookCopyLinks(
+      bookUrl: '${detail['bookUrl'] ?? ''}',
+      origin: '${detail['origin'] ?? ''}',
+      coverUrl: '${detail['cover'] ?? ''}',
+    );
     return Scaffold(
       appBar: AppBar(
         title: Text(_title, maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(
-            tooltip: '刷新',
-            icon: const Icon(Icons.refresh),
-            onPressed: _load,
+            tooltip: '换源',
+            icon: const Icon(Icons.swap_horiz),
+            onPressed: _bodyReady ? _changeSource : null,
+          ),
+          IconButton(
+            tooltip: '编辑信息',
+            icon: const Icon(Icons.edit_outlined),
+            onPressed: _bodyReady ? _editBook : null,
+          ),
+          PopupMenuButton<int>(
+            tooltip: '更多',
+            // -1 是刷新；非负数是 links 的下标。
+            onSelected: (value) {
+              if (value < 0) {
+                _load();
+                return;
+              }
+              copyLink(context, links[value], notify: _toast);
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem<int>(
+                value: -1,
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  leading: Icon(Icons.refresh, size: 20),
+                  title: Text('刷新'),
+                ),
+              ),
+              if (links.isNotEmpty) const PopupMenuDivider(),
+              for (var i = 0; i < links.length; i++)
+                PopupMenuItem<int>(
+                  value: i,
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    leading: const Icon(Icons.link, size: 20),
+                    title: Text('复制${links[i].label}'),
+                    subtitle: Text(
+                      links[i].value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ],
       ),
       body: _body(),
     );
   }
+
+  /// 详情还没加载出来时，换源/编辑没有可用的字段与 id。
+  bool get _bodyReady => _detail != null;
 
   Widget _body() {
     if (_loading) return const Center(child: CircularProgressIndicator());
@@ -399,11 +516,36 @@ class _BookDetailPageState extends State<BookDetailPage> {
       onTap: () => _openReader(index),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
-        child: Text(
-          title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 13.5),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13.5),
+              ),
+            ),
+            // 付费 / VIP 标记：来自书源 chapterList 的 isPay / isVip。
+            if (chapter['isPay'] == true)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Icon(
+                  Icons.shopping_cart_outlined,
+                  size: 13,
+                  color: scheme.error,
+                ),
+              )
+            else if (chapter['isVip'] == true)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Icon(
+                  Icons.lock_outline,
+                  size: 13,
+                  color: scheme.outline,
+                ),
+              ),
+          ],
         ),
       ),
     );

@@ -7,6 +7,7 @@ import '../../core/bridge/legado_client.dart';
 import 'source_api.dart';
 import 'source_debug_page.dart';
 import 'source_edit_page.dart';
+import 'source_login_page.dart';
 import 'source_utils.dart';
 
 /// 书源管理页（对应原版 `ui/book/source/manage/BookSourceActivity`）。
@@ -24,7 +25,7 @@ class SourceListPage extends StatefulWidget {
 }
 
 /// 单行菜单动作。
-enum _SourceAction { edit, group, check, debug, delete }
+enum _SourceAction { edit, group, check, debug, login, delete }
 
 class _SourceListPageState extends State<SourceListPage> {
   List<Map<String, dynamic>> _sources = const [];
@@ -334,6 +335,10 @@ class _SourceListPageState extends State<SourceListPage> {
                       child: Text('调试'),
                     ),
                     PopupMenuItem(
+                      value: _SourceAction.login,
+                      child: Text('登录'),
+                    ),
+                    PopupMenuItem(
                       value: _SourceAction.delete,
                       child: Text('删除'),
                     ),
@@ -442,6 +447,12 @@ class _SourceListPageState extends State<SourceListPage> {
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => SourceDebugPage(initialSourceId: id),
+          ),
+        );
+      case _SourceAction.login:
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => SourceLoginPage(sourceId: id),
           ),
         );
       case _SourceAction.delete:

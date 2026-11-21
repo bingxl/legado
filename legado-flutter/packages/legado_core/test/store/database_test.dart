@@ -64,17 +64,19 @@ void main() {
 
     test('迁移按版本号升序执行，每步单独提交', () async {
       final path = '${tempDir.path}/ordered.db';
+      // 自定义迁移的版本号必须避开默认链的最大版本：
+      // `migrate` 会跳过 `version <= user_version` 的步骤，重复版本号会被静默吃掉。
       final db = await LegadoDatabase.open(
         path,
         migrations: [
           ...defaultMigrations,
-          Migration(3, (raw) => raw.execute('CREATE TABLE step_three (id INTEGER)')),
-          Migration(2, (raw) => raw.execute('CREATE TABLE step_two (id INTEGER)')),
+          Migration(4, (raw) => raw.execute('CREATE TABLE step_three (id INTEGER)')),
+          Migration(3, (raw) => raw.execute('CREATE TABLE step_two (id INTEGER)')),
         ],
       );
       addTearDown(db.close);
 
-      expect(db.version, 3);
+      expect(db.version, 4);
       expect(db.tableNames(), containsAll(['step_two', 'step_three']));
     });
 
@@ -82,7 +84,7 @@ void main() {
       final path = '${tempDir.path}/broken.db';
       final broken = [
         ...defaultMigrations,
-        Migration(2, (raw) {
+        Migration(3, (raw) {
           raw.execute('CREATE TABLE probe_rollback (id INTEGER)');
           throw StateError('故意失败');
         }),
@@ -96,7 +98,7 @@ void main() {
       // 用正常迁移链重新打开：v1 的内容还在，失败那步的建表被回滚。
       final reopened = await LegadoDatabase.open(path);
       addTearDown(reopened.close);
-      expect(reopened.version, 1);
+      expect(reopened.version, schemaVersion);
       expect(reopened.tableNames(), isNot(contains('probe_rollback')));
       expect(reopened.tableNames(), contains('books'));
     });

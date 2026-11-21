@@ -544,8 +544,18 @@ class _ShelfPageState extends State<ShelfPage> {
     );
   }
 
-  void _open(Map<String, dynamic> book) {
+  Future<void> _open(Map<String, dynamic> book) async {
     final id = (book['id'] as num?)?.toInt() ?? 0;
+    // 本地漫画要交给漫画阅读器逐页取图；网络漫画仍走文字阅读器的 images 渲染。
+    var localComic = false;
+    if ('${book['format'] ?? ''}' == 'comic') {
+      try {
+        localComic = await ShelfApi.isLocalBook(id);
+      } on Object {
+        // 判不出来就按网络漫画处理：文字阅读器至少能显示 images。
+      }
+    }
+    if (!mounted) return;
     Navigator.pushNamed(
       context,
       RouteNames.reader,
@@ -553,6 +563,7 @@ class _ShelfPageState extends State<ShelfPage> {
         'bookId': id,
         'bookName': book['name'],
         'kind': book['kind'],
+        if (localComic) 'localComic': true,
       },
     );
   }

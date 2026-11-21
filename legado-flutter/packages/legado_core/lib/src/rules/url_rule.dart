@@ -13,6 +13,7 @@ library;
 
 import 'dart:convert';
 
+import '../net/charset.dart' as charset_utils;
 import '../util/url.dart';
 import 'rule.dart';
 import 'rule_splitter.dart';
@@ -283,17 +284,19 @@ bool isJsonLikeBody(String s) {
 
 bool _isXmlLike(String s) => s.trim().startsWith('<');
 
-/// 查询串编码：保留 URL 合法字符与已有的 `%XX`，其余按 UTF-8 百分号编码。
+/// 查询串编码：保留 URL 合法字符与已有的 `%XX`，其余按 [charset] 百分号编码。
+///
+/// **必须按 `charset` 取字节**：GBK 站点的搜索参数若按 UTF-8 编码
+/// （`%E4%B8%AD`），服务端会当 GBK 解成乱码，表现为「HTTP 200 + 0 条结果」。
 String encodeQuery(String query, String? charset) {
-  if (charset != null && charset.isNotEmpty && charset.toLowerCase() != 'utf-8') {
-    // 非 UTF-8 的编码由 net 层按 charset 处理（这里只做 UTF-8 兜底）
-  }
   if (_looksEncoded(query)) return query;
   return query.split('&').map((pair) {
     final eq = pair.indexOf('=');
-    if (eq < 0) return _percentEncode(pair, form: false);
-    return '${_percentEncode(pair.substring(0, eq), form: false)}'
-        '=${_percentEncode(pair.substring(eq + 1), form: false)}';
+    if (eq < 0) {
+      return _percentEncode(pair, form: false, charset: charset);
+    }
+    return '${_percentEncode(pair.substring(0, eq), form: false, charset: charset)}'
+        '=${_percentEncode(pair.substring(eq + 1), form: false, charset: charset)}';
   }).join('&');
 }
 
@@ -304,9 +307,11 @@ String encodeForm(String form, String? charset) {
   }
   return form.split('&').map((pair) {
     final eq = pair.indexOf('=');
-    if (eq < 0) return _percentEncode(pair, form: true);
-    return '${_percentEncode(pair.substring(0, eq), form: true)}'
-        '=${_percentEncode(pair.substring(eq + 1), form: true)}';
+    if (eq < 0) {
+      return _percentEncode(pair, form: true, charset: charset);
+    }
+    return '${_percentEncode(pair.substring(0, eq), form: true, charset: charset)}'
+        '=${_percentEncode(pair.substring(eq + 1), form: true, charset: charset)}';
   }).join('&');
 }
 
@@ -314,7 +319,7 @@ const _unreserved =
     'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
 const _querySafe = r"!$&'()*+,/:;=?@[]^`{|}";
 
-String _percentEncode(String value, {required bool form}) {
+String _percentEncode(String value, {required bool form, String? charset}) {
   final sb = StringBuffer();
   var i = 0;
   while (i < value.length) {
@@ -346,7 +351,8 @@ String _percentEncode(String value, {required bool form}) {
     }
     final rune = value.substring(i).runes.first;
     final ch = String.fromCharCode(rune);
-    for (final b in utf8.encode(ch)) {
+    // 老字符集站点（GBK/GB2312）要按目标编码取字节，否则中文参数是乱码。
+    for (final b in charset_utils.encode(ch, charset: charset)) {
       sb.write('%${b.toRadixString(16).toUpperCase().padLeft(2, '0')}');
     }
     i += ch.length;

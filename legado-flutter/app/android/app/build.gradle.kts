@@ -5,6 +5,15 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Kotlin 2.3 起 android.kotlinOptions 已移除，改用 project 作用域的 kotlin{compilerOptions}。
+// 编译用 daemon 的 JDK 25（见 ../gradle/gradle-daemon-jvm.properties），
+// 字节码目标保持 17：Android/D8 不支持更高的 class file 版本。
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
 android {
     namespace = "flutter.legado.bingxl.cn"
     compileSdk = flutter.compileSdkVersion
@@ -17,10 +26,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
     defaultConfig {

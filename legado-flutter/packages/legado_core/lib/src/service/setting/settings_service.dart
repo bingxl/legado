@@ -63,6 +63,18 @@ class SettingsService {
     return result;
   }
 
+  /// 单项读取（带默认值与归一化）。
+  ///
+  /// 给内核其它域用（阅读器的自动缓存要读 `cache.*`）：每次只查一行，
+  /// 不像 [values] 那样把整张表读出来再合并。
+  String? value(String key) {
+    final item = _items[key];
+    if (item == null) return null;
+    final stored = _storage.get(key);
+    if (stored == null) return item.defaultRaw;
+    return _tryNormalize(item, stored) ?? item.defaultRaw;
+  }
+
   /// `Settings.Update`：增量保存，返回保存后的全量有效值。
   ///
   /// `patch` 为 null 时报 [ErrorCode.invalid]（契约表明确要求）；空 Map 是合法

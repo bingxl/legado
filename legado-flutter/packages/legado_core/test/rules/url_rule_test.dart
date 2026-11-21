@@ -159,5 +159,12 @@ void main() {
       final r = await analyzer().analyze('data:text/plain,hello');
       expect(r.url, 'data:text/plain,hello');
     });
+
+    test('charset=gbk 时查询串按 GBK 取字节（不是 UTF-8）', () async {
+      // GBK 站点把 UTF-8 的 %E4%B8%AD 当 GBK 解会成乱码，搜索直接 0 条。
+      final r = await analyzer()
+          .analyze('https://a.com/s?q=中文,{"charset":"gbk"}');
+      expect(r.encodedQuery, 'q=%D6%D0%CE%C4');
+    });
   });
 }

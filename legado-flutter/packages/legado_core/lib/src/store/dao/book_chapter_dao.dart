@@ -146,6 +146,33 @@ class BookChapterDao {
   void deleteByBookUrl(String bookUrl) =>
       _db.execute('delete from `$_table` where bookUrl = ?', [bookUrl]);
 
+  /// 把章节序号按当前顺序重排成 `0..n-1`，返回是否真的改过。
+  ///
+  /// 老版本抓目录时没按 URL 去重，重复章节被 `INSERT OR REPLACE` 覆盖后
+  /// `index` 会留下空洞。阅读器把「列表下标」当章节序号传给 `Reader.GetContent`，
+  /// 一旦不连续就会整体错位（点第 N 章读到第 N+k 章）。打开阅读器时顺手修一次。
+  bool renumberIfNeeded(String bookUrl) {
+    final list = getChapterList(bookUrl);
+    var dirty = false;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].index != i) {
+        dirty = true;
+        break;
+      }
+    }
+    if (!dirty) return false;
+    runInTransaction(_db, () {
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].index == i) continue;
+        _db.execute(
+          'update `$_table` set `index` = ? where `url` = ? and `bookUrl` = ?',
+          [i, list[i].url, bookUrl],
+        );
+      }
+    });
+    return true;
+  }
+
   void upWordCount(String bookUrl, String url, String wordCount) => _db.execute(
         'update `$_table` set wordCount = ? where bookUrl = ? and url = ?',
         [wordCount, bookUrl, url],

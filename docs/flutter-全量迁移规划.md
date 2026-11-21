@@ -105,6 +105,18 @@ final books = await LegadoCore.instance.call('Shelf.ListBooks', [0]);
 
 ---
 
+### 自动缓存（对照原版）
+
+| 维度 | 原版 Kotlin | 本实现 |
+| --- | --- | --- |
+| 读到的章 | `BookHelp.saveContent` 落 `downloadDir/cache/<book>/<章节>` 文本文件 | `Reader.GetContent` 抓到正文后写 `chapter_cache` 表 |
+| 预取范围 | `ReadBook.preDownload`：`当前+2 .. 当前+preDownloadNum`，回补 `-2 .. -min(5,N)` | 同范围，单书串行 worker，命中缓存即跳过 |
+| 开关 | `preDownloadNum`（默认 10，`<2` 等于关闭预取） | `cache.autoCache`（默认开）+ `cache.preDownloadNum`（默认 10，0 = 只缓存读过的章） |
+| 命中判定 | 缓存文件存在即命中 | 同序号 **且** 章节 URL 一致才命中（目录改版自动失效） |
+| 过期 | **没有时间过期**：只有手动清理，以及漫画图片按 `imageRetainNum` 保留最近 N 章 | 同样默认永不过期；额外提供 `cache.expireDays`（0 = 关闭，>0 时进程内首次阅读时清一次） |
+| 手动缓存 | `CacheBook.start` + `CacheActivity` | `Cache.Start` 走 `refresh` 重抓，不吃旧缓存；页面提供「缓存未缓存章节」(`missing`) 与「全部重新缓存」(`all`) |
+| 手动刷新正文 | 阅读页没有专门的刷新入口，只能清除缓存后重进 | 阅读菜单「刷新正文」→ `Reader.GetContent(refresh:true)`：同时清 app 内存缓存与 `chapter_cache`，位置停在原处；失败自动回退到刚看的那版。错误页「重试」也走刷新而不是普通重读 |
+
 ## 四、功能全景与覆盖度
 
 | 域 | 原版对应 | 现有方法 | 现有 UI | 缺口 |
@@ -114,8 +126,8 @@ final books = await LegadoCore.instance.call('Shelf.ListBooks', [0]);
 | 规则引擎 | `model/analyzeRule`、`lib/rhino` | （藏在 Go 里） | — | **CSS/XPath/JSONPath/正则/JS 全部要在 Dart 重写** |
 | 发现 | `ExploreFragment`、`ExploreShow` | Source 内 | `explore_page` | 分类矩阵、多源并行、翻页增量 |
 | 搜索 | `ui/main` 搜索 | Source 内 | `search_page` | 书籍/章节双模式、并发控制、结果合并排序 |
-| 阅读 | `ui/book/read` | Reader 5 | 阅读器全套（分页/翻页/菜单/目录） | epub/umd/漫画/PDF、双页与分屏、朗读、取词、正文编辑、自动翻页、背景图 |
-| 缓存 | `CacheActivity` | Cache 10 | `cache_page` | 漫画缓存、音频缓存、批量范围下载 |
+| 阅读 | `ui/book/read` | Reader 5 | 阅读器全套（分页/翻页/菜单/目录） | 已做：覆盖/滑动/无动画/滚动四种翻页、点击 3×3 分区对齐原版默认动作、章末点击与滚动到底自动换下一章、epub/umd/漫画/PDF、朗读。缺：双页与分屏、取词、正文编辑、自动翻页、背景图、点击区域自定义（9 格动作可配） |
+| 缓存 | `CacheActivity`、`ReadBook.preDownload` | Cache 10 | `cache_page` | 已做：阅读时自动缓存 + 预取（`cache.*` 三项设置）、离线读缓存、手动补缓存。缺：漫画/音频缓存、批量范围下载 |
 | 书签/记录 | `BookmarkFragment`、`AllBookmark` | Bookmark 5 · Record 4 | 2 页 | 书签备注同步、统计维度 |
 | RSS | `ui/rss`（30 文件） | Rss 10 | 4 页 | 规则调试、分组、朗读、全文抓取 |
 | 设置 | `ui/config`（12）+ pref XML | Settings 5 | 3 页（Schema 驱动） | 40+ 阅读项、字体、主题、点击区域、翻页模式细化 |

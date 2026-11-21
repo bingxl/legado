@@ -8,7 +8,7 @@ import 'migration.dart';
 /// Android 版 Room 已演进到 65+，但那是**增量迁移链**。
 /// 这里是 Flutter 版的全新初版：初始 schema 直接按实体生成，
 /// 从 v1 开始重新计数，未来只在自己的迁移列表里递增。
-const int schemaVersion = 1;
+const int schemaVersion = 2;
 
 /// 所有建表语句，顺序 = 依赖顺序（books 必须早于 chapters / searchBooks）。
 List<String> get createTableSqls => [
@@ -38,6 +38,7 @@ List<String> get createTableSqls => [
       ReadingProgress.createSql,
       BookmarkItem.createSql,
       RecordItem.createSql,
+      SourceLoginRecord.createSql,
     ];
 
 /// 索引，照抄 Kotlin `@Entity(indices=[...])`。
@@ -82,8 +83,16 @@ void _v1(Database db) {
   }
 }
 
+/// v2：书源登录态补充表。
+///
+/// 初始 schema（v1）已经发出去过，改 v1 对现有库无效（user_version 已是 1），
+/// 所以只能新增一步。`IF NOT EXISTS` 让新库跑完 v1 再跑 v2 也安全。
+void _v2(Database db) {
+  db.execute(SourceLoginRecord.createSql);
+}
+
 /// 默认迁移链。
-List<Migration> get defaultMigrations => [Migration(1, _v1)];
+List<Migration> get defaultMigrations => [Migration(1, _v1), Migration(2, _v2)];
 
 /// 所有表名（不含视图），供 `System.Database` 自检与测试使用。
 const List<String> dataTableNames = [
@@ -113,4 +122,5 @@ const List<String> dataTableNames = [
   'bookmark',
   'read_record',
   'chapter_cache',
+  'source_login',
 ];

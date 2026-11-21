@@ -202,7 +202,7 @@ class SettingsSchema {
 /// 只收 UI 三个页面（`read`/`theme`/`general`）实际渲染的项，原版 Kotlin 的
 /// 两百多个偏好项没有全搬：Schema 驱动渲染，多搬一项就等于多一个没人认领的面板。
 const SettingsSchema defaultSettingsSchema = SettingsSchema(
-  version: 1,
+  version: 2,
   pages: <String>['read', 'theme', 'general'],
   sections: <SettingSection>[
     SettingSection(
@@ -334,6 +334,41 @@ const SettingsSchema defaultSettingsSchema = SettingsSchema(
           title: '退出时询问加入书架',
           desc: '从搜索/发现点开的书只管试读，默认不打扰；打开后退出时会问一次',
           defaultValue: false,
+        ),
+      ],
+    ),
+    SettingSection(
+      key: 'cache',
+      page: 'general',
+      title: '缓存',
+      desc: '读到哪存到哪，预取的章节断网也能看',
+      items: <SettingItem>[
+        SettingItem(
+          key: 'cache.autoCache',
+          kind: SettingKind.switchToggle,
+          title: '自动缓存',
+          desc: '读完一章自动存入缓存，并按下面的数量往后预取',
+          defaultValue: true,
+        ),
+        SettingItem(
+          key: 'cache.preDownloadNum',
+          kind: SettingKind.slider,
+          title: '预取章节数',
+          desc: '当前章之后自动缓存多少章（0 表示只缓存读过的章）',
+          defaultValue: 10,
+          max: 50,
+          step: 1,
+          unit: '章',
+        ),
+        SettingItem(
+          key: 'cache.expireDays',
+          kind: SettingKind.slider,
+          title: '缓存有效期',
+          desc: '超过天数自动清理；0 表示永久保留。原版没有过期机制，这里是本实现的扩展',
+          defaultValue: 0,
+          max: 90,
+          step: 1,
+          unit: '天',
         ),
       ],
     ),

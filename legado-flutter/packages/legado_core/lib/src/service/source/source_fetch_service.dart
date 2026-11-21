@@ -1,11 +1,13 @@
 import 'dart:convert';
 
 import 'package:logging/logging.dart';
+import 'package:path/path.dart' as p;
 
 import '../../domain/domain.dart';
 import '../../js/java_host.dart';
 import '../../js/js_engine.dart';
 import '../../js/js_engine_factory.dart';
+import '../../js/values.dart';
 import '../../kernel/errors.dart';
 import '../../net/net.dart';
 import '../../rules/rules.dart';
@@ -13,6 +15,7 @@ import '../../store/dao/book_source_dao.dart';
 import '../../store/database.dart';
 import '../../store/store.dart';
 import '../../util/url.dart';
+import '../replacerule/replacement_processor.dart';
 import '../shelf/shelf_service.dart';
 
 final Logger _log = Logger('legado.js');
@@ -121,6 +124,18 @@ class SearchResultView {
       };
 }
 
+/// 一页（或一整章）正文的抓取结果。
+///
+/// [title] 来自 `ruleContent.title`，多数书源不配该规则，此时为 null，
+/// 上层沿用目录里的标题。
+class FetchedContent {
+  const FetchedContent(this.html, this.images, {this.title});
+
+  final String html;
+  final List<String> images;
+  final String? title;
+}
+
 /// 书源抓取链路：搜索 / 发现 / 详情 / 目录 / 试读入库。
 ///
 /// 一条规则的执行顺序是「URL 规则展开 → HTTP → AnalyzeRule 取值」，
@@ -130,8 +145,10 @@ class SourceFetchService {
   SourceFetchService({
     required StoreDaos daos,
     required ShelfService shelf,
+    String homeDir = '',
   })  : _daos = daos,
         _shelf = shelf,
+        _homeDir = homeDir,
         _net = NetClient(),
         _js = createJsEngine(onLog: _logJsMessage);
 
@@ -139,6 +156,92 @@ class SourceFetchService {
   final ShelfService _shelf;
   final NetClient _net;
   final JsEngine _js;
+
+  /// 书源脚本里 `cache.put/get` 的存储。
+  ///
+  /// 原版 `CacheManager` 会落盘并按 saveTime 过期；书源实际只用它跨规则传
+  /// 临时值（token、页面里的动态 key），进程内共享一份 Map 就够用。
+  final Map<String, Object?> _jsCache = <String, Object?>{};
+
+  /// 按书源 `concurrentRate` 限速（每个书源一个闸门，见 [SourceRateGate]）。
+  final SourceRateGateRegistry _rateGates = SourceRateGateRegistry();
+
+  /// 数据目录：`cookies.json` 落在这里，登录态才能跨进程保留。
+  final String _homeDir;
+
+  /// 登录域复用的网络层。
+  ///
+  /// 必须是同一个实例：cookie 存在 [NetClient] 自带的 [CookieStore] 里，
+  /// 登录域另起一个客户端会让「登录成功」与「抓正文带不上 cookie」同时成立。
+  NetClient get net => _net;
+
+  /// 登录域复用的脚本引擎（jsLib、java 宿主、限流都跟抓取链路一致）。
+  JsEngine get js => _js;
+
+  /// 按整数 ID 取书源。找不到抛 NOT_FOUND。
+  BookSource requireSource(int id) => _requireSource(id);
+
+  /// 书源自带的请求头（`header` 字段的 JSON）。
+  Map<String, String> headersOf(BookSource source) => _sourceHeaders(source);
+
+  /// 构造带网络能力的 `java` 宿主（登录脚本要 `java.ajax/post`）。
+  Object javaHostOf(BookSource source, {Map<String, String>? variables}) =>
+      _javaHost(source, variables: variables);
+
+  /// 按已解析的 URL 规则发请求（登录域的 `url,{"method":...}` 形态复用）。
+  Future<HttpResponse> requestAnalyzed(
+    BookSource source,
+    AnalyzedUrl analyzed,
+  ) =>
+      _request(
+        analyzed,
+        extraHeaders: _sourceHeaders(source),
+        source: source,
+      );
+
+  /// 登录 / 探测用的通用请求：GET 或表单 POST，自动叠加书源请求头。
+  Future<HttpResponse> requestUrl(
+    BookSource source,
+    String url, {
+    String method = 'GET',
+    Map<String, String>? form,
+    Map<String, String>? headers,
+  }) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) {
+      throw LegadoException(ErrorCode.invalid, '非法请求地址: $url');
+    }
+    final merged = <String, String>{..._sourceHeaders(source), ...?headers};
+    final client = merged.isEmpty ? _net : _net.withHeaders(merged);
+    Future<HttpResponse> send() {
+      if (method.toUpperCase() == 'POST') {
+        return client.postForm(uri, form ?? const <String, String>{});
+      }
+      return client.get(uri);
+    }
+
+    // 这条路径绕开了 `_request`（登录/校验用它发任意 URL），
+    // 限速得单独套一层，否则配了 concurrentRate 的源在登录时仍会打满。
+    final gate = _rateGates.gateOf(source.bookSourceUrl, source.concurrentRate);
+    return gate == null ? send() : gate.run(send);
+  }
+
+  String get _cookiePath =>
+      _homeDir.isEmpty ? '' : p.join(_homeDir, 'cookies.json');
+
+  Future<void>? _cookiesLoaded;
+
+  /// 载入持久化的 cookie（幂等；失败不阻塞抓取）。
+  Future<void> restoreCookies() {
+    if (_cookiePath.isEmpty) return Future<void>.value();
+    return _cookiesLoaded ??= _net.loadCookies(_cookiePath);
+  }
+
+  /// 把当前 cookie 落盘。登录成功后必须调，否则进程重启登录态就没了。
+  Future<void> persistCookies() async {
+    if (_cookiePath.isEmpty) return;
+    await _net.saveCookies(_cookiePath);
+  }
 
   void close() {
     _net.close();
@@ -329,6 +432,7 @@ class SourceFetchService {
     final response = await _request(
       analyzed,
       extraHeaders: _sourceHeaders(source),
+      source: source,
     );
     final body = response.text();
     final analyze = AnalyzeRule(_contextOf(source, baseUrl: response.finalUri.toString()));
@@ -547,12 +651,21 @@ class SourceFetchService {
       // 规则为空时保留搜索页已填的字段。
     }
     final rule = BookInfoRule.fromJson(ruleMap);
+    // 详情页初始化规则：`init` 的求值结果替换整页内容。
+    // 部分源用它解混淆（页面里塞了一层 `<script>` 生成的 HTML），
+    // 不执行的话后面所有字段规则都命中不到。
+    var content = body;
+    final initRule = (rule.init ?? '').trim();
+    if (initRule.isNotEmpty) {
+      final initialized = await analyze.getString(initRule, body);
+      if (initialized.trim().isNotEmpty) content = initialized;
+    }
     Future<String> pick(String? r, [String fallback = '']) async {
-      final value = await analyze.getString(r, body);
+      final value = await analyze.getString(r, content);
       return value.isEmpty ? fallback : value;
     }
 
-    final parsedCover = await analyze.getString(rule.coverUrl, body, true);
+    final parsedCover = await analyze.getString(rule.coverUrl, content, true);
     final meta = _BookMeta(
       name: await pick(rule.name, fallbackName),
       author: await pick(rule.author, fallbackAuthor),
@@ -572,7 +685,7 @@ class SourceFetchService {
         '书源详情页没有解析出书名，请检查书名规则',
       );
     }
-    final tocUrl = await analyze.getString(rule.tocUrl, body, true);
+    final tocUrl = await analyze.getString(rule.tocUrl, content, true);
     return (meta, tocUrl.isEmpty ? bookUrl : tocUrl);
   }
 
@@ -584,22 +697,7 @@ class SourceFetchService {
   ) async {
     final headers = _sourceHeaders(source);
     final client = headers.isEmpty ? _net : _net.withHeaders(headers);
-    final response = await client.get(Uri.parse(tocUrl));
-    if (!response.isSuccess) {
-      throw LegadoException(
-        ErrorCode.netTimeout,
-        '获取目录失败: HTTP ${response.statusCode}',
-      );
-    }
-    final body = response.text();
-    final analyze = AnalyzeRule(
-      _contextOf(source,
-          baseUrl: response.finalUri.toString(),
-          variables: context.variables,
-          // 保留调用方传进来的绑定（`book` 等），
-          // 书源的 ruleToc 常写 `book.bookUrl`。
-          extra: context.extraBindings),
-    );
+
     var ruleMap = <String, Object?>{};
     try {
       final decoded = jsonDecode(_looseJson(source.ruleToc ?? '{}'));
@@ -608,27 +706,249 @@ class SourceFetchService {
       // 目录规则缺失时返回空目录，交给调用方报错。
     }
     final rule = TocRule.fromJson(ruleMap);
-    final items = await analyze.getElements(rule.chapterList, body);
-    final out = <BookChapter>[];
-    for (var i = 0; i < items.length; i++) {
-      final item = items[i];
-      final title = await _first(analyze, rule.chapterName, item);
-      final url = await _first(analyze, rule.chapterUrl, item, isUrl: true);
-      if (url.isEmpty) continue;
-      out.add(BookChapter(
-        url: url,
-        bookUrl: bookUrl,
-        index: out.length,
-        title: title.isEmpty ? '第 ${out.length + 1} 章' : title,
-        isVolume: _flag(await _first(analyze, rule.isVolume, item)),
-        isVip: _flag(await _first(analyze, rule.isVip, item)),
-        isPay: _flag(await _first(analyze, rule.isPay, item)),
-      ));
+
+    // 目录更新前脚本：书源用它刷新变量 / 处理登录态（原版 WebBook.runPreUpdateJs）。
+    // 失败不阻断目录抓取，只是少了脚本带来的预处理。
+    final preUpdateJs = (rule.preUpdateJs ?? '').trim();
+    if (preUpdateJs.isNotEmpty) {
+      try {
+        await _contextOf(
+          source,
+          variables: context.variables,
+          extra: context.extraBindings,
+        ).evalJs(preUpdateJs, null);
+      } catch (e) {
+        _log.warning('preUpdateJs 执行失败(${source.bookSourceName}): $e');
+      }
     }
-    if (out.isEmpty) {
+
+    // 规则前缀：`-` 表示该规则返回的是倒序（最新章节在前），`+` 强制正序。
+    // 对齐 Kotlin `BookChapterList.analyzeChapterList`。
+    var listRule = (rule.chapterList ?? '').trim();
+    var reverse = false;
+    if (listRule.startsWith('-')) {
+      reverse = true;
+      listRule = listRule.substring(1).trim();
+    } else if (listRule.startsWith('+')) {
+      listRule = listRule.substring(1).trim();
+    }
+
+    // 目录分页：`nextTocUrl` 一次可能给出多个地址（老站常把第 2~7 页一起写出来）。
+    // 用队列逐页抓，visited 去重 —— 站点把当前页也写进下一页列表时不会死循环。
+    final raw = <BookChapter>[];
+    final visited = <String>{};
+    final pending = <String>[tocUrl];
+    while (pending.isNotEmpty && visited.length < 64) {
+      final pageUrl = pending.removeAt(0);
+      if (pageUrl.isEmpty || !visited.add(pageUrl)) continue;
+      final response = await client.get(Uri.parse(pageUrl));
+      if (!response.isSuccess) {
+        // 第一页就失败说明整个目录拿不到；后续页失败只能接受残缺目录。
+        if (raw.isEmpty) {
+          throw LegadoException(
+            ErrorCode.netTimeout,
+            '获取目录失败: HTTP ${response.statusCode}',
+          );
+        }
+        break;
+      }
+      final body = response.text();
+      final analyze = AnalyzeRule(
+        _contextOf(source,
+            baseUrl: response.finalUri.toString(),
+            variables: context.variables,
+            // 保留调用方传进来的绑定（`book` 等），
+            // 书源的 ruleToc 常写 `book.bookUrl`。
+            extra: context.extraBindings),
+      );
+      final items = await analyze.getElements(listRule, body);
+      for (var i = 0; i < items.length; i++) {
+        final item = items[i];
+        final title = await _first(analyze, rule.chapterName, item);
+        final url = await _first(analyze, rule.chapterUrl, item, isUrl: true);
+        if (url.isEmpty) continue;
+        raw.add(BookChapter(
+          url: url,
+          bookUrl: bookUrl,
+          title: title.isEmpty ? '第 ${raw.length + 1} 章' : title,
+          isVolume: _flag(await _first(analyze, rule.isVolume, item)),
+          isVip: _flag(await _first(analyze, rule.isVip, item)),
+          isPay: _flag(await _first(analyze, rule.isPay, item)),
+        ));
+      }
+      if ((rule.nextTocUrl ?? '').isEmpty) break;
+      for (final next
+          in await analyze.getStringList(rule.nextTocUrl, body, true)) {
+        if (next.isNotEmpty && !visited.contains(next)) pending.add(next);
+      }
+    }
+
+    if (raw.isEmpty) {
       throw const LegadoException(ErrorCode.invalid, '书源目录没有解析出章节');
     }
+
+    // 倒序规则先翻成阅读顺序，之后去重与编号都按阅读顺序算。
+    final ordered = reverse ? raw.reversed.toList(growable: false) : raw;
+
+    // 去重：同一章节地址只保留**最后一次出现**。
+    //
+    // 旧站目录页常把「最新章节」区块和正文目录放进同一个容器，同一 URL 会出现两次；
+    // 而 chapters 表主键是 (url, bookUrl) 且写入用 INSERT OR REPLACE，重复行会互相
+    // 覆盖 —— 若保留先出现的那条，后一条携带的大 index 覆盖之后，前面的 index 就
+    // 成了空洞，`Reader.GetChapters` 按 index 排序返回的序列不再是 0..n-1，
+    // 阅读器按列表下标取章节时就会整体错位（点第 N 章看到第 N+k 章）。
+    final lastAt = <String, int>{};
+    for (var i = 0; i < ordered.length; i++) {
+      lastAt[ordered[i].url] = i;
+    }
+    final positions = lastAt.values.toList()..sort();
+    final out = <BookChapter>[];
+    for (final position in positions) {
+      final chapter = ordered[position];
+      // 去重后重新编号，保证落库的 index 一定是 0..n-1 连续。
+      chapter.index = out.length;
+      out.add(chapter);
+    }
+    if (out.length != ordered.length) {
+      _log.info(
+        '目录去重 ${source.bookSourceName}: 原始 ${ordered.length} 条，'
+        '丢弃重复 ${ordered.length - out.length} 条',
+      );
+    }
+
+    // 标题格式化：原版把每章作为 `chapter`、序号作为 `index`（从 1 开始）
+    // 注入脚本，脚本的返回值就是新标题。很多源用它补齐「第X章」前缀。
+    final formatJs = (rule.formatJs ?? '').trim();
+    if (formatJs.isNotEmpty) {
+      for (var i = 0; i < out.length; i++) {
+        final chapter = out[i];
+        try {
+          final value = await _contextOf(
+            source,
+            variables: context.variables,
+            extra: {
+              ...context.extraBindings,
+              'index': i + 1,
+              'chapter': chapter.toRow(),
+              'title': chapter.title,
+            },
+          ).evalJs(formatJs, null);
+          final title = value?.toString().trim() ?? '';
+          if (title.isNotEmpty) chapter.title = title;
+        } catch (e) {
+          _log.warning('formatJs 执行失败(${source.bookSourceName}) 第 ${i + 1} 章: $e');
+        }
+      }
+    }
     return out;
+  }
+
+  /// 换源：把一本书迁到另一个书源（或同源换一个书籍地址）。
+  ///
+  /// 语义对齐 Kotlin `BookshelfViewModel.changeBookSource`：
+  /// - 书本身保留（分组、排序、自定义封面/简介都不动），只换 `bookUrl` 与来源；
+  /// - 目录整体重建；
+  /// - 阅读进度按**章节序号**保留（不同源章节数不同，夹在边界内）；
+  /// - `chapters` / `reading_progress` / `chapter_cache` 都以 `bookUrl` 或
+  ///   `bookId` 关联，所以实现是「删旧书 → 插新书 → 插新章节」，不是改主键。
+  Future<Map<String, Object?>> changeSource(
+    int bookId,
+    int sourceId,
+    String newBookUrl,
+  ) async {
+    final book = _daos.book.getById(bookId);
+    if (book == null) {
+      throw LegadoException(ErrorCode.notFound, '书籍不存在: $bookId');
+    }
+    if (book.isLocal) {
+      throw const LegadoException(ErrorCode.invalid, '本地书不支持换源');
+    }
+    final source = _requireSource(sourceId);
+    final targetUrl = newBookUrl.trim().isEmpty
+        ? book.bookUrl
+        : newBookUrl.trim();
+    if (targetUrl == book.bookUrl && source.bookSourceUrl == book.origin) {
+      return <String, Object?>{'bookId': bookId, 'book': _shelf.getBook(bookId)};
+    }
+    final occupied = _daos.book.getByUrl(targetUrl);
+    if (occupied != null && occupied.bookUrl != book.bookUrl) {
+      throw LegadoException(
+        ErrorCode.invalid,
+        '目标书籍已在书架中: ${occupied.name}',
+      );
+    }
+
+    final context = _contextOf(source);
+    final (meta, tocUrl) = await _fetchInfo(
+      context,
+      source,
+      targetUrl,
+      book.name,
+      book.author,
+      book.displayCover,
+    );
+    final chapters = await _fetchToc(context, source, tocUrl, targetUrl);
+
+    final oldUrl = book.bookUrl;
+    final oldProgress = _daos.readingProgress.get(oldUrl);
+    final keepIndex = oldProgress?.chapterIndex ?? book.durChapterIndex;
+    final index =
+        chapters.isEmpty ? 0 : keepIndex.clamp(0, chapters.length - 1);
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    final moved = book.copyWith(
+      bookUrl: targetUrl,
+      origin: source.bookSourceUrl,
+      originName: source.bookSourceName,
+      tocUrl: tocUrl,
+      name: meta.name.trim().isEmpty ? book.name : meta.name.trim(),
+      author: meta.author.trim().isEmpty ? book.author : meta.author.trim(),
+      kind: meta.kind.trim().isEmpty ? book.kind : meta.kind,
+      coverUrl: meta.cover.trim().isEmpty ? book.coverUrl : meta.cover,
+      intro: meta.intro.trim().isEmpty ? book.intro : meta.intro,
+      totalChapterNum: chapters.length,
+      latestChapterTitle:
+          chapters.isEmpty ? book.latestChapterTitle : chapters.last.title,
+      latestChapterTime: now,
+      lastCheckTime: now,
+      durChapterIndex: index,
+      durChapterTitle: chapters.isEmpty
+          ? book.durChapterTitle
+          : chapters[index].title,
+      durChapterPos: oldProgress?.chapterPos ?? book.durChapterPos,
+    );
+
+    runInTransaction(_daos.db, () {
+      // 顺序要紧：先删旧书（级联删 chapters），再插新书，最后插新章节。
+      _daos.book.deleteByUrl(oldUrl);
+      _daos.readingProgress.delete(oldUrl);
+      _daos.cache.deleteByPrefix('chapter_$bookId');
+      _daos.book.insert(moved);
+      for (final chapter in chapters) {
+        _daos.chapter.insert(chapter);
+      }
+      if (oldProgress != null) {
+        _daos.readingProgress.put(
+          ReadingProgress(
+            bookUrl: targetUrl,
+            chapterIndex: index,
+            chapterTitle: chapters.isEmpty
+                ? oldProgress.chapterTitle
+                : chapters[index].title,
+            chapterPos: oldProgress.chapterPos,
+            scrollPercent: oldProgress.scrollPercent,
+            updatedAt: now,
+          ),
+        );
+      }
+    });
+
+    final newId = _rowId(targetUrl);
+    return <String, Object?>{
+      'bookId': newId,
+      'oldBookId': bookId,
+      'book': _shelf.getBook(newId),
+    };
   }
 
   /// 按书源地址取书源实体（网络书正文抓取要靠它找规则）。
@@ -641,19 +961,23 @@ class SourceFetchService {
 
   /// 抓网络书正文（含 `ruleContent.nextContentUrl` 多页翻页）。
   ///
-  /// 返回 `(正文HTML, 图片直链列表)`。
+  /// 返回正文 HTML、图片直链列表与 `ruleContent.title` 解出的标题
+  /// （没有该规则时为 null）。
   ///
   /// [bookUrl] 是书籍地址（用来定位书源与拼相对地址），[chapterUrl] 是章节地址。
+  /// [chapterTitle] 是目录里的章节标题，作为脚本 `{{title}}` 的取值
+  /// （对齐 Kotlin `BookContent` 的 `title` 绑定）。
   /// [nextChapterUrl] 是下一章地址，既作为脚本里的 `nextChapterUrl` 绑定，
   /// 也用于阻止翻页时误翻到下一章（对齐 Kotlin `BookContent.analyzeContent`）。
   ///
   /// 翻页语义照抄原版 `BookContent.analyzeContent`：
   /// - 解出 1 个下一页链接 → 串行抓，直到链接为空 / 已访问过 / 指向下一章；
   /// - 解出多个链接 → 并发抓（图片书分页常见），结果拼到正文末尾。
-  Future<(String, List<String>)> fetchContent(
+  Future<FetchedContent> fetchContent(
     BookSource source,
     String bookUrl,
     String chapterUrl, {
+    String chapterTitle = '',
     String? nextChapterUrl,
   }) async {
     var ruleMap = <String, Object?>{};
@@ -678,13 +1002,19 @@ class SourceFetchService {
     ///
     /// 走 [UrlRuleAnalyzer] + [_request] 而不是裸 GET，让下一页链接里的
     /// `url,{"method":"POST","body":"..."}` 写法真正生效（对齐原版 AnalyzeUrl）。
-    Future<({String content, List<String> images, List<String> nextUrls, String finalUrl})>
-        loadPage(String fetchUrl, String baseForFetch) async {
+    Future<({
+      String content,
+      List<String> images,
+      List<String> nextUrls,
+      String finalUrl,
+      String title
+    })> loadPage(String fetchUrl, String baseForFetch) async {
       final analyzer = UrlRuleAnalyzer(
         _contextOf(source, baseUrl: baseForFetch),
       );
       final analyzed = await analyzer.analyze(fetchUrl, baseUrl: baseForFetch);
-      final response = await _request(analyzed, extraHeaders: headers);
+      final response =
+          await _request(analyzed, extraHeaders: headers, source: source);
       if (!response.isSuccess) {
         throw LegadoException(
           ErrorCode.netTimeout,
@@ -700,8 +1030,8 @@ class SourceFetchService {
           baseUrl: redirectUrl,
           extra: {
             'book': <String, Object?>{'bookUrl': bookUrl},
-            'chapter': <String, Object?>{'url': chapterUrl},
-            'title': '',
+            'chapter': <String, Object?>{'url': chapterUrl, 'title': chapterTitle},
+            'title': chapterTitle,
             'src': body,
             // 书源规则里 `{{nextChapterUrl}}` 常用来避开把“下一章”当成本章下一页。
             'nextChapterUrl': nextChapterUrl,
@@ -749,11 +1079,17 @@ class SourceFetchService {
       if (nextRule != null && nextRule.isNotEmpty) {
         nextUrls.addAll(await analyze.getStringList(nextRule, body, true));
       }
+      // ruleContent.title：少数源的标题只在正文页（目录页只有「第1章」或空串）。
+      // 只在配了标题规则时才求值，避免每页多跑一次解析。
+      final titleRule = (rule.title ?? '').trim();
+      final pageTitle =
+          titleRule.isEmpty ? '' : (await analyze.getString(titleRule, body)).trim();
       return (
         content: content,
         images: images,
         nextUrls: nextUrls,
         finalUrl: redirectUrl,
+        title: pageTitle,
       );
     }
 
@@ -761,6 +1097,8 @@ class SourceFetchService {
     final first = await loadPage(chapterUrl, absolute);
     final pages = <String>[first.content];
     final allImages = <String>[...first.images];
+    // 标题取首页结果；首页没解出时再往后页找（少数源标题在第一个分页里）。
+    var contentTitle = first.title;
     // 首页最终地址，作为下一页链接的相对基准与防重复种子。
     final firstFinalUrl = first.finalUrl;
 
@@ -780,6 +1118,7 @@ class SourceFetchService {
         final page = await loadPage(nextUrl, firstFinalUrl);
         pages.add(page.content);
         allImages.addAll(page.images);
+        if (contentTitle.isEmpty) contentTitle = page.title;
         // nextContentUrl 是相对地址时，以「当前页」为基准拼下一页
         // （getStringList 已在 loadPage 里用该页 finalUrl 绝对化，这里只是推进链接）。
         nextUrl = page.nextUrls.isEmpty ? '' : page.nextUrls.first;
@@ -802,16 +1141,30 @@ class SourceFetchService {
           for (final page in results) {
             pages.add(page.content);
             allImages.addAll(page.images);
+            if (contentTitle.isEmpty) contentTitle = page.title;
           }
         }
       }
     }
 
-    final contentStr = pages.join('\n');
+    var contentStr = pages.join('\n');
     if (contentStr.trim().isEmpty) {
       throw const LegadoException(ErrorCode.invalid, '书源正文规则没有解析出内容');
     }
-    return (contentStr, allImages);
+    // 替换净化：书源给的 HTML 里常年夹着广告、站点水印、无意义空行。
+    // 放在退出前统一做一次，翻页拼接后的整章才不会被逐页规则漏掉。
+    contentStr = ReplacementProcessor(_daos.replaceRule).content(
+      contentStr,
+      ReplacementTarget(
+        bookName: _daos.book.getByUrl(bookUrl)?.name ?? '',
+        origin: source.bookSourceUrl,
+      ),
+    );
+    return FetchedContent(
+      contentStr,
+      allImages,
+      title: contentTitle.isEmpty ? null : contentTitle,
+    );
   }
 
   // ---- helpers --------------------------------------------------------
@@ -853,15 +1206,124 @@ class SourceFetchService {
       SimpleRuleContext(
         js: _js,
         baseUrl: baseUrl.isEmpty ? source.bookSourceUrl : baseUrl,
-        variables: variables ?? <String, String>{},
+        // 书源变量（`Source.SetVariable` 存的 JSON，原版是 source_variables 表）：
+        // 规则里 `{{token}}` 读、`@put:{k:v}` 写。不加载的话用户配置的变量永远读不到。
+        // 调用方显式传入的变量（书籍 variable / 本次流程 `@put` 的结果）优先级更高。
+        variables: {
+          ..._decodeVariables(
+            _daos.cache.get('sourceVariable_${source.bookSourceUrl}')?.value ?? '',
+          ),
+          ...?variables,
+        },
         source: source.toJson(),
+        // 书源 jsLib 是规则脚本的公共函数库，必须随每次求值一起注入，
+        // 否则规则里调 jsLib 定义的函数会抛 ReferenceError。
+        jsLib: source.jsLib ?? '',
         // `_javaHost` 内部会再构造上下文（给 java.getString 回调用），
         // 那层不能再带 java，否则无限递归。
         javaHost: withJava
             ? _javaHost(source, baseUrl: baseUrl, variables: variables)
             : null,
-        extraBindings: extra,
+        // 原版 evalJS 的全局绑定里还有 `cookie` 与 `cache`：
+        // 书源常写 `cookie.getCookie(baseUrl)`、`cache.put('k', v)`。
+        // 少了它们会抛 ReferenceError，把整条规则打断。
+        extraBindings: {
+          'cookie': _cookieObject(),
+          'cache': _cacheObject(),
+          ...extra,
+        },
       );
+
+  /// 脚本里的 `cookie` 全局对象（对齐 Kotlin `CookieStore` 单例）。
+  Object _cookieObject() => JsHostObject(
+        label: 'cookie',
+        methods: {
+          // getCookie(url) 返回整条请求头，getKey(url, key) 取单个值。
+          'getCookie': (args) {
+            final uri = _uriOf(args);
+            if (uri == null) return '';
+            return _net.cookies.getCookieHeader(uri) ?? '';
+          },
+          'getKey': (args) {
+            final uri = _uriOf(args);
+            if (uri == null || args.length < 2) return '';
+            return _net.cookies.cookieValue(uri, '${args[1]}') ?? '';
+          },
+          'setCookie': (args) {
+            final uri = _uriOf(args);
+            if (uri == null || args.length < 2) return null;
+            _net.cookies.importCookieHeader(uri, '${args[1]}');
+            return null;
+          },
+          // replaceCookie 语义是「整站覆盖」：先清空再写入，避免旧登录态残留。
+          'replaceCookie': (args) {
+            final uri = _uriOf(args);
+            if (uri == null || args.length < 2) return null;
+            _net.cookies.removeAll(uri);
+            _net.cookies.importCookieHeader(uri, '${args[1]}');
+            return null;
+          },
+          'removeCookie': (args) {
+            final uri = _uriOf(args);
+            if (uri == null) return null;
+            _net.cookies.removeAll(uri);
+            return null;
+          },
+        },
+      );
+
+  /// 脚本里的 `cache` 全局对象（对齐 Kotlin `CacheManager` 的常用方法）。
+  Object _cacheObject() => JsHostObject(
+        label: 'cache',
+        methods: {
+          'put': (args) {
+            if (args.isEmpty) return null;
+            _jsCache['${args[0]}'] = args.length > 1 ? args[1] : null;
+            return null;
+          },
+          'get': (args) {
+            if (args.isEmpty) return null;
+            final v = _jsCache['${args[0]}'];
+            return v?.toString();
+          },
+          'getInt': (args) => int.tryParse('${_jsCacheValue(args)}'),
+          'getLong': (args) => int.tryParse('${_jsCacheValue(args)}'),
+          'getDouble': (args) => double.tryParse('${_jsCacheValue(args)}'),
+          'delete': (args) {
+            if (args.isEmpty) return null;
+            _jsCache.remove('${args[0]}');
+            return null;
+          },
+        },
+      );
+
+  Object? _jsCacheValue(List<Object?> args) =>
+      args.isEmpty ? null : _jsCache['${args[0]}'];
+
+  /// JS 里传进来的 `{k: v}`（Map 或 JSON 文本）转请求头。
+  Map<String, String> _headersOf(Object? raw) {
+    if (raw is Map) {
+      return {for (final e in raw.entries) '${e.key}': '${e.value}'};
+    }
+    if (raw is String && raw.trim().startsWith('{')) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          return {for (final e in decoded.entries) '${e.key}': '${e.value}'};
+        }
+      } catch (_) {
+        // 不是合法 JSON 就当没有额外请求头。
+      }
+    }
+    return const {};
+  }
+
+  Uri? _uriOf(List<Object?> args) {
+    if (args.isEmpty) return null;
+    final raw = '${args[0]}'.trim();
+    if (raw.isEmpty) return null;
+    return Uri.tryParse(raw);
+  }
 
   /// 构造书源脚本里的 `java` 宿主对象。
   ///
@@ -884,42 +1346,85 @@ class SourceFetchService {
     // 原版 Kotlin 的 `java.ajax` 用 AnalyzeUrl 解析整串，因此书源里
     // `java.ajax(host + "/morechapter,{\"method\":\"POST\",\"body\":\"id=\" + id + "\"}")`
     // 这种「URL + JSON 后缀」能真正发出 POST；当成普通 URL GET 会拿到错误页面。
-    Future<Object?> fetchUrl(String rawUrl) async {
+    Future<HttpResponse?> fetchRaw(
+      String rawUrl, {
+      Map<String, String> extraHeaders = const {},
+    }) async {
       try {
         final analyzer = UrlRuleAnalyzer(
           _contextOf(source, baseUrl: effectiveBaseUrl, variables: vars, withJava: false),
         );
         final analyzed = await analyzer.analyze(rawUrl, baseUrl: effectiveBaseUrl);
-        final response = await _request(
+        return await _request(
           analyzed,
-          extraHeaders: _sourceHeaders(source),
+          extraHeaders: {..._sourceHeaders(source), ...extraHeaders},
+          source: source,
         );
-        return response.text();
       } catch (e) {
         return null;
       }
     }
 
+    Future<Object?> fetchUrl(String rawUrl) async {
+      final response = await fetchRaw(rawUrl);
+      return response?.text();
+    }
+
+    /// `java.get/post/connect` 的返回值：原版是 OkHttp 的 `Response`，
+    /// 书源一律写 `.body()` 取正文。这里用一个带同名方法的宿主对象对齐。
+    Object? responseObject(HttpResponse? response) {
+      if (response == null) return null;
+      return JsHostObject(
+        label: 'StrResponse',
+        methods: {
+          'body': (args) => response.text(),
+          'url': (args) => response.finalUri.toString(),
+          'statusCode': (args) => response.statusCode,
+          'headers': (args) => <String, Object?>{
+            for (final e in response.headers.entries) e.key: e.value.join(', '),
+          },
+          'toString': (args) => response.text(),
+        },
+      );
+    }
+
     return createJavaObject(
       ajax: (url) => fetchUrl(url),
-      get: (url) => fetchUrl(url),
-      post: (url, body, hdrs) async {
+      ajaxAll: (urls) async =>
+          await Future.wait([for (final url in urls) fetchUrl(url)]),
+      // 书源常用 `java.getCookie(url)` 判断登录态、或取某个具名 cookie 拼请求头。
+      getCookie: (url, key) {
+        final uri = Uri.tryParse(url);
+        if (uri == null) return '';
         try {
-          final analyzer = UrlRuleAnalyzer(
-            _contextOf(source, baseUrl: effectiveBaseUrl, variables: vars, withJava: false),
-          );
-          // 显式 body 优先于 URL 后缀里的 body。
-          final rule =
-              body == null ? url : '$url,{"body":${jsonEncode(body.toString())}}';
-          final analyzed = await analyzer.analyze(rule, baseUrl: effectiveBaseUrl);
-          final response = await _request(
-            analyzed,
-            extraHeaders: _sourceHeaders(source),
-          );
-          return response.text();
-        } catch (e) {
-          return null;
+          if (key != null && key.isNotEmpty) {
+            return _net.cookies.cookieValue(uri, key) ?? '';
+          }
+          return _net.cookies.getCookieHeader(uri) ?? '';
+        } catch (_) {
+          return '';
         }
+      },
+      // java.get(url, headers) 的返回值是响应对象（书源写 `.body()` 取正文），
+      // 与 Kotlin 的 Connection.Response 一致。
+      get: (url) async => responseObject(await fetchRaw(url)),
+      connect: (url, headers, _) async {
+        // Kotlin 的 `java.connect(urlStr, header)` 第二参就是请求头，
+        // 不是 body（body 要写在 URL 串的 `,{"body":...}` 里）。
+        return responseObject(
+          await fetchRaw(url, extraHeaders: _headersOf(headers)),
+        );
+      },
+      post: (url, body, hdrs) async {
+        final headers = _headersOf(hdrs);
+        // 显式 body 优先于 URL 后缀里的 body；method 必须是 POST，
+        // 否则只会拼出一个带 body 的 GET（服务端拿不到表单）。
+        final rule = body == null
+            ? (url.contains('{"') ? url : '$url,{"method":"POST"}')
+            : '$url,{"method":"POST","body":${jsonEncode(body.toString())}}';
+        return responseObject(
+          await fetchRaw(rule, extraHeaders: headers),
+        );
       },
       getString: (rule) async {
         final analyze = AnalyzeRule(
@@ -945,18 +1450,49 @@ class SourceFetchService {
   }
 
   /// 书源自带的请求头（`header` 字段是 JSON 字符串）。
+  ///
+  /// 再叠加用户在登录面板粘贴的请求头：粘贴的那份是用户针对自己的账号
+  /// （Cookie、UA、Referer）显式给的，优先级必须高于书源默认值。
   Map<String, String> _sourceHeaders(BookSource source) {
+    final out = <String, String>{};
     final raw = source.header;
-    if (raw == null || raw.trim().isEmpty) return const {};
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is Map) {
-        return decoded.map((k, v) => MapEntry(k.toString(), v.toString()));
+    if (raw != null && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          decoded.forEach((k, v) => out['$k'] = '$v');
+        }
+      } catch (_) {
+        // header 不是合法 JSON 就当没有，不影响其余规则。
       }
-    } catch (_) {
-      // header 不是合法 JSON 就当没有，不影响其余规则。
     }
-    return const {};
+    final pasted = _daos.sourceLogin.get(source.bookSourceUrl)?.header ?? '';
+    if (pasted.trim().isNotEmpty) {
+      out.addAll(_parseHeaderText(pasted));
+    }
+    return out;
+  }
+
+  /// 解析粘贴的请求头文本（`Key: Value` 每行一条）。
+  ///
+  /// 只有 `<key>=<value>` 形态的行（浏览器复制出来的裸 Cookie 串）不算请求头，
+  /// 那种由登录域单独走 cookie 导入，这里跳过即可。
+  static Map<String, String> _parseHeaderText(String text) {
+    final out = <String, String>{};
+    for (final line in text.split(RegExp(r'\r?\n'))) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty) continue;
+      final idx = trimmed.indexOf(':');
+      if (idx <= 0) continue;
+      final key = trimmed.substring(0, idx).trim().toLowerCase();
+      final value = trimmed.substring(idx + 1).trim();
+      if (key.isEmpty || value.isEmpty) continue;
+      // HTTP/2 伪头（`:authority`、`:method`）没有冒号前的键名，走不到这里；
+      // 这里再挡一次以 `:` 开头的行，避免把伪头当真实头发出去。
+      if (key.startsWith(':')) continue;
+      out[key] = value;
+    }
+    return out;
   }
 
   /// 发请求。
@@ -967,23 +1503,49 @@ class SourceFetchService {
   Future<HttpResponse> _request(
     AnalyzedUrl analyzed, {
     Map<String, String> extraHeaders = const {},
-  }) {
+    BookSource? source,
+  }) async {
+    // 首次请求前把持久化的 cookie 载入（幂等）：登录态跨进程保留全靠它。
+    await restoreCookies();
     final uri = Uri.tryParse(analyzed.url);
     if (uri == null) {
       throw LegadoException(ErrorCode.invalid, '非法请求地址: ${analyzed.url}');
     }
     final headers = <String, String>{...extraHeaders, ...analyzed.headers};
     final client = headers.isEmpty ? _net : _net.withHeaders(headers);
-    final Future<HttpResponse> response;
-    if (analyzed.method.toUpperCase() == 'POST') {
-      response = client.post(
-        uri,
-        body: _postBody(analyzed),
-        headers: _postHeaders(analyzed),
-        charset: analyzed.charset,
-      );
-    } else {
-      response = client.get(uri, charset: analyzed.charset);
+    // WebView 规则（`{"webView":true}` / `webJs`）：桌面与移动端都没有
+    // 可编程的渲染环境，只能用普通 HTTP 顶上。打一条日志，免得书源作者
+    // 以为自己的规则失效了。
+    if (analyzed.useWebView || (analyzed.webJs ?? '').trim().isNotEmpty) {
+      _log.info('规则要求 WebView 渲染，已退回普通 HTTP 请求: ${analyzed.ruleUrl}');
+    }
+
+    Future<HttpResponse> send() {
+      if (analyzed.method.toUpperCase() == 'POST') {
+        return client.post(
+          uri,
+          body: _postBody(analyzed),
+          headers: _postHeaders(analyzed),
+          charset: analyzed.charset,
+        );
+      }
+      return client.get(uri, charset: analyzed.charset);
+    }
+
+    // 书源 concurrentRate：`"1000"`（最小间隔）或 `"3/1000"`（窗口内次数）。
+    // 放在 send 外层而不是网络层，因为限速是「按书源」而不是「按 host」——
+    // 同一 host 上挂着几十个书源时，按 host 限速会把无关书源互相拖慢。
+    final gate = source == null
+        ? null
+        : _rateGates.gateOf(source.bookSourceUrl, source.concurrentRate);
+    Future<HttpResponse> sendLimited() =>
+        gate == null ? send() : gate.run(send);
+
+    var response = await sendLimited();
+    // 规则里的 `retry`：响应失败时额外重试几次（对齐 Kotlin newCallStrResponse）。
+    // 连接层重试由 NetClient 自己做，这里补的是「拿到错误状态码」的情况。
+    for (var i = 0; i < analyzed.retry && !response.isSuccess; i++) {
+      response = await sendLimited();
     }
     return response;
   }

@@ -222,6 +222,23 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     return result ?? false;
   }
 
+  /// 翻到全书边界再继续翻时的提示（对齐原版「没有下一页」的 snackbar）。
+  ///
+  /// 没有它的话，最后一章末页点「下一页」看起来就是点击失灵；
+  /// 频繁点击时只保留一条，避免 SnackBar 排队。
+  void _showBoundaryHint(int dir) {
+    final messenger = ScaffoldMessenger.of(context);
+    if (messenger.mounted && mounted) {
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(dir > 0 ? '已经是最后一章' : '已经是第一章'),
+          duration: const Duration(milliseconds: 1200),
+        ),
+      );
+    }
+  }
+
   void _seek(double percent) {
     final total = _controller.chapters.length;
     if (total == 0) return;
@@ -238,6 +255,22 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   Future<void> _openTts() async {
     await showTtsSheet(context, _controller);
     _focus.requestFocus();
+  }
+
+  /// 菜单里的「刷新正文」：跳过离线缓存重新抓一次当前章。
+  ///
+  /// 只影响当前章，不动已缓存的其它章；失败会回退到刚看的那一版。
+  Future<void> _refreshChapter() async {
+    _setMenu(false);
+    final ok = await _controller.refreshChapter();
+    if (!mounted) return;
+    _focus.requestFocus();
+    final message = ok
+        ? '已重新抓取本章正文'
+        : (_controller.error == null ? '刷新失败，仍显示原来的正文' : '刷新失败，请检查书源或网络');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
+    );
   }
 
   @override
@@ -298,6 +331,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                           onNextChapter: _controller.nextChapter,
                           onStyleChanged: _applyStyle,
                           onSpeak: _openTts,
+                          onRefresh: _refreshChapter,
                           onSeek: _seek,
                         ),
                       ),
@@ -323,8 +357,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
     if (_controller.isManga) {
       return _MangaView(
-        images: _controller.images,
+        controller: _controller,
         onTapCenter: _toggleMenu,
+        onBoundary: _showBoundaryHint,
         textColor: background.textColor,
       );
     }
@@ -341,6 +376,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         style: _controller.style,
         menuVisible: _menu,
         onTapCenter: _toggleMenu,
+        onBoundary: _showBoundaryHint,
       );
     }
     return ReaderPager(
@@ -349,6 +385,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       style: _controller.style,
       menuVisible: _menu,
       onTapCenter: _toggleMenu,
+      onBoundary: _showBoundaryHint,
     );
   }
 
@@ -371,7 +408,18 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               style: TextStyle(color: background.textColor),
             ),
             const SizedBox(height: 16),
-            FilledButton(onPressed: _controller.load, child: const Text('重试')),
+            FilledButton(
+              // 重试要能甩掉缓存：缓存里若是坏内容（防爬占位页、抓到半截），
+              // 普通重读永远还是它，看起来就是「怎么点都没用」。
+              onPressed: () {
+                if (_controller.chapters.isEmpty) {
+                  _controller.load();
+                } else {
+                  unawaited(_controller.refreshChapter());
+                }
+              },
+              child: const Text('重试'),
+            ),
           ],
         ),
       ),
@@ -393,29 +441,111 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 /// 漫画的「正文」本质是图片直链列表（core 的 `Reader.GetContent.images`），
 /// 没有分页数据，因此这里用 ListView 而不是分页器；单击任意位置仍然呼出菜单，
 /// 与文字章的交互一致。
-class _MangaView extends StatelessWidget {
+///
+/// 滚到本章最后一张图后继续上滑 → 自动进入下一章（原版
+/// `ReadBook.moveToNextChapter` 的行为）。不然看漫画只能先呼出菜单再点「下一章」，
+/// 一章一章翻下来非常累。
+class _MangaView extends StatefulWidget {
   const _MangaView({
-    required this.images,
+    required this.controller,
     required this.onTapCenter,
+    required this.onBoundary,
     required this.textColor,
   });
 
-  final List<String> images;
+  final ReaderController controller;
   final VoidCallback onTapCenter;
+  final ValueChanged<int>? onBoundary;
   final Color textColor;
 
   @override
+  State<_MangaView> createState() => _MangaViewState();
+}
+
+class _MangaViewState extends State<_MangaView> {
+  final ScrollController _scroll = ScrollController();
+
+  late int _chapter = widget.controller.chapterIndex;
+  double _overscroll = 0;
+  bool _swapping = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_syncChapter);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_syncChapter);
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  /// 换章后回到顶部：否则在新章图片还没铺满时，滚动位置会停在上一章的底部。
+  void _syncChapter() {
+    if (widget.controller.chapterIndex == _chapter) return;
+    _chapter = widget.controller.chapterIndex;
+    _overscroll = 0;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _scroll.hasClients) _scroll.jumpTo(0);
+    });
+  }
+
+  bool _onScrollNotification(ScrollNotification notification) {
+    if (notification.depth != 0) return false;
+    if (notification is OverscrollNotification) {
+      final delta = notification.overscroll;
+      if (_overscroll != 0 && delta.sign != _overscroll.sign) _overscroll = 0;
+      _overscroll += delta;
+      if (_overscroll >= 56) {
+        _crossBoundary(1);
+      } else if (_overscroll <= -56) {
+        _crossBoundary(-1);
+      }
+    } else if (notification is ScrollEndNotification) {
+      _overscroll = 0;
+    }
+    return false;
+  }
+
+  void _crossBoundary(int dir) {
+    if (_swapping) return;
+    final controller = widget.controller;
+    if (controller.chapterLoading) return;
+    final hasChapter = dir > 0
+        ? controller.hasNextChapter
+        : controller.hasPrevChapter;
+    _overscroll = 0;
+    _swapping = true;
+    Timer(const Duration(milliseconds: 400), () => _swapping = false);
+    if (!hasChapter) {
+      widget.onBoundary?.call(dir);
+      return;
+    }
+    unawaited(dir > 0 ? controller.nextChapter() : controller.prevChapter());
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final textColor = widget.textColor;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: onTapCenter,
-      child: ListView.builder(
-        itemCount: images.length,
-        // 预取两屏，快速下滑时不至于频繁看到加载骨架。
-        cacheExtent: 1200,
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        itemBuilder: (context, index) =>
-            _MangaImage(url: images[index], index: index, textColor: textColor),
+      onTap: widget.onTapCenter,
+      child: NotificationListener<ScrollNotification>(
+        onNotification: _onScrollNotification,
+        child: ListView.builder(
+          controller: _scroll,
+          itemCount: widget.controller.images.length,
+          // 预取两屏，快速下滑时不至于频繁看到加载骨架。
+          cacheExtent: 1200,
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          itemBuilder: (context, index) => _MangaImage(
+            url: widget.controller.images[index],
+            index: index,
+            textColor: textColor,
+          ),
+        ),
       ),
     );
   }
