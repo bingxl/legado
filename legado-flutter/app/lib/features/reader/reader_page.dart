@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/image_url.dart';
+import 'pagination.dart';
 import 'reader_controller.dart';
 import 'reader_prefs.dart';
 import 'reader_style.dart';
@@ -239,11 +240,21 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
   }
 
+  /// 菜单进度条：只在**本章**内跳页，不跨章。
+  ///
+  /// 原版 `ReadMenu` 的默认 `progressBarBehavior = "page"`，seekBar 的
+  /// `max` 是 `pageSize - 1`、松手调用 `ReadBook.skipToPage`；
+  /// 全书跳章是另一个可选模式，默认不开。这里按默认行为对齐。
   void _seek(double percent) {
-    final total = _controller.chapters.length;
-    if (total == 0) return;
-    final index = (percent * total).floor().clamp(0, total - 1);
-    _controller.openChapter(index);
+    final count = _controller.pageCount;
+    if (count == 0) return;
+    // 末页对应 100%：按 count-1 取整，拖到最右侧一定落在最后一页。
+    final index = pageIndexForReadPercent(_controller.pages, percent);
+    if (_controller.style.pageTurn == PageTurnMode.scroll) {
+      _scrollKey.currentState?.jumpToPage(index);
+    } else {
+      _pagerKey.currentState?.jumpToPage(index);
+    }
     _focus.requestFocus();
   }
 

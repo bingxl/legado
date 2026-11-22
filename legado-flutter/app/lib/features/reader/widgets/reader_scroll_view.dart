@@ -109,6 +109,15 @@ class ReaderScrollViewState extends State<ReaderScrollView> {
     widget.controller.noteScrollPage(index);
   }
 
+  /// 跳到本章第 [index] 页（菜单进度条用）：改页码 + 立即对齐滚动位置。
+  void jumpToPage(int index) {
+    final controller = widget.controller;
+    if (controller.pageCount == 0) return;
+    final clamped = index.clamp(0, controller.pageCount - 1);
+    controller.jumpToPage(clamped);
+    _jumpTo(clamped);
+  }
+
   /// 键盘/点击翻页：按一屏高度平滑滚动。
   Future<void> scrollByPage(int dir) async {
     if (!_scroll.hasClients || _extent <= 0) return;

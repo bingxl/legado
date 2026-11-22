@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/bridge/legado_client.dart';
-import '../../core/router/routes.dart';
+import '../../core/router/book_detail_route.dart';
 import '../../core/widgets/book_cover.dart';
 import 'search_results.dart';
 
@@ -298,13 +298,11 @@ class _SearchPageState extends State<SearchPage> {
         _toast('打开书籍失败：没有拿到书籍 ID');
         return;
       }
-      Navigator.pushNamed(
+      // 走统一入口：push 前释放搜索框焦点，否则返回时焦点被恢复会弹输入法。
+      openBookDetail(
         context,
-        RouteNames.bookDetail,
-        arguments: {
-          'bookId': bookId,
-          'bookName': '${map['name'] ?? item['name'] ?? ''}',
-        },
+        bookId: bookId,
+        bookName: '${map['name'] ?? item['name'] ?? ''}',
       );
     } on LegadoError catch (e) {
       if (!mounted) return;

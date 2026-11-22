@@ -164,6 +164,9 @@ class _ExplorePageState extends State<ExplorePage> {
       _showErrorDialog('ERROR', url);
       return;
     }
+    // 顶部筛选框可能还持有焦点：直接 push 的话返回时焦点被恢复，
+    // 安卓端会重新弹输入法（与书籍详情页同一类问题）。
+    FocusManager.instance.primaryFocus?.unfocus();
     Navigator.pushNamed(
       context,
       RouteNames.exploreDetail,

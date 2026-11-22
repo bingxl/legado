@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/widgets/copy_links.dart';
+import '../pagination.dart';
 import '../reader_controller.dart';
 import '../reader_style.dart';
 
@@ -37,7 +38,7 @@ class ReaderMenuOverlay extends StatefulWidget {
   /// 强制重抓当前章（跳过离线缓存）。
   final VoidCallback onRefresh;
 
-  /// 全书进度 0~1，父级换算成章节跳转。
+  /// 本章进度 0~1，父级换算成章内页码跳转（对齐原版 `progressBarBehavior = "page"`）。
   final ValueChanged<double> onSeek;
 
   @override
@@ -45,7 +46,7 @@ class ReaderMenuOverlay extends StatefulWidget {
 }
 
 class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
-  /// 拖动进度条过程中的临时值：此时不立刻跳章，松手才跳。
+  /// 拖动进度条过程中的临时值：此时不立刻跳页，松手才跳。
   double? _seekValue;
 
   @override
@@ -138,7 +139,14 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
 
   Widget _bottomBar(Color panelColor, Color foreground) {
     final controller = widget.controller;
-    final percent = _seekValue ?? controller.bookPercent;
+    // 进度条是「本章」进度（原版 progressBarBehavior 默认 "page"），不是全书进度。
+    final percent = _seekValue ?? controller.chapterReadPercent;
+    final pageCount = controller.pageCount;
+    // 旁边显示页码而不是百分比：百分比在拖动时会让人误以为是全书进度，
+    // 页数配合「上一章/下一章」按钮，语义和原版 seekBar 一致。
+    final pageLabel = pageCount == 0
+        ? '--'
+        : '${pageIndexForReadPercent(controller.pages, percent) + 1}/$pageCount';
 
     return Material(
       color: panelColor,
@@ -177,7 +185,7 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
                   SizedBox(
                     width: 48,
                     child: Text(
-                      '${(percent * 100).toStringAsFixed(1)}%',
+                      pageLabel,
                       textAlign: TextAlign.right,
                       style: TextStyle(
                         fontSize: 12,

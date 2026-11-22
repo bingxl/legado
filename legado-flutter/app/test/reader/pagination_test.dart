@@ -169,6 +169,32 @@ void main() {
       final inside = page.startOffset + 1;
       expect(pageIndexForOffset(pages, inside), 1);
     });
+
+    test('进度条口径：首页 0、末页 1，拖到头落在最后一页', () {
+      expect(readPercentForPageIndex(pages, 0), 0);
+      expect(readPercentForPageIndex(pages, pages.length - 1), 1);
+      // 和保存口径的差别只体现在末页
+      expect(
+        percentForPageIndex(pages, pages.length - 1),
+        lessThan(1),
+      );
+      for (var i = 0; i < pages.length; i++) {
+        final percent = readPercentForPageIndex(pages, i);
+        expect(pageIndexForReadPercent(pages, percent), i);
+      }
+      expect(pageIndexForReadPercent(pages, 1), pages.length - 1);
+      expect(pageIndexForReadPercent(pages, 0), 0);
+      expect(pageIndexForReadPercent(pages, 0.5), ((pages.length - 1) / 2).round());
+    });
+
+    test('单页章节的进度条两端都落在第 0 页', () {
+      final one = [pages.first];
+      expect(readPercentForPageIndex(one, 0), 1);
+      expect(pageIndexForReadPercent(one, 0), 0);
+      expect(pageIndexForReadPercent(one, 1), 0);
+      expect(readPercentForPageIndex(const [], 0), 0);
+      expect(pageIndexForReadPercent(const [], 0.5), 0);
+    });
   });
 
   group('paginate 内联图片', () {

@@ -86,7 +86,7 @@ class _BookEditDialogState extends State<_BookEditDialog> {
         groupId: _groupId,
       );
       if (!mounted) return;
-      Navigator.of(context).pop(true);
+      _close(true);
     } on LegadoError catch (e) {
       if (!mounted) return;
       setState(() {
@@ -100,6 +100,15 @@ class _BookEditDialogState extends State<_BookEditDialog> {
         _error = '$e';
       });
     }
+  }
+
+  /// 关闭对话框前先收键盘。
+  ///
+  /// 输入框还持有焦点时直接 `pop`，安卓端偶发输入连接没关干净，
+  /// 用户随后返回详情页会觉得输入法是"自己弹出来的"。
+  void _close(bool? result) {
+    FocusManager.instance.primaryFocus?.unfocus();
+    Navigator.of(context).pop(result);
   }
 
   @override
@@ -184,7 +193,7 @@ class _BookEditDialogState extends State<_BookEditDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          onPressed: _saving ? null : () => _close(false),
           child: const Text('取消'),
         ),
         FilledButton(
@@ -308,11 +317,17 @@ class _ChangeSourceDialogState extends State<_ChangeSourceDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () => _close(),
           child: const Text('取消'),
         ),
       ],
     );
+  }
+
+  /// 关闭前先收键盘（同 `_BookEditDialogState._close`）。
+  void _close([Map<String, dynamic>? picked]) {
+    FocusManager.instance.primaryFocus?.unfocus();
+    Navigator.of(context).pop(picked);
   }
 
   Widget _resultList(ColorScheme scheme) {
@@ -366,7 +381,7 @@ class _ChangeSourceDialogState extends State<_ChangeSourceDialog> {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 11),
           ),
-          onTap: () => Navigator.of(context).pop(item),
+          onTap: () => _close(item),
         );
       },
     );

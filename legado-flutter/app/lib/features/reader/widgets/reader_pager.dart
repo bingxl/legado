@@ -73,6 +73,22 @@ class ReaderPagerState extends State<ReaderPager>
   /// 供键盘/外部调用。
   void turn(int dir) => _begin(dir);
 
+  /// 跳到本章第 [index] 页（菜单进度条用）。
+  ///
+  /// 先打断进行中的翻页动画：动画期间 `_from/_to` 是旧页快照，
+  /// 直接改页码会让动画结束时又提交一次 `turnPage`，页码被多推一格。
+  void jumpToPage(int index) {
+    if (_turning) {
+      _anim.stop();
+      _anim.reset();
+      _turning = false;
+      _from = null;
+      _to = null;
+    }
+    widget.controller.jumpToPage(index);
+    if (mounted) setState(() {});
+  }
+
   void _begin(int dir) {
     if (_turning) return;
     final controller = widget.controller;

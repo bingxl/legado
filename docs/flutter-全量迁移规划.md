@@ -126,7 +126,7 @@ final books = await LegadoCore.instance.call('Shelf.ListBooks', [0]);
 | 规则引擎 | `model/analyzeRule`、`lib/rhino` | （藏在 Go 里） | — | **CSS/XPath/JSONPath/正则/JS 全部要在 Dart 重写** |
 | 发现 | `ExploreFragment`、`ExploreShow` | Source 内 | `explore_page` | 分类矩阵、多源并行、翻页增量 |
 | 搜索 | `ui/main` 搜索 | Source 内 | `search_page` | 书籍/章节双模式、并发控制、结果合并排序 |
-| 阅读 | `ui/book/read` | Reader 5 | 阅读器全套（分页/翻页/菜单/目录） | 已做：覆盖/滑动/无动画/滚动四种翻页、点击 3×3 分区对齐原版默认动作、章末点击与滚动到底自动换下一章、epub/umd/漫画/PDF、朗读。缺：双页与分屏、取词、正文编辑、自动翻页、背景图、点击区域自定义（9 格动作可配） |
+| 阅读 | `ui/book/read` | Reader 5 | 阅读器全套（分页/翻页/菜单/目录） | 已做：覆盖/滑动/无动画/滚动四种翻页、点击 3×3 分区对齐原版默认动作、章末点击与滚动到底自动换下一章、菜单进度条为**本章页码**（对齐原版 `progressBarBehavior="page"`，不跨章）、epub/umd/漫画/PDF、朗读。缺：双页与分屏、取词、正文编辑、自动翻页、背景图、点击区域自定义（9 格动作可配）、进度条"全书跳章"模式 |
 | 缓存 | `CacheActivity`、`ReadBook.preDownload` | Cache 10 | `cache_page` | 已做：阅读时自动缓存 + 预取（`cache.*` 三项设置）、离线读缓存、手动补缓存。缺：漫画/音频缓存、批量范围下载 |
 | 书签/记录 | `BookmarkFragment`、`AllBookmark` | Bookmark 5 · Record 4 | 2 页 | 书签备注同步、统计维度 |
 | RSS | `ui/rss`（30 文件） | Rss 10 | 4 页 | 规则调试、分组、朗读、全文抓取 |

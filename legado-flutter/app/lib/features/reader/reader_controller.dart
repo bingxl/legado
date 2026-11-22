@@ -114,7 +114,18 @@ class ReaderController extends ChangeNotifier {
   /// 章内进度（0~1）。保存给 core 的 scrollPercent 用的就是这个口径。
   double get chapterPercent => percentForPageIndex(_pages, _pageIndex);
 
-  /// 全书进度（章节维度）。菜单里的进度条用它。
+  /// 菜单进度条用的章内进度：首页 0、末页 1。
+  ///
+  /// 与 [chapterPercent] 的差别是末页：`pageIndex/pageCount` 永远差一格
+  /// （12 页读到第 12 页只有 91.7%），进度条拖到最右侧会落不到末页。
+  /// 原版 `ReadMenu` 的 seekBar 就是 `max = pageSize - 1` + `progress = durPageIndex`，
+  /// 这里按同一口径换算。
+  double get chapterReadPercent => readPercentForPageIndex(_pages, _pageIndex);
+
+  /// 全书进度（章节维度）。
+  ///
+  /// 菜单进度条**不用**它 —— 原版 `progressBarBehavior` 默认是 `"page"`（章内页码），
+  /// 全书跳章是另一个可选模式。这里保留是给那个模式与外部（书架进度展示）用。
   double get bookPercent {
     if (_chapters.isEmpty) return 0;
     return ((_chapterIndex + chapterPercent) / _chapters.length).clamp(
@@ -469,6 +480,23 @@ class ReaderController extends ChangeNotifier {
     final clamped = index.clamp(0, _pages.length - 1);
     if (clamped == _pageIndex) return;
     _pageIndex = clamped;
+    _scheduleSave();
+  }
+
+  /// 跳到本章第 [index] 页（菜单进度条拖动用）。
+  ///
+  /// 只在章内跳，不跨章：原版进度条默认行为（`progressBarBehavior = "page"`）
+  /// 就是 `ReadBook.skipToPage`，全书跳章是另一个可选项，不在默认路径上。
+  void jumpToPage(int index) {
+    if (_pages.isEmpty) return;
+    final clamped = index.clamp(0, _pages.length - 1);
+    if (clamped == _pageIndex) {
+      // 页码没变也要 notify：进度条松手后要把临时值清掉重画。
+      notifyListeners();
+      return;
+    }
+    _pageIndex = clamped;
+    notifyListeners();
     _scheduleSave();
   }
 
