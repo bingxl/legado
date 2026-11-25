@@ -15,6 +15,9 @@ class RssService {
   final StoreDaos _daos;
   final NetClient _net;
 
+  /// 未分组的订阅源 / 收藏都落在这个名字下，与原版列默认值一致。
+  static const String defaultGroup = '默认分组';
+
   void close() => _net.close();
 
   // ---- 源 -------------------------------------------------------------
@@ -116,8 +119,15 @@ class RssService {
           errors.add('${source.sourceName}: 没有解析出文章');
           continue;
         }
-        for (var i = 0; i < items.length; i++) {
-          final item = items[i];
+        // 原版 `RssArticlesViewModel.order` 以当前毫秒时间戳为基数递减，
+        // 每次刷新都从「现在」重新起算 —— 直接用 `items.length - i` 会让
+        // 新一轮文章排到旧文章下面（序号从 0 重来），列表顺序越刷越乱。
+        var order = DateTime.now().millisecondsSinceEpoch;
+        // 空分组必须规范成「默认分组」：原版 `RssArticle.group` 的列默认值就是它，
+        // 存成空串会让「默认分组」这个 tab 永远查不到东西。
+        final rawGroup = (source.sourceGroup ?? '').trim();
+        final group = rawGroup.isEmpty ? defaultGroup : rawGroup;
+        for (final item in items) {
           final link = item['link'] ?? '';
           if (link.isEmpty) {
             skipped++;
@@ -128,13 +138,13 @@ class RssService {
             origin: source.sourceUrl,
             sort: source.sourceName,
             title: item['title'] ?? link,
-            order: items.length - i,
+            order: order--,
             link: link,
             pubDate: item['pubDate'],
             description: item['description'],
             content: item['content'],
             image: item['image'],
-            group: source.sourceGroup ?? '默认分组',
+            group: group,
             read: existing?.read ?? false,
             variable: existing?.variable,
           );
@@ -193,44 +203,55 @@ class RssService {
     return false;
   }
 
-  List<Map<String, Object?>> listFavorites() {
-    final out = <Map<String, Object?>>[];
-    for (final star in _daos.rssStar.byGroup('')) {
-      out.add(_articleView(0, RssArticle(
-            origin: star.origin,
-            sort: star.sort,
-            title: star.title,
-            link: star.link,
-            pubDate: star.pubDate,
-            description: star.description,
-            content: star.content,
-            image: star.image,
-            group: star.group,
-            read: true,
-            variable: star.variable,
-          )));
-    }
-    // byGroup('') 只命中默认分组；把其它分组也补进来。
-    for (final group in _daos.rssStar.groups()) {
-      if (group == '默认分组') continue;
-      for (final star in _daos.rssStar.byGroup(group)) {
-        out.add(_articleView(0, RssArticle(
-              origin: star.origin,
-              sort: star.sort,
-              title: star.title,
-              link: star.link,
-              pubDate: star.pubDate,
-              description: star.description,
-              content: star.content,
-              image: star.image,
-              group: star.group,
-              read: true,
-              variable: star.variable,
-            )));
-      }
-    }
-    return out;
+  /// 收藏列表，按收藏时间倒序（原版 `RssStarDao.all` 的排序）。
+  ///
+  /// [group] 为空表示全部收藏；非空时只返回该分组（原版 `flowByGroup`）。
+  ///
+  /// 每条都回填**真实**的文章 rowid：收藏表主键是 `(origin, link)`，
+  /// 没有 int id 就调不了 `Rss.Article.Favorite`（星标点了没反应）。
+  /// 文章行确实不存在时 id 为 0，此时取消收藏走 `Rss.Favorite.Remove`。
+  List<Map<String, Object?>> listFavorites({String group = ''}) {
+    final stars = group.isEmpty
+        ? _daos.rssStar.all
+        // 历史数据里默认分组的 group 可能是空串（旧版写入），一起并进来。
+        : group == defaultGroup
+            ? [..._daos.rssStar.byGroup(defaultGroup), ..._daos.rssStar.byGroup('')]
+            : _daos.rssStar.byGroup(group);
+    return [for (final star in stars) _starView(star)];
   }
+
+  /// 收藏夹的分组名（原版 `flowGroups`）；空串归一到默认分组并去重。
+  List<String> favoriteGroups() {
+    final out = <String>{};
+    for (final group in _daos.rssStar.groups()) {
+      out.add(group.trim().isEmpty ? defaultGroup : group);
+    }
+    final list = out.toList()..sort();
+    return list;
+  }
+
+  /// 按 `(origin, link)` 取消收藏；返回取消后仍存在的收藏数。
+  void removeFavorite(String origin, String link) {
+    _daos.rssStar.deleteOne(origin, link);
+  }
+
+  Map<String, Object?> _starView(RssStar star) => <String, Object?>{
+        'id': _daos.rssArticle.rowIdOf(star.origin, star.link) ?? 0,
+        // origin 是取消收藏的备用键（文章行被清理时 id 为 0）。
+        'origin': star.origin,
+        'sourceId': _sourceRowId(star.origin) ?? 0,
+        'sourceName': star.sort,
+        'title': star.title,
+        'link': star.link,
+        'description': star.description,
+        'content': star.content,
+        'author': '',
+        'pubDate': _pubDateSeconds(star.pubDate),
+        'read': true,
+        'favorite': true,
+        'group': star.group.trim().isEmpty ? defaultGroup : star.group,
+        'createdAt': star.pubDate ?? '',
+      };
 
   Map<String, int> unreadCount() {
     final byUrl = <String, int>{};
@@ -305,6 +326,7 @@ class RssService {
     final sourceId = _sourceRowId(article.origin);
     return <String, Object?>{
       'id': rowId,
+      'origin': article.origin,
       'sourceId': sourceId ?? 0,
       'sourceName': article.sort,
       'title': article.title,
@@ -312,11 +334,73 @@ class RssService {
       'description': article.description,
       'content': article.content,
       'author': '',
-      'pubDate': article.pubDate,
+      // 订阅源的 pubDate 是原始文本（RFC822 / ISO8601），UI 要的是 Unix 秒：
+      // 直接透传字符串会让 `rssInt()` 解析失败 → 列表里时间恒为空。
+      'pubDate': _pubDateSeconds(article.pubDate),
       'read': article.read,
       'favorite': rowId > 0 ? _isFavorite(rowId) : true,
+      'group': article.group,
       'createdAt': article.pubDate ?? '',
     };
+  }
+
+  /// 订阅源时间文本 → Unix 秒；认不出来就返回 0（UI 会隐藏时间）。
+  ///
+  /// 顺序有讲究：先按 ISO8601（Atom 的 `published`/`updated`，`DateTime.tryParse`
+  /// 直接吃），再按 RFC822（RSS 2.0 主流写法，Dart 没有内置解析器，手动兜），
+  /// 最后当纯数字（秒或毫秒时间戳）。
+  static int _pubDateSeconds(String? raw) {
+    final text = raw?.trim() ?? '';
+    if (text.isEmpty) return 0;
+    final iso = DateTime.tryParse(text);
+    if (iso != null) return iso.millisecondsSinceEpoch ~/ 1000;
+    final rfc = _parseRfc822(text);
+    if (rfc > 0) return rfc ~/ 1000;
+    final numeric = int.tryParse(text);
+    if (numeric != null && numeric > 0) {
+      // 兼容毫秒时间戳；秒级时间戳不会超过 1e11。
+      return numeric > 100000000000 ? numeric ~/ 1000 : numeric;
+    }
+    return 0;
+  }
+
+  /// RFC822 / RFC1123：`Tue, 02 Jan 2024 15:04:05 +0800`（时区可省）。
+  static final RegExp _rfc822 = RegExp(
+    r'(?:^|,\s*)(\d{1,2})\s+([A-Za-z]{3})\s+(\d{2,4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?'
+    r'\s*(?:(GMT|UTC|UT)|([+-])(\d{2})(\d{2}))?',
+  );
+
+  static const List<String> _monthAbbr = [
+    'jan', 'feb', 'mar', 'apr', 'may', 'jun',
+    'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
+  ];
+
+  static int _parseRfc822(String value) {
+    final m = _rfc822.firstMatch(value);
+    if (m == null) return 0;
+    final month = _monthAbbr.indexOf((m.group(2) ?? '').toLowerCase()) + 1;
+    if (month == 0) return 0;
+    var year = int.tryParse(m.group(3) ?? '') ?? 0;
+    if (year == 0) return 0;
+    // 两位年份：按 RFC822 惯例落在 1900/2000 世代，订阅源基本都是 2000+。
+    if (year < 100) year += year < 50 ? 2000 : 1900;
+    final offsetMinutes = switch (m.group(8)) {
+      '+' => (int.tryParse(m.group(9) ?? '') ?? 0) * 60 +
+          (int.tryParse(m.group(10) ?? '') ?? 0),
+      '-' => -((int.tryParse(m.group(9) ?? '') ?? 0) * 60 +
+          (int.tryParse(m.group(10) ?? '') ?? 0)),
+      // GMT/UTC/UT 与「没写时区」都按 UTC 处理（比按本地时区安全）。
+      _ => 0,
+    };
+    final utc = DateTime.utc(
+      year,
+      month,
+      int.tryParse(m.group(1) ?? '') ?? 1,
+      int.tryParse(m.group(4) ?? '') ?? 0,
+      int.tryParse(m.group(5) ?? '') ?? 0,
+      int.tryParse(m.group(6) ?? '') ?? 0,
+    );
+    return utc.subtract(Duration(minutes: offsetMinutes)).millisecondsSinceEpoch;
   }
 
   bool _isFavorite(int rowId) {

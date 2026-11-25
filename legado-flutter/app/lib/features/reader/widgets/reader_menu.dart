@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/widgets/copy_links.dart';
-import '../pagination.dart';
+import '../progress.dart';
 import '../reader_controller.dart';
 import '../reader_style.dart';
+import 'progress_slider.dart';
 
 /// 阅读菜单覆盖层（顶部信息栏 + 底部操作栏）。
 ///
@@ -21,6 +22,8 @@ class ReaderMenuOverlay extends StatefulWidget {
     required this.onStyleChanged,
     required this.onSpeak,
     required this.onRefresh,
+    required this.onCache,
+    required this.onBookmark,
     required this.onSeek,
   });
 
@@ -38,6 +41,12 @@ class ReaderMenuOverlay extends StatefulWidget {
   /// 强制重抓当前章（跳过离线缓存）。
   final VoidCallback onRefresh;
 
+  /// 手动离线缓存：弹范围框后把选中章节交给内核 `Cache.Start`。
+  final VoidCallback onCache;
+
+  /// 在当前位置加书签（原版菜单「添加书签」）。
+  final VoidCallback onBookmark;
+
   /// 本章进度 0~1，父级换算成章内页码跳转（对齐原版 `progressBarBehavior = "page"`）。
   final ValueChanged<double> onSeek;
 
@@ -46,9 +55,6 @@ class ReaderMenuOverlay extends StatefulWidget {
 }
 
 class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
-  /// 拖动进度条过程中的临时值：此时不立刻跳页，松手才跳。
-  double? _seekValue;
-
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
@@ -57,11 +63,9 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
     final scheme = Theme.of(context).colorScheme;
     // 夜间背景用固定深色面板，避免 Material 主题的浅色 surface 在夜里刺眼。
     final panelColor = background.dark
-        ? const Color(0xFF262626)
+        ? kReaderDarkPanel
         : scheme.surface.withValues(alpha: 0.97);
-    final foreground = background.dark
-        ? const Color(0xFFEDEDED)
-        : scheme.onSurface;
+    final foreground = background.dark ? kReaderDarkForeground : scheme.onSurface;
 
     return IgnorePointer(
       ignoring: !widget.visible,
@@ -139,14 +143,13 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
 
   Widget _bottomBar(Color panelColor, Color foreground) {
     final controller = widget.controller;
-    // 进度条是「本章」进度（原版 progressBarBehavior 默认 "page"），不是全书进度。
-    final percent = _seekValue ?? controller.chapterReadPercent;
-    final pageCount = controller.pageCount;
-    // 旁边显示页码而不是百分比：百分比在拖动时会让人误以为是全书进度，
-    // 页数配合「上一章/下一章」按钮，语义和原版 seekBar 一致。
-    final pageLabel = pageCount == 0
-        ? '--'
-        : '${pageIndexForReadPercent(controller.pages, percent) + 1}/$pageCount';
+    // 进度条统一是「本章」进度：文字章按分页，漫画章按图片张数
+    // （原版 MangaMenu.upSeekBar(item.index, item.imageCount)），
+    // 两者都不是全书跨度。
+    final progress = controller.isManga
+        ? ReaderProgress(index: controller.imageIndex, count: controller.imageCount)
+        : ReaderProgress(index: controller.pageIndex, count: controller.pageCount);
+    final pageLabel = progress.label;
 
     return Material(
       color: panelColor,
@@ -161,8 +164,9 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
               Row(
                 children: [
                   Expanded(
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
+                    child: ReaderProgressSlider(
+                      progress: progress,
+                      themeData: SliderTheme.of(context).copyWith(
                         trackHeight: 2,
                         thumbShape: const RoundSliderThumbShape(
                           enabledThumbRadius: 6,
@@ -171,15 +175,8 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
                           overlayRadius: 14,
                         ),
                       ),
-                      child: Slider(
-                        value: percent.clamp(0.0, 1.0),
-                        onChanged: (value) =>
-                            setState(() => _seekValue = value),
-                        onChangeEnd: (value) {
-                          setState(() => _seekValue = null);
-                          widget.onSeek(value);
-                        },
-                      ),
+                      enabled: progress.count > 0,
+                      onSeek: widget.onSeek,
                     ),
                   ),
                   SizedBox(
@@ -201,7 +198,9 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
                     icon: Icons.skip_previous,
                     label: '上一章',
                     foreground: foreground,
-                    onPressed: controller.chapterIndex > 0
+                    // 用「可读章节」判断而不是裸下标：相邻若是卷标题，
+                    // 禁用按钮比为难点的空跳更直观（与翻页区 onBoundary 一致）。
+                    onPressed: controller.hasPrevChapter
                         ? widget.onPrevChapter
                         : null,
                   ),
@@ -219,8 +218,7 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
                     icon: Icons.skip_next,
                     label: '下一章',
                     foreground: foreground,
-                    onPressed:
-                        controller.chapterIndex + 1 < controller.chapters.length
+                    onPressed: controller.hasNextChapter
                         ? widget.onNextChapter
                         : null,
                   ),
@@ -247,6 +245,18 @@ class _ReaderMenuOverlayState extends State<ReaderMenuOverlay> {
                     icon: Icons.refresh,
                     label: '刷新正文',
                     onTap: widget.onRefresh,
+                  ),
+                  _actionChip(
+                    foreground: foreground,
+                    icon: Icons.download_outlined,
+                    label: '离线缓存',
+                    onTap: widget.onCache,
+                  ),
+                  _actionChip(
+                    foreground: foreground,
+                    icon: Icons.bookmark_add_outlined,
+                    label: '书签',
+                    onTap: widget.onBookmark,
                   ),
                   _copyChip(foreground),
                 ],

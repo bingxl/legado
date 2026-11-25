@@ -36,6 +36,15 @@ JsHostObject createJavaObject({
   void Function(String msg)? onLog,
   /// `java.getCookie(url[, key])`：读 CookieStore。返回 `''` 表示没有。
   String? Function(String url, String? key)? getCookie,
+  /// `java.startBrowser(url, title)`：打开内置浏览器，不等结果（对齐
+  /// `SourceVerificationHelp.startBrowser`）。
+  Object? Function(String url, String title)? startBrowser,
+  /// `java.startBrowserAwait(url, title[, refetchAfterSuccess])`：打开内置浏览器
+  /// 并**阻塞等待**用户过验证，返回 `StrResponse`（对齐同名 Kotlin 扩展）。
+  Object? Function(String url, String title, bool refetchAfterSuccess)?
+  startBrowserAwait,
+  /// `java.getVerificationCode(imageUrl)`：弹图片验证码对话框，返回用户输入的串。
+  Object? Function(String imageUrl)? getVerificationCode,
   /// 繁简转换（`t2s` 第二参为 true，`s2t` 为 false）。未注入时原样返回。
   String Function(String text, {required bool toSimplified})? chineseConvert,
   Map<String, Object?>? variables,
@@ -93,6 +102,38 @@ JsHostObject createJavaObject({
               ? [for (final e in raw) jsToString(e)]
               : <String>[if (raw != null) jsToString(raw)];
           return ajaxAll(urls);
+        },
+        'startBrowser': (args) {
+          if (startBrowser == null) {
+            throw JsException(
+              'java.startBrowser 需要宿主提供内置浏览器（App 端注册验证处理器）',
+            );
+          }
+          final url = args.isEmpty ? '' : jsToString(args[0]);
+          final title = args.length > 1 ? jsToString(args[1]) : '';
+          return startBrowser(url, title);
+        },
+        'startBrowserAwait': (args) {
+          if (startBrowserAwait == null) {
+            throw JsException(
+              'java.startBrowserAwait 需要宿主提供内置浏览器（App 端注册验证处理器）',
+            );
+          }
+          final url = args.isEmpty ? '' : jsToString(args[0]);
+          final title = args.length > 1 ? jsToString(args[1]) : '';
+          // 第三参缺省为 true：与 Kotlin 的 `refetchAfterSuccess: Boolean = true` 一致。
+          final refetch = args.length > 2 && args[2] != null
+              ? jsToBoolean(args[2])
+              : true;
+          return startBrowserAwait(url, title, refetch);
+        },
+        'getVerificationCode': (args) {
+          if (getVerificationCode == null) {
+            throw JsException(
+              'java.getVerificationCode 需要宿主支持图片验证码输入（App 端注册）',
+            );
+          }
+          return getVerificationCode(args.isEmpty ? '' : jsToString(args[0]));
         },
         'getCookie': (args) {
           if (getCookie == null) {

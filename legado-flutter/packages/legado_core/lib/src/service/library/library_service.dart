@@ -99,14 +99,15 @@ class LibraryService {
       throw const LegadoException(ErrorCode.invalid, '没有解析出任何目录');
     }
 
-    final existing = _daos.book.getBookByFileName(path);
+    // 按 **bookUrl**（= 文件绝对路径）查重，与原版 `bookDao.getBook(bookUrl)`
+    // 一致。不能拿路径去查 originName —— 那一列存的是文件名，永远匹配不上，
+    // 每次重导都会插一条新行（bookUrl 相同的两行，书架出现两本同名书）。
+    final existing = _daos.book.getByUrl(path);
     final book = existing ?? Book();
     book
       ..bookUrl = path
       ..origin = BookType.localTag
       ..originName = pBasename(path)
-      ..name = parsed.title.isNotEmpty ? parsed.title : pBasename(path)
-      ..author = parsed.author ?? ''
       ..kind = _formatKind(parsed.format)
       ..customTag = _formatKind(parsed.format)
       ..type = BookType.local | _formatTypeBit(parsed.format) | book.type & BookType.notShelf
@@ -114,6 +115,16 @@ class LibraryService {
       ..canUpdate = false
       ..totalChapterNum = parsed.chapters.length
       ..lastCheckTime = DateTime.now().millisecondsSinceEpoch;
+    // 书名/作者只在**新书**（或原值为空）时从文件名/文件内容取。
+    // 原版 `LocalBook.importFile` 对已存在的书只重抓结构（`upBookInfo`），
+    // 不会覆盖 name/author —— 否则用户手动改过的书名，重新导入一次就被
+    // 文件名洗回去了。
+    if (existing == null || book.name.trim().isEmpty) {
+      book.name = parsed.title.isNotEmpty ? parsed.title : pBasename(path);
+    }
+    if (existing == null || book.author.trim().isEmpty) {
+      book.author = parsed.author ?? '';
+    }
 
     final chapters = <BookChapter>[
       for (var i = 0; i < parsed.chapters.length; i++)

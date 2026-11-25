@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
+import 'progress.dart';
 
 /// 分页用的排版参数（与 `ReaderStyle` 解耦，方便单测里构造任意值）。
 @immutable
@@ -232,20 +233,12 @@ double percentForPageIndex(List<PageSlice> pages, int pageIndex) {
 /// 与 [percentForPageIndex] 的区别只在末页：`index / length` 的末页是 (n-1)/n，
 /// 进度条会永远差一格拖不到头。菜单进度条按原版 `ReadMenu` 的
 /// `max = pageSize - 1` 口径换算，所以单独一组函数。
-double readPercentForPageIndex(List<PageSlice> pages, int pageIndex) {
-  if (pages.isEmpty) return 0;
-  if (pages.length == 1) return 1;
-  final index = pageIndex.clamp(0, pages.length - 1);
-  return (index / (pages.length - 1)).clamp(0.0, 1.0);
-}
+double readPercentForPageIndex(List<PageSlice> pages, int pageIndex) =>
+    readPercentForIndex(pageIndex, pages.length);
 
 /// 进度条百分比（0~1）→ 页码。末页对应 100%，拖到头一定落在最后一页。
-int pageIndexForReadPercent(List<PageSlice> pages, double percent) {
-  if (pages.isEmpty) return 0;
-  if (pages.length == 1) return 0;
-  final clamped = percent.clamp(0.0, 1.0);
-  return (clamped * (pages.length - 1)).round().clamp(0, pages.length - 1);
-}
+int pageIndexForReadPercent(List<PageSlice> pages, double percent) =>
+    indexForReadPercent(percent, pages.length);
 
 class _MeasuredLine {
   const _MeasuredLine(this.text, this.height, this.offset);

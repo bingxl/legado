@@ -226,4 +226,101 @@ void main() {
       expect(order, ['x-start', 'x-end', 'y-start', 'y-end']);
     });
   });
+
+  group('宿主内置浏览器（HostVerification）', () {
+    // 只有部分用例需要服务器（纯函数用例不开），所以是可空的。
+    TestServer? server;
+
+    tearDown(() async {
+      HostVerification.register(null);
+      await server?.close();
+      server = null;
+    });
+
+    Future<TestServer> startProtected() {
+      return TestServer.start((req, raw) async {
+        final cookie = req.header('cookie') ?? '';
+        if (cookie.contains('cf_clearance=good')) {
+          await sendHtml(raw, 'unlocked');
+          return;
+        }
+        raw.response.statusCode = 403;
+        raw.response.headers
+          ..set('cf-mitigated', 'challenge')
+          ..set('content-type', 'text/html; charset=utf-8');
+        raw.response.add(utf8Bytes('<html>challenge</html>'));
+        await raw.response.close();
+      });
+    }
+
+    test('交给浏览器的请求头剔掉连接层自己管的', () {
+      final out = browserSafeHeaders({
+        'Cookie': 'sid=1',
+        'Host': 'a.com',
+        'Content-Length': '3',
+        'Connection': 'keep-alive',
+        'Accept-Encoding': 'br',
+        'User-Agent': 'UA',
+        'Referer': 'https://a.com/',
+        'X-Empty': '   ',
+      });
+      expect(out, {'User-Agent': 'UA', 'Referer': 'https://a.com/'});
+    });
+
+    test('宿主晚于客户端注册也生效', () async {
+      final srv = server = await startProtected();
+      // 先建客户端（真实场景里内核 init 时就建好了），再注册宿主。
+      final net = NetClient(limiter: testLimiter(), maxRetries: 0);
+
+      final requests = <BrowserVerificationRequest>[];
+      HostVerification.register((request) async {
+        requests.add(request);
+        return const BrowserVerificationResult(
+          cookie: 'cf_clearance=good',
+          userAgent: 'UA-BROWSER',
+          html: '<html>browser</html>',
+        );
+      });
+
+      final resp = await net.get(srv.uri('/protected'), label: '测试源');
+      expect(resp.statusCode, 200);
+      expect(resp.text(), 'unlocked');
+      expect(srv.requestCount, 2, reason: '验证后要重试一次');
+      expect(requests.single.title, '测试源', reason: '书源名会变成验证窗口标题');
+      expect(srv.last.header('user-agent'), 'UA-BROWSER');
+      expect(
+        net.cookies.getCookieHeader(srv.base),
+        contains('cf_clearance=good'),
+      );
+      net.close();
+    });
+
+    test('宿主放弃验证时原样返回挑战响应', () async {
+      final srv = server = await startProtected();
+      HostVerification.register(
+        (request) async => const BrowserVerificationResult(skipped: true),
+      );
+      final net = NetClient(limiter: testLimiter(), maxRetries: 0);
+      final resp = await net.get(srv.uri('/protected'));
+      expect(resp.statusCode, 403);
+      expect(srv.requestCount, 1, reason: '用户取消后不该再重试');
+      net.close();
+    });
+
+    test('promptOnChallenge=false 时不弹窗，直接抛挑战异常', () async {
+      final srv = server = await startProtected();
+      var opened = 0;
+      HostVerification.register((request) async {
+        opened++;
+        return const BrowserVerificationResult(cookie: 'cf_clearance=good');
+      });
+      final net = NetClient(limiter: testLimiter(), maxRetries: 0);
+      await expectLater(
+        net.get(srv.uri('/protected'), promptOnChallenge: false),
+        throwsA(isA<CloudflareChallengeException>()),
+      );
+      expect(opened, 0, reason: '验证后重抓那一次不能再次弹窗，否则会死循环');
+      net.close();
+    });
+  });
 }

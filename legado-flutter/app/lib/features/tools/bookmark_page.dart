@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/bridge/legado_client.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../core/router/routes.dart';
 import 'tools_api.dart';
 import 'tools_format.dart';
@@ -60,16 +61,21 @@ class _BookmarkPageState extends State<BookmarkPage> {
     }
   }
 
-  /// 跳阅读器定位到书签所在章节。
+  /// 跳阅读器定位到书签所在章节的章内位置。
   ///
-  /// 只传 `chapterIndex`：这是 `reader_page.dart` 的路由契约键名，
+  /// 键名走 `reader_page.dart` 的路由契约（`chapterIndex` + `chapterPos`）：
   /// 另一个名字（`initialChapter`）是构造参数名，阅读页也认但没必要重复传。
+  /// `chapterPos` 必须一起传 —— 原版 `Bookmark.readChapter` 也是先把
+  /// `durChapterPos` 写成书签位置再打开阅读器，否则只跳到章首，书签白设。
   void _open(Map<String, dynamic> item) {
-    final chapter = toolsInt(item['chapterIndex']);
     Navigator.pushNamed(
       context,
       RouteNames.reader,
-      arguments: {'bookId': toolsInt(item['bookId']), 'chapterIndex': chapter},
+      arguments: {
+        'bookId': toolsInt(item['bookId']),
+        'chapterIndex': toolsInt(item['chapterIndex']),
+        'chapterPos': toolsInt(item['chapterPos']),
+      },
     );
   }
 
@@ -139,12 +145,7 @@ class _BookmarkPageState extends State<BookmarkPage> {
     }
   }
 
-  void _toast(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _toast(String message) => showAppToast(context, message, mounted: mounted);
 
   @override
   Widget build(BuildContext context) {

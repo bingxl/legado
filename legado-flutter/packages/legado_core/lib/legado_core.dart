@@ -11,3 +11,13 @@ export 'src/kernel/envelope.dart';
 export 'src/kernel/errors.dart';
 export 'src/kernel/module.dart';
 export 'src/kernel/registry.dart' show MethodDef, MethodHandler, Registry;
+// 反爬验证：宿主（App）要注册「内置浏览器」处理器，必须拿得到这几个类型。
+// 只导出注册表与三条数据结构，CookieStore / HTTP 客户端仍然不外露。
+export 'src/net/cloudflare.dart'
+    show
+        BrowserVerificationRequest,
+        BrowserVerificationResult,
+        BrowserVerificationHandler,
+        CaptchaHandler,
+        HostVerification,
+        browserSafeHeaders;

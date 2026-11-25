@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:legado_core/src/core.dart';
@@ -9,7 +10,7 @@ import 'package:legado_core/src/service/shelf/shelf_module.dart';
 import 'package:legado_core/src/store/store.dart';
 import 'package:test/test.dart';
 
-/// 书架域的接线测试：11 个方法都从 Registry 走，不直接调 service。
+/// 书架域的接线测试：17 个方法都从 Registry 走，不直接调 service。
 /// 重点盯契约里最容易错的四件事：试读态、rowid 映射、进度哨兵、删书清理。
 void main() {
   late Directory home;
@@ -67,7 +68,7 @@ void main() {
     return store.daos.book.idOf(url)!;
   }
 
-  test('依赖与 12 个方法都已注册', () {
+  test('依赖与 17 个方法都已注册', () {
     expect(shelf.name, 'shelf');
     expect(shelf.dependsOn, contains('store'));
     expect(
@@ -85,6 +86,11 @@ void main() {
         'Shelf.CreateGroup',
         'Shelf.UpdateGroup',
         'Shelf.DeleteGroup',
+        'Shelf.SetCanUpdate',
+        'Shelf.MoveToGroups',
+        'Shelf.AddToGroups',
+        'Shelf.DeleteBooks',
+        'Shelf.ExportBookshelf',
       },
     );
   });
@@ -291,12 +297,19 @@ void main() {
     expect(created['name'], '新分组');
     expect((await callList('Shelf.ListGroups')).map((g) => g['id']), contains(groupId));
 
+    // 前四个参数是老契约；后三个是分组管理新增的可选项。
     await call('Shelf.UpdateGroup', [groupId, '改名', false, 7]);
+    await call('Shelf.UpdateGroup', [
+      groupId, '改名', false, 7, '/cover.png', 3, false,
+    ]);
     final updated = (await callList('Shelf.ListGroups'))
         .firstWhere((g) => g['id'] == groupId);
     expect(updated['name'], '改名');
     expect(updated['show'], isFalse);
     expect(updated['order'], 7);
+    expect(updated['cover'], '/cover.png');
+    expect(updated['bookSort'], 3);
+    expect(updated['enableRefresh'], isFalse);
 
     await call('Shelf.MoveToGroup', [id, groupId]);
     expect(store.daos.book.getById(id)!.group, groupId);
@@ -315,6 +328,70 @@ void main() {
         throwsA(isA<LegadoException>().having((e) => e.code, 'code', ErrorCode.invalid)),
       );
     }
+  });
+
+  test('书架管理批量：移动/加入分组、开关更新、批量删除', () async {
+    final ids = [
+      addBook('https://example.test/batch/1', name: '批量一', group: 2),
+      addBook('https://example.test/batch/2', name: '批量二', group: 4),
+    ];
+    final g2 = await call('Shelf.CreateGroup', ['甲组']) as Map<String, Object?>;
+    final g4 = await call('Shelf.CreateGroup', ['乙组']) as Map<String, Object?>;
+    final gid2 = g2['id'] as int;
+    final gid4 = g4['id'] as int;
+
+    await call('Shelf.MoveToGroups', [ids, gid2]);
+    expect(store.daos.book.getById(ids[0])!.group, gid2);
+    expect(store.daos.book.getById(ids[1])!.group, gid2);
+
+    await call('Shelf.AddToGroups', [ids, gid4]);
+    expect(store.daos.book.getById(ids[0])!.group, gid2 | gid4);
+    expect(store.daos.book.getById(ids[1])!.group, gid2 | gid4);
+
+    await call('Shelf.SetCanUpdate', [ids, false]);
+    expect(store.daos.book.getById(ids[0])!.canUpdate, isFalse);
+    expect(store.daos.book.getById(ids[1])!.canUpdate, isFalse);
+    await call('Shelf.SetCanUpdate', [ids, true]);
+    expect(store.daos.book.getById(ids[0])!.canUpdate, isTrue);
+
+    await call('Shelf.DeleteBooks', [ids]);
+    expect(store.daos.book.getById(ids[0]), isNull);
+    expect(store.daos.book.getById(ids[1]), isNull);
+  });
+
+  test('ListBooks 按 bookSort 排序，ExportBookshelf 输出原版 books.json 格式', () async {
+    final a = addBook('https://example.test/a', name: '甲书');
+    final b = addBook('https://example.test/b', name: '乙书');
+    final bookA = store.daos.book.getById(a)!;
+    bookA.durChapterTime = 2000;
+    // 原版 sort=1 排的是 `latestChapterTime`（目录最近更新时间），不是 lastCheckTime。
+    bookA.latestChapterTime = 1000;
+    bookA.order = 2;
+    store.daos.book.update(bookA);
+    final bookB = store.daos.book.getById(b)!;
+    bookB.durChapterTime = 1000;
+    bookB.latestChapterTime = 3000;
+    bookB.order = 1;
+    store.daos.book.update(bookB);
+
+    // -1 走 DAO 默认顺序（按 order），0 按阅读时间，1 按目录更新时间，
+    // 2 按书名，3 按 order，4 综合（取两个时间的最大值），5 按作者。
+    expect((await callList('Shelf.ListBooks', [0, -1])).first['name'], '乙书');
+    expect((await callList('Shelf.ListBooks', [0, 0])).first['name'], '甲书');
+    expect((await callList('Shelf.ListBooks', [0, 1])).first['name'], '乙书');
+    expect((await callList('Shelf.ListBooks', [0, 4])).first['name'], '乙书');
+    expect((await callList('Shelf.ListBooks', [0, 3])).first['name'], '乙书');
+    // Dart String.compareTo 按码点排，「乙」(U+4E59) 在「甲」(U+7532) 前。
+    expect((await callList('Shelf.ListBooks', [0, 2])).first['name'], '乙书');
+
+    final json = await call('Shelf.ExportBookshelf', [0]) as String;
+    final rows = (jsonDecode(json) as List).cast<Map<String, Object?>>();
+    expect(rows.length, 2);
+    expect(
+      rows.first.keys.toSet(),
+      {'name', 'author', 'intro'},
+      reason: '与原版 exportBookshelf 完全同格式，才能互相导入',
+    );
   });
 
   test('LegadoCore 完整装配后 Shelf 方法可用', () async {

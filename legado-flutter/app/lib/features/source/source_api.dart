@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../core/bridge/dto.dart';
 import '../../core/bridge/legado_client.dart';
 
 /// 书源域的控制面方法封装。
@@ -96,7 +97,7 @@ class SourceApi {
   }) async {
     final encoded = base64Encode(utf8.encode(text));
     final data = await _c.call('Source.Import', [encoded, overwrite]);
-    return _jsonMap(data);
+    return asStringMap(data);
   }
 
   static Future<Map<String, dynamic>> importFromUrl(
@@ -104,7 +105,7 @@ class SourceApi {
     bool overwrite = true,
   }) async {
     final data = await _c.call('Source.ImportFromURL', [url, overwrite]);
-    return _jsonMap(data);
+    return asStringMap(data);
   }
 
   // ── 校验 / 调试 ─────────────────────────────────────────
@@ -143,25 +144,31 @@ class SourceApi {
   }
 
   /// 全源搜索（换源时找同名书的其它来源）。
+  ///
+  /// [scope] 沿用原版 `SearchScope` 编码：空=全部启用源、`名称::地址`=单源、
+  /// `分组1,分组2`=多分组。必须显式传第三个参数 —— 只传两参时内核取默认值
+  /// 虽然也是全源，但搜索页记住的范围（如「只在某分组换源」）会被静默丢掉。
   static Future<List<Map<String, dynamic>>> searchAll(
     String keyword, {
     int page = 1,
+    String scope = '',
   }) {
-    return _c.callList('Source.SearchAll', [keyword, page]);
+    return _c.callList('Source.SearchAll', [keyword, page, scope]);
   }
 
-  /// 当前是否有调试会话在跑（core 的 SourceDebug 只暴露了 Running）。
-  static Future<Map<String, dynamic>> debugRunning() async {
-    final data = await _c.call('SourceDebug.Running');
-    return _jsonMap(data);
-  }
+  /// 当前是否有调试会话在跑。
+  ///
+  /// 注意：内核（`legado_core`）**没有**注册 `SourceDebug.*` 任何方法——
+  /// 规则引擎的调试打点只在 Kotlin 原版里通过 lifecycle 事件暴露。这里曾按
+  /// Go 版内核的契约写过 `SourceDebug.Running`，调用必然抛「未知方法」，
+  /// 且没有调用方，已删除。调试页改用 `Source.Validate` 的一次性结果。
 
   // ── 登录 ────────────────────────────────────────────────
 
   /// 登录面板信息（登录方式、表单字段、是否已有 cookie、粘贴的请求头）。
   static Future<Map<String, dynamic>> loginProfile(int sourceId) async {
     final data = await _c.call('SourceLogin.Profile', [sourceId]);
-    return _jsonMap(data);
+    return asStringMap(data);
   }
 
   /// 登录。`kind=page` 时返回的 `openUrl` 需要用户自己去浏览器打开。
@@ -170,7 +177,7 @@ class SourceApi {
     Map<String, String> form,
   ) async {
     final data = await _c.call('SourceLogin.Login', [sourceId, form]);
-    return _jsonMap(data);
+    return asStringMap(data);
   }
 
   /// 执行 `loginUi` 里的自定义按钮。
@@ -184,7 +191,7 @@ class SourceApi {
       action,
       form,
     ]);
-    return _jsonMap(data);
+    return asStringMap(data);
   }
 
   /// 保存粘贴的请求头；空串表示清除。
@@ -193,7 +200,7 @@ class SourceApi {
     String header,
   ) async {
     final data = await _c.call('SourceLogin.SaveHeader', [sourceId, header]);
-    return _jsonMap(data);
+    return asStringMap(data);
   }
 
   /// 粘贴的请求头原文。
@@ -209,11 +216,7 @@ class SourceApi {
     String probeUrl,
   ) async {
     final data = await _c.call('SourceLogin.Check', [sourceId, probeUrl]);
-    return _jsonMap(data);
+    return asStringMap(data);
   }
 
-  static Map<String, dynamic> _jsonMap(dynamic data) {
-    if (data is Map) return data.cast<String, dynamic>();
-    return <String, dynamic>{};
-  }
 }

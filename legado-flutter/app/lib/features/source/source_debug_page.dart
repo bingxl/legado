@@ -6,13 +6,12 @@ import 'source_utils.dart';
 
 /// 一条调试记录。
 ///
-/// 注意：它不完全是「规则引擎的实时打点」。core 的 `SourceDebug.Start` 是
-/// 宿主生命周期方法（`kernel.reflect.go` 的 lifecycleMethods 会把它过滤掉），
-/// 没有暴露到控制面；控制面只剩 `SourceDebug.Running`，拿不到条目。
-/// 因此本页用 `Source.Validate` 的一次性结果构造条目：
+/// 注意：它不完全是「规则引擎的实时打点」。内核（`legado_core`）没有把
+/// 规则求值事件流暴露到控制面（原版那套 `SourceDebug` 是 Kotlin 侧的生命周期
+/// 接口），所以本页用 `Source.Validate` 的一次性结果构造条目：
 ///   * 阶段 = issue.field 归类的 search/info/toc/content；
 ///   * 命中数 = 从消息里解析的「命中 N 条 / 共 N 章 / N 字」；
-///   * 耗时 = 该次调用的整体耗时（阶段级精确耗时需要事件流，见 TODO）。
+///   * 耗时 = 该次调用的整体耗时（阶段级精确耗时需要事件流，内核暂未提供）。
 class _DebugEntry {
   _DebugEntry({
     required this.stage,

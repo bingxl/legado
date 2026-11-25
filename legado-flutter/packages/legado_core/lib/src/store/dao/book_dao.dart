@@ -96,13 +96,11 @@ class BookDao {
     return rows.isEmpty ? null : Book.fromRow(rows.first);
   }
 
-  Book? getBookByFileName(String fileName) {
-    final rows =
-        _db.select('select * from `$_table` where originName = ?', [fileName]);
-    return rows.isEmpty ? null : Book.fromRow(rows.first);
-  }
-
-  /// 按详情页地址取书（书源搜索结果转正式书籍时用它查重）。
+  /// 按详情页地址取书（书源搜索结果转正式书籍、本地导入查重都用它）。
+  ///
+  /// 注意别拿文件路径去查 `originName`：那一列存的是**文件名**（`a.txt`），
+  /// 而本地书的 bookUrl 是**绝对路径**，两者永远不相等，会静默退化成「每次
+  /// 导入都是新书」。
   Book? getByUrl(String bookUrl) {
     final rows = _db.select('select * from `$_table` where bookUrl = ?', [bookUrl]);
     return rows.isEmpty ? null : Book.fromRow(rows.first);

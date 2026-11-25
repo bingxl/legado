@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:logging/logging.dart';
@@ -7,6 +8,7 @@ import '../../domain/domain.dart';
 import '../../js/java_host.dart';
 import '../../js/js_engine.dart';
 import '../../js/js_engine_factory.dart';
+import '../../js/str_response.dart';
 import '../../js/values.dart';
 import '../../kernel/errors.dart';
 import '../../net/net.dart';
@@ -16,6 +18,7 @@ import '../../store/database.dart';
 import '../../store/store.dart';
 import '../../util/url.dart';
 import '../replacerule/replacement_processor.dart';
+import 'chapter_progress_match.dart';
 import '../shelf/shelf_service.dart';
 
 final Logger _log = Logger('legado.js');
@@ -253,7 +256,10 @@ class SourceFetchService {
   List<ExploreSourceBrief> listExploreSources() {
     final out = <ExploreSourceBrief>[];
     for (final source in _daos.bookSource.all) {
-      if (!source.enabled || !source.enabledExplore) continue;
+      // 原版 `flowExplore()` 的条件只有 `enabledExplore = 1 and hasExploreUrl = 1`
+      // —— 不看 `enabled`。用户把书源「停用」只是不再参与搜索，发现页仍可浏览；
+      // 这里曾多判一个 `enabled`，停用过的源在发现页会凭空消失。
+      if (!source.enabledExplore) continue;
       if ((source.exploreUrl ?? '').trim().isEmpty) continue;
       final id = _dao.rowIdOf(source.bookSourceUrl) ?? 0;
       out.add(ExploreSourceBrief(
@@ -406,8 +412,22 @@ class SourceFetchService {
     return _searchByUrl(source, searchUrl, keyword.trim(), page < 1 ? 1 : page);
   }
 
-  Future<List<SearchResultView>> searchAll(String keyword, int page) async {
-    final sources = _daos.bookSource.all.where((source) => source.enabled).toList();
+  /// 全部（或指定范围内）启用源搜索。
+  ///
+  /// [scope] 沿用原版 `SearchScope` 的字符串格式：
+  /// * 空：全部启用书源；
+  /// * `书源名::书源地址`：单个书源（只按地址取，名称仅用于展示）；
+  /// * `分组1,分组2`：属于这些分组的启用书源（多分组并存去重）。
+  /// 范围为空或解析不到任何源时回退全部启用源，与原版一致——
+  /// 用户删了书源后不该搜出 0 条而以为书全没了。
+  Future<List<SearchResultView>> searchAll(
+    String keyword,
+    int page, [
+    String scope = '',
+  ]) async {
+    final enabled = _daos.bookSource.all.where((source) => source.enabled).toList();
+    final sources = _filterSourcesByScope(enabled, scope)
+      ..sort((a, b) => a.customOrder.compareTo(b.customOrder));
     final out = <SearchResultView>[];
     for (final source in sources) {
       try {
@@ -417,6 +437,30 @@ class SourceFetchService {
       }
     }
     return out;
+  }
+
+  List<BookSource> _filterSourcesByScope(
+    List<BookSource> enabled,
+    String scope,
+  ) {
+    final raw = scope.trim();
+    if (raw.isEmpty) return enabled;
+
+    final separator = raw.indexOf('::');
+    if (separator >= 0) {
+      final url = raw.substring(separator + 2).trim();
+      final picked = enabled.where((s) => s.bookSourceUrl == url).toList();
+      return picked.isEmpty ? enabled : picked;
+    }
+
+    final groups = {
+      for (final part in raw.split(','))
+        if (part.trim().isNotEmpty) part.trim(),
+    };
+    final picked = enabled.where(
+      (source) => source.groups.any(groups.contains),
+    ).toList();
+    return picked.isEmpty ? enabled : picked;
   }
 
   Future<List<SearchResultView>> _searchByUrl(
@@ -429,48 +473,102 @@ class SourceFetchService {
     final context = _contextOf(source);
     final analyzer = UrlRuleAnalyzer(context, key: keyword, page: page);
     final analyzed = await analyzer.analyze(ruleUrl, baseUrl: source.bookSourceUrl);
-    final response = await _request(
+    var response = await _request(
       analyzed,
       extraHeaders: _sourceHeaders(source),
       source: source,
     );
+    // 原版 WebBook.searchBookAwait / exploreBookAwait：拿到响应先过 loginCheckJs。
+    response = await _applyLoginCheckJs(source, response);
     final body = response.text();
-    final analyze = AnalyzeRule(_contextOf(source, baseUrl: response.finalUri.toString()));
+    // **同一个变量表**：searchUrl / exploreUrl 里的 `@put:{k:v}`（比如先请求
+    // 一次拿 token）写在 analysis 用的 context 里，字段规则必须能读到。
+    // 原来这里另建了一个空变量表的 context，`@put` 结果全丢，表现为
+    // 「搜索能出结果，但点进去详情/正文 401」。
+    final analyze = AnalyzeRule(
+      _contextOf(
+        source,
+        baseUrl: response.finalUri.toString(),
+        variables: context.variables,
+      ),
+    );
 
-    Map<String, Object?> ruleMap;
-    try {
-      final raw = useExploreRule
-          ? (source.ruleExplore ?? source.ruleSearch ?? '{}')
-          : (source.ruleSearch ?? '{}');
-      final decoded = jsonDecode(_looseJson(raw.isEmpty ? '{}' : raw));
-      ruleMap = decoded is Map ? decoded.cast<String, Object?>() : <String, Object>{};
-    } on FormatException {
-      ruleMap = <String, Object>{};
+    var ruleMap = _decodeRuleMap(
+      useExploreRule ? source.ruleExplore : source.ruleSearch,
+    );
+    // 原版 `BookList.getBookList`：发现规则没写 bookList 时整段回退搜索规则。
+    // 很多源只配了 ruleSearch，发现页靠 searchUrl 驱动；不回退就是 0 条。
+    if (useExploreRule && '${ruleMap['bookList'] ?? ''}'.trim().isEmpty) {
+      ruleMap = _decodeRuleMap(source.ruleSearch);
     }
+    // `bookList` 的 `-` 前缀 = 结果倒序，`+` 前缀 = 仅作显式声明（原版同）。
+    var listRule = '${ruleMap['bookList'] ?? ''}'.trim();
+    var reverse = false;
+    if (listRule.startsWith('-')) {
+      reverse = true;
+      listRule = listRule.substring(1);
+    } else if (listRule.startsWith('+')) {
+      listRule = listRule.substring(1);
+    }
+    if (listRule != '${ruleMap['bookList'] ?? ''}') {
+      ruleMap = {...ruleMap, 'bookList': listRule};
+    }
+
     final rule = SearchRule.fromJson(ruleMap);
     final items = await analyze.getElements(rule.bookList, body);
     final out = <SearchResultView>[];
     for (var i = 0; i < items.length; i++) {
       final element = items[i];
-      final name = await _first(analyze, rule.name, element);
+      final name = _formatBookName(await _first(analyze, rule.name, element));
+      // 原版：书名为空直接跳过这条（后面所有字段都以它为前提）。
+      if (name.isEmpty) continue;
       final bookUrl = await _first(analyze, rule.bookUrl, element, isUrl: true);
       if (bookUrl.isEmpty) continue;
-      final variables = <String, String>{...context.variables};
+      final author = _formatBookAuthor(await _first(analyze, rule.author, element));
+      final cover = await _first(analyze, rule.coverUrl, element, isUrl: true);
+      final intro = await _first(analyze, rule.intro, element);
+      final lastChapter = await _first(analyze, rule.lastChapter, element);
+      // 分类是多值：原版 `getStringList(...).joinToString(",")`，
+      // 只取第一条会把「玄幻,热血」截成「玄幻」。
+      final kinds = await analyze.getStringList(rule.kind, element);
+      // 变量必须在**字段规则跑完之后**取快照：字段里的 `@put` 也要带出去。
+      final variables = <String, String>{...analyze.context.variables};
       out.add(SearchResultView(
-        name: name.isEmpty ? '未命名' : name,
-        author: await _first(analyze, rule.author, element),
-        cover: await _first(analyze, rule.coverUrl, element, isUrl: true),
-        intro: await _first(analyze, rule.intro, element),
+        name: name,
+        author: author,
+        cover: cover,
+        intro: intro,
         bookUrl: bookUrl,
         origin: source.bookSourceUrl,
         originName: source.bookSourceName,
-        lastChapter: await _first(analyze, rule.lastChapter, element),
-        kind: await _first(analyze, rule.kind, element),
+        lastChapter: lastChapter,
+        kind: kinds.join(','),
         variable: jsonEncode(variables),
       ));
     }
+    if (reverse) return out.reversed.toList(growable: false);
     return out;
   }
+
+  /// 书源规则 JSON → Map；解析不了按空规则处理（宽松解析，不抛）。
+  Map<String, Object?> _decodeRuleMap(String? raw) {
+    final text = (raw ?? '').trim();
+    if (text.isEmpty) return <String, Object?>{};
+    try {
+      final decoded = jsonDecode(_looseJson(text));
+      return decoded is Map ? decoded.cast<String, Object?>() : <String, Object?>{};
+    } on FormatException {
+      return <String, Object?>{};
+    }
+  }
+
+  /// 书名规范化（原版 `BookHelp.formatBookName`）：去掉「 作者：xxx」「 xxx 著」。
+  static String _formatBookName(String raw) =>
+      raw.replaceAll(RegExp(r'\s+作\s*者.*|\s+\S+\s+著'), '').trim();
+
+  /// 作者规范化（原版 `BookHelp.formatBookAuthor`）：去掉前缀「作者：」与「 著」。
+  static String _formatBookAuthor(String raw) =>
+      raw.replaceAll(RegExp(r'^\s*作\s*者[:：\s]+|\s+著'), '').trim();
 
   // ---- 试读 / 入架 ----------------------------------------------------
 
@@ -547,6 +645,12 @@ class SourceFetchService {
 
     book.totalChapterNum = chapters.length;
     book.lastCheckTime = DateTime.now().millisecondsSinceEpoch;
+    // 新书入库时目录就是「最新」的，直接把 latestChapterTime 记为当前时间，
+    // 否则书架「按更新时间」排序时新加的书会排到最底下（原版也在这里同步）。
+    book.latestChapterTime = book.lastCheckTime;
+    // 原版 `BookChapterList` 的 `lastCheckCount = list.size - totalChapterNum`
+    // 对新书就是「全部章节都算新增」，书架角标据此点亮；读过后由 ReadBook 清零。
+    book.lastCheckCount = chapters.length;
 
     runInTransaction(_daos.db, () {
       _daos.book.insert(book);
@@ -629,7 +733,9 @@ class SourceFetchService {
   ]) async {
     final headers = _sourceHeaders(source);
     final client = headers.isEmpty ? _net : _net.withHeaders(headers);
-    final response = await client.get(Uri.parse(bookUrl));
+    var response = await client.get(Uri.parse(bookUrl));
+    // 原版 WebBook.getBookInfoAwait：详情响应也要过 loginCheckJs。
+    response = await _applyLoginCheckJs(source, response);
     if (!response.isSuccess) {
       throw LegadoException(
         ErrorCode.netTimeout,
@@ -741,7 +847,9 @@ class SourceFetchService {
     while (pending.isNotEmpty && visited.length < 64) {
       final pageUrl = pending.removeAt(0);
       if (pageUrl.isEmpty || !visited.add(pageUrl)) continue;
-      final response = await client.get(Uri.parse(pageUrl));
+      var response = await client.get(Uri.parse(pageUrl));
+      // 原版 WebBook.getChapterListAwait：目录响应也要过 loginCheckJs。
+      response = await _applyLoginCheckJs(source, response);
       if (!response.isSuccess) {
         // 第一页就失败说明整个目录拿不到；后续页失败只能接受残缺目录。
         if (raw.isEmpty) {
@@ -891,9 +999,19 @@ class SourceFetchService {
 
     final oldUrl = book.bookUrl;
     final oldProgress = _daos.readingProgress.get(oldUrl);
-    final keepIndex = oldProgress?.chapterIndex ?? book.durChapterIndex;
-    final index =
-        chapters.isEmpty ? 0 : keepIndex.clamp(0, chapters.length - 1);
+    final oldIndex = oldProgress?.chapterIndex ?? book.durChapterIndex;
+    final oldTitle = oldProgress?.chapterTitle ?? book.durChapterTitle;
+    // 进度迁移按**章节名/章节号**匹配，不是按序号 clamp（原版
+    // `Book.migrateTo → BookHelp.getDurChapter`）。新源少几章前言、多几章番外
+    // 时序号会整体偏移，直接 clamp 会把用户扔到完全不相干的一章。
+    final index = chapters.isEmpty
+        ? 0
+        : migrateChapterIndex(
+            oldIndex: oldIndex,
+            oldTitle: oldTitle,
+            newChapterTitles: [for (final c in chapters) c.title],
+            oldChapterListSize: book.totalChapterNum,
+          ).clamp(0, chapters.length - 1);
     final now = DateTime.now().millisecondsSinceEpoch;
 
     final moved = book.copyWith(
@@ -948,6 +1066,338 @@ class SourceFetchService {
       'bookId': newId,
       'oldBookId': bookId,
       'book': _shelf.getBook(newId),
+    };
+  }
+
+  /// 批量换源：对齐原版 `BookshelfManageViewModel.changeSource`。
+  ///
+  /// 逐本在指定书源里按「书名 + 作者」精确搜索，命中后走 [changeSource]
+  /// （详情 + 目录 + 进度迁移都在那里）。本地书、已经是该源的书直接跳过；
+  /// 单本失败不阻断其余，错误逐条回给 UI 汇总。
+  Future<Map<String, Object?>> batchChangeSource(
+    List<int> bookIds,
+    int sourceId,
+  ) async {
+    final source = _requireSource(sourceId);
+    var succeeded = 0;
+    var skipped = 0;
+    var failed = 0;
+    final errors = <String>[];
+    for (final id in bookIds) {
+      final book = _daos.book.getById(id);
+      if (book == null) {
+        skipped++;
+        continue;
+      }
+      if (book.isLocal || book.origin == source.bookSourceUrl) {
+        skipped++;
+        continue;
+      }
+      try {
+        final hit = await _preciseSearch(source, book.name, book.author);
+        if (hit == null) {
+          skipped++;
+          continue;
+        }
+        // 不能因为 bookUrl 相同就跳过：两个源常指向同一个详情页地址，
+        // 换的其实是 origin（规则来源）。changeSource 内部会处理「完全没变」。
+        await changeSource(id, sourceId, hit.bookUrl);
+        succeeded++;
+      } on Object catch (e) {
+        failed++;
+        errors.add('${book.name}: $e');
+      }
+    }
+    return <String, Object?>{
+      'total': bookIds.length,
+      'succeeded': succeeded,
+      'skipped': skipped,
+      'failed': failed,
+      'errors': errors,
+    };
+  }
+
+  /// 书架 JSON 导入：对齐原版 `BookshelfViewModel.importBookshelfByJson`。
+  ///
+  /// 输入可以是 JSON 数组文本，也可以是返回该数组的 http(s) 地址。每项按
+  /// `name` / `author` 在全部启用书源里精确搜索，找到第一条即入库；
+  /// 同名同作者已存在则跳过。返回逐项统计，UI 用来显示汇总。
+  Future<Map<String, Object?>> importBookshelf(String input, int groupId) async {
+    var text = input.trim();
+    if (text.isEmpty) {
+      throw const LegadoException(ErrorCode.invalid, '请填入书架 JSON 或地址');
+    }
+    final uri = Uri.tryParse(text);
+    if (uri != null &&
+        (uri.scheme == 'http' || uri.scheme == 'https') &&
+        uri.host.isNotEmpty) {
+      final response = await _net.get(uri);
+      if (!response.isSuccess) {
+        throw LegadoException(
+          ErrorCode.netTimeout,
+          '下载书架 JSON 失败: HTTP ${response.statusCode}',
+        );
+      }
+      text = response.text();
+    }
+
+    // FormatException 不是 LegadoError，直接抛出去会被 UI 的异常分支漏掉，
+    // 用户只看到「点了没反应」。这里统一转成可读错误。
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(text);
+    } on Object {
+      throw const LegadoException(ErrorCode.invalid, '书架 JSON 格式不对，请检查内容');
+    }
+    if (decoded is! List) {
+      throw const LegadoException(ErrorCode.invalid, '书架 JSON 必须是数组');
+    }
+    final sources = _daos.bookSource.all.where((s) => s.enabled).toList();
+    var total = 0;
+    var added = 0;
+    var skipped = 0;
+    var failed = 0;
+    final errors = <String>[];
+    for (final raw in decoded) {
+      if (raw is! Map) {
+        skipped++;
+        continue;
+      }
+      final name = '${raw['name'] ?? ''}'.trim();
+      final author = '${raw['author'] ?? ''}'.trim();
+      if (name.isEmpty) {
+        skipped++;
+        continue;
+      }
+      total++;
+      final duplicates = _daos.book.findByName([name]);
+      if (duplicates.any((b) => b.author.trim() == author)) {
+        skipped++;
+        continue;
+      }
+      SearchResultView? hit;
+      for (final source in sources) {
+        try {
+          hit = await _preciseSearch(source, name, author);
+        } on Object {
+          // 单源失败（没配搜索地址、网络超时）不影响其它书源。
+        }
+        if (hit != null) break;
+      }
+      if (hit == null) {
+        skipped++;
+        errors.add('$name: 没有书源搜到');
+        continue;
+      }
+      // 详情里可能改名（搜索结果叫「搜索书名」、详情页叫「详情书名」），
+      // 只按 JSON 里的书名查重会漏。命中 URL 已经在库里同样要跳过。
+      if (_daos.book.getByUrl(hit.bookUrl) != null) {
+        skipped++;
+        continue;
+      }
+      try {
+        await upsertBook(
+          _sourceRowId(hit.origin),
+          hit.bookUrl,
+          hit.name,
+          hit.author,
+          hit.variable,
+          groupId,
+          true,
+          hit.cover,
+        );
+        added++;
+      } on Object catch (e) {
+        failed++;
+        errors.add('$name: $e');
+      }
+    }
+    return <String, Object?>{
+      'total': total,
+      'added': added,
+      'skipped': skipped,
+      'failed': failed,
+      'errors': errors,
+    };
+  }
+
+  /// 原版 `WebBook.preciseSearchAwait`：书名必须完全一致，作者给了也要一致。
+  /// 搜不到就返回 null，绝不拿模糊结果冒充（否则批量换源会换到别的小说）。
+  Future<SearchResultView?> _preciseSearch(
+    BookSource source,
+    String name,
+    String author,
+  ) async {
+    // 对齐原版 WebBook.preciseSearchAwait：只用书名做搜索关键词，作者仅用于
+    // 过滤结果。早期实现拼成 `书名 作者`，多数书源会把整串当书名 → 搜到 0 条
+    // → 导入书架/批量换源静默跳过，用户看到的就是「导入后书架没书」。
+    final results = await search(_sourceRowId(source.bookSourceUrl), name, 1);
+    for (final result in results) {
+      if (result.name.trim() != name) continue;
+      if (author.isNotEmpty && result.author.trim() != author) continue;
+      return result;
+    }
+    return null;
+  }
+
+  /// 更新目录：对齐 Kotlin `MainViewModel.updateToc`。
+  ///
+  /// - 本地书、书源已删除都直接报错，由 UI 汇总提示（原版是打 updateError 标记）；
+  /// - 目录按 URL 整体替换：`chapters` 主键是 `(url, bookUrl)`，必须删后再插；
+  /// - 阅读进度按**章节序号**保留，标题同步成新目录的标题（原版 `book.sync` 同口径）；
+  /// - 正文缓存不主动删：缓存命中本来就要求章节 URL 一致，URL 变了自然失效。
+  Future<Map<String, Object?>> refreshToc(int bookId) async {
+    final book = _daos.book.getById(bookId);
+    if (book == null) {
+      throw LegadoException(ErrorCode.notFound, '书籍不存在: $bookId');
+    }
+    if (book.isLocal) {
+      throw const LegadoException(ErrorCode.invalid, '本地书不支持更新目录');
+    }
+    final source = sourceByUrl(book.origin);
+    if (source == null) {
+      throw LegadoException(
+        ErrorCode.notFound,
+        '未找到书源 ${book.origin}，可能已被删除',
+      );
+    }
+    final tocUrl =
+        book.tocUrl.trim().isEmpty ? book.bookUrl : book.tocUrl.trim();
+    final chapters = await _fetchToc(
+      _contextOf(
+        source,
+        variables: _decodeVariables(book.variable ?? ''),
+        extra: {'book': book.toRow()},
+      ),
+      source,
+      tocUrl,
+      book.bookUrl,
+    );
+    if (chapters.isEmpty) {
+      throw const LegadoException(ErrorCode.invalid, '目录为空，未做改动');
+    }
+
+    final oldUrls = _daos.chapter.getUrls(book.bookUrl).toSet();
+    final newUrls = chapters.map((c) => c.url).toSet();
+    final added = newUrls.difference(oldUrls).length;
+    final removed = oldUrls.difference(newUrls).length;
+    final progress = _daos.readingProgress.get(book.bookUrl);
+    final keepIndex =
+        (progress?.chapterIndex ?? book.durChapterIndex).clamp(0, chapters.length - 1);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    // 原版 `BookChapterList`：只有**真的多了章节**才刷新 `latestChapterTime`
+    // /`lastCheckCount`。`lastCheckTime` 是「上次检查」，每次刷新都变，拿它
+    // 排序会让没更新的书来回跳；书架「按更新时间」读的是 `latestChapterTime`。
+    final oldTotal = book.totalChapterNum;
+    final hasNewChapters = chapters.length > oldTotal;
+
+    runInTransaction(_daos.db, () {
+      _daos.chapter.deleteByBookUrl(book.bookUrl);
+      // 不用 insertAll：它自己会再开一层事务。
+      for (final chapter in chapters) {
+        _daos.chapter.insert(chapter);
+      }
+      book
+        ..totalChapterNum = chapters.length
+        ..latestChapterTitle = chapters.last.title
+        ..lastCheckTime = now
+        ..durChapterIndex = keepIndex
+        ..durChapterTitle = chapters[keepIndex].title;
+      if (hasNewChapters) {
+        book
+          ..latestChapterTime = now
+          ..lastCheckCount = chapters.length - oldTotal;
+      }
+      _daos.book.update(book);
+      if (progress != null) {
+        _daos.readingProgress.put(ReadingProgress(
+          bookUrl: book.bookUrl,
+          chapterIndex: keepIndex,
+          chapterTitle: chapters[keepIndex].title,
+          chapterPos: progress.chapterPos,
+          scrollPercent: progress.scrollPercent,
+          updatedAt: now,
+        ));
+      }
+    });
+
+    return <String, Object?>{
+      'bookId': bookId,
+      'total': chapters.length,
+      'added': added,
+      'removed': removed,
+      'hasUpdate': added > 0 || removed > 0,
+    };
+  }
+
+  /// 刷新书籍：对齐 Kotlin `BookInfoViewModel.refreshBook` + `loadBookInfo(canReName=false)`。
+  ///
+  /// 原版菜单「刷新」/详情页下拉走的是重抓详情 + 重抓目录，而不是只读本地库：
+  /// - 详情：`WebBook.getBookInfo(canReName=false)` —— 只更新书源字段，不改书名/作者，
+  ///   也不覆盖用户的自定义封面/简介/分类；
+  /// - 目录：复用 [refreshToc] 整章替换并按章节序号保留进度。
+  ///
+  /// 本地书没有 WebDav 扫描能力（原版 refreshBook 的本地分支），直接报错由 UI 提示。
+  Future<Map<String, Object?>> refreshBook(int bookId) async {
+    final book = _daos.book.getById(bookId);
+    if (book == null) {
+      throw LegadoException(ErrorCode.notFound, '书籍不存在: $bookId');
+    }
+    if (book.isLocal) {
+      throw const LegadoException(
+        ErrorCode.invalid,
+        '本地书不支持刷新详情，可在书架管理里重新导入',
+      );
+    }
+    final source = sourceByUrl(book.origin);
+    if (source == null) {
+      throw LegadoException(
+        ErrorCode.notFound,
+        '未找到书源 ${book.origin}，可能已被删除',
+      );
+    }
+
+    final variables = _decodeVariables(book.variable ?? '');
+    // 详情规则里常写 {{book.bookUrl}}，与 upsertBook/refreshToc 一样注入 book 绑定。
+    final context = _contextOf(
+      source,
+      variables: variables,
+      extra: {'book': book.toRow()},
+    );
+    final (meta, tocUrl) = await _fetchInfo(
+      context,
+      source,
+      book.bookUrl,
+      book.name,
+      book.author,
+      book.displayCover,
+    );
+
+    // canReName=false：书名/作者保持库里的值；用户自定义字段不覆盖。
+    book
+      ..originName = source.bookSourceName
+      ..tocUrl = tocUrl.trim().isEmpty ? book.bookUrl : tocUrl.trim()
+      ..lastCheckTime = DateTime.now().millisecondsSinceEpoch;
+    if (meta.cover.trim().isNotEmpty && (book.customCoverUrl ?? '').isEmpty) {
+      book.coverUrl = meta.cover;
+    }
+    if (meta.intro.trim().isNotEmpty && (book.customIntro ?? '').isEmpty) {
+      book.intro = meta.intro;
+    }
+    if (meta.kind.trim().isNotEmpty && (book.customTag ?? '').isEmpty) {
+      book.kind = meta.kind;
+    }
+    book.latestChapterTitle = meta.lastChapter.trim().isEmpty
+        ? book.latestChapterTitle
+        : meta.lastChapter.trim();
+    _daos.book.update(book);
+
+    // 目录整章替换 + 进度保留走同一套逻辑（会重新 getById 读到上面更新的 tocUrl）。
+    final tocResult = await refreshToc(bookId);
+    return <String, Object?>{
+      'bookId': bookId,
+      'detailUpdated': true,
+      ...tocResult,
     };
   }
 
@@ -1013,8 +1463,10 @@ class SourceFetchService {
         _contextOf(source, baseUrl: baseForFetch),
       );
       final analyzed = await analyzer.analyze(fetchUrl, baseUrl: baseForFetch);
-      final response =
+      var response =
           await _request(analyzed, extraHeaders: headers, source: source);
+      // 原版 WebBook.getContentAwait：正文响应也要过 loginCheckJs。
+      response = await _applyLoginCheckJs(source, response);
       if (!response.isSuccess) {
         throw LegadoException(
           ErrorCode.netTimeout,
@@ -1444,6 +1896,59 @@ class SourceFetchService {
         );
         return analyze.getStringList(rule);
       },
+      // ---- 人机验证（对齐 Kotlin JsExtensions）----
+      startBrowser: (url, title) {
+        // 不 await：`startBrowser` 的语义就是「开个窗给用户」，不等结果。
+        // cookie 由验证页在每次加载完成后通过 `Source.ImportCookie` 实时回填。
+        final handler = HostVerification.browser;
+        final uri = Uri.tryParse(url);
+        if (handler == null || uri == null || !uri.hasScheme) {
+          throw const LegadoException(
+            ErrorCode.unsupported,
+            '当前宿主不支持内置浏览器验证',
+          );
+        }
+        unawaited(
+          handler(
+            BrowserVerificationRequest(
+              uri: uri,
+              headers: browserSafeHeaders(_sourceHeaders(source)),
+              title: title.trim().isEmpty ? source.bookSourceName : title.trim(),
+              sourceKey: source.bookSourceUrl,
+            ),
+          ).catchError((Object e) {
+            _log.warning('打开验证窗口失败：$e');
+            return const BrowserVerificationResult(skipped: true);
+          }),
+        );
+        return null;
+      },
+      startBrowserAwait: (url, title, refetch) async => strResponseObject(
+        await _verifyWithBrowser(
+          source,
+          rawUrl: url,
+          title: title,
+          baseUrl: effectiveBaseUrl,
+          variables: vars,
+          refetchAfterSuccess: refetch,
+        ),
+        url: url,
+      ),
+      getVerificationCode: (imageUrl) async {
+        final handler = HostVerification.captchaHandler;
+        final uri = Uri.tryParse(imageUrl);
+        if (handler == null || uri == null) {
+          throw const LegadoException(
+            ErrorCode.unsupported,
+            '当前宿主不支持图片验证码输入',
+          );
+        }
+        final code = await handler(uri);
+        if (code == null || code.trim().isEmpty) {
+          throw const LegadoException(ErrorCode.invalid, '验证码为空');
+        }
+        return code.trim();
+      },
       variables: vars,
       props: source.toJson(),
     );
@@ -1495,6 +2000,87 @@ class SourceFetchService {
     return out;
   }
 
+  /// 给一次响应套上 `loginCheckJs`（原版 `WebBook` 里五处
+  /// `evalJS(checkJs, result = res) as StrResponse`）。
+  ///
+  /// 语义：脚本通过 `result` 拿到当前响应（`result.body` / `result.url` /
+  /// `result.code`），可以**直接改 `result.body`**，也可以 `return` 一个新字符串
+  /// 或带 `body` 字段的对象。脚本里 `java.ajax` / `cookie` 与抓取链路共用同一份
+  /// 客户端，所以「没登录就登录再抓一次」的常见写法也能跑通。
+  ///
+  /// 书源没配、脚本为空、脚本抛错时一律原样返回：检测登录态属于增强，
+  /// 不能因为它失败就把整条搜索/详情/正文链路打断（原版同样用 try 包住）。
+  Future<HttpResponse> _applyLoginCheckJs(
+    BookSource source,
+    HttpResponse response, {
+    String? baseUrl,
+  }) async {
+    final raw = (source.loginCheckJs ?? '').trim();
+    if (raw.isEmpty) return response;
+    final script = _stripJsWrapper(raw);
+    if (script.isEmpty) return response;
+
+    final original = response.text();
+    final result = JsHostObject(
+      label: 'StrResponse',
+      props: <String, Object?>{
+        'body': original,
+        'url': response.finalUri.toString(),
+        'code': response.statusCode,
+        'isSuccess': response.isSuccess,
+      },
+    );
+    try {
+      final returned = await _contextOf(
+        source,
+        baseUrl: baseUrl ?? response.finalUri.toString(),
+      ).evalJs(script, result);
+      final body = _bodyOfJsResult(returned) ?? '${result.props['body'] ?? ''}';
+      if (body.isEmpty || body == original) return response;
+      return HttpResponse(
+        statusCode: response.statusCode,
+        headers: response.headers,
+        bodyBytes: utf8.encode(body),
+        finalUri: response.finalUri,
+        // 脚本改过正文，响应头上的 charset 不再可信，按 UTF-8 解释。
+        charsetHint: 'utf-8',
+        elapsed: response.elapsed,
+      );
+    } on Object catch (e) {
+      _log.warning('loginCheckJs 执行失败，按原响应继续: $e');
+      return response;
+    }
+  }
+
+  /// 只去掉整串包裹的 `<js>...</js>` / `@js:` 前缀。
+  ///
+  /// 原版把 `loginCheckJs` 当裸 JS 直接 eval（写前缀在 Rhino 里是语法错误），
+  /// 但真实书源里确实有人这么写，这里容错一下。
+  static String _stripJsWrapper(String raw) {
+    final lower = raw.toLowerCase();
+    if (lower.startsWith('@js:')) return raw.substring(4).trim();
+    if (lower.startsWith('<js>')) {
+      final close = RegExp(r'</js>\s*$', caseSensitive: false).firstMatch(raw);
+      return raw.substring(4, close?.start ?? raw.length).trim();
+    }
+    return raw;
+  }
+
+  /// 脚本返回值里取正文：字符串直接当正文，对象取 `body`。
+  static String? _bodyOfJsResult(Object? returned) {
+    if (returned == null) return null;
+    if (returned is String) return returned;
+    if (returned is JsHostObject) {
+      final body = returned.props['body'];
+      return body == null ? null : '$body';
+    }
+    if (returned is Map) {
+      final body = returned['body'];
+      return body == null ? null : '$body';
+    }
+    return null;
+  }
+
   /// 发请求。
   ///
   /// [extraHeaders] 是书源自带的请求头（`header` 字段）。它必须在 URL 规则里
@@ -1504,6 +2090,7 @@ class SourceFetchService {
     AnalyzedUrl analyzed, {
     Map<String, String> extraHeaders = const {},
     BookSource? source,
+    bool promptOnChallenge = true,
   }) async {
     // 首次请求前把持久化的 cookie 载入（幂等）：登录态跨进程保留全靠它。
     await restoreCookies();
@@ -1521,15 +2108,25 @@ class SourceFetchService {
     }
 
     Future<HttpResponse> send() {
+      // label 只服务反爬验证窗口的标题；promptOnChallenge=false 用于
+      // 「验证通过后重抓」那一次，避免弹窗→重抓→再弹窗的死循环。
+      final label = source?.bookSourceName ?? '';
       if (analyzed.method.toUpperCase() == 'POST') {
         return client.post(
           uri,
           body: _postBody(analyzed),
           headers: _postHeaders(analyzed),
           charset: analyzed.charset,
+          label: label,
+          promptOnChallenge: promptOnChallenge,
         );
       }
-      return client.get(uri, charset: analyzed.charset);
+      return client.get(
+        uri,
+        charset: analyzed.charset,
+        label: label,
+        promptOnChallenge: promptOnChallenge,
+      );
     }
 
     // 书源 concurrentRate：`"1000"`（最小间隔）或 `"3/1000"`（窗口内次数）。
@@ -1548,6 +2145,141 @@ class SourceFetchService {
       response = await sendLimited();
     }
     return response;
+  }
+
+  // ---- 反爬 / 人机验证 -------------------------------------------------
+
+  /// 打开宿主内置浏览器，等用户过验证，返回验证后的页面 HTML。
+  ///
+  /// 对齐 Kotlin `SourceVerificationHelp.getVerificationResult` +
+  /// `WebViewModel.saveVerificationResult`：
+  /// 1. 浏览器加载 [rawUrl]（带书源请求头，见 `browserSafeHeaders`）；
+  /// 2. 用户过验证后宿主回填浏览器 cookie（含 HttpOnly 的 `cf_clearance`）与 UA；
+  /// 3. [refetchAfterSuccess] 为真时用内核重新请求一次——比 `outerHTML` 干净，
+  ///    也不会把浏览器的插件痕迹带进正文；
+  /// 4. 重抓不成功（凭证只绑 IP、站点只有 `__cf_bm`）就退回浏览器渲染结果。
+  ///
+  /// 验证过程可能持续几十秒到几分钟，调用方（JS 脚本）会一直阻塞等待。
+  Future<String> _verifyWithBrowser(
+    BookSource source, {
+    required String rawUrl,
+    required String title,
+    required String baseUrl,
+    required Map<String, String> variables,
+    bool refetchAfterSuccess = true,
+  }) async {
+    final uri = Uri.tryParse(rawUrl);
+    if (uri == null || !uri.hasScheme) {
+      throw LegadoException(ErrorCode.invalid, '验证地址非法: $rawUrl');
+    }
+    final handler = HostVerification.browser;
+    if (handler == null) {
+      throw const LegadoException(
+        ErrorCode.unsupported,
+        '当前宿主不支持内置浏览器验证（请用 App；CLI 无法完成人机验证）',
+      );
+    }
+
+    final result = await handler(
+      BrowserVerificationRequest(
+        uri: uri,
+        headers: browserSafeHeaders(_sourceHeaders(source)),
+        title: title.trim().isEmpty ? source.bookSourceName : title.trim(),
+        sourceKey: source.bookSourceUrl,
+        refetchAfterSuccess: refetchAfterSuccess,
+      ),
+    );
+    if (result == null || result.skipped) {
+      throw const LegadoException(ErrorCode.invalid, '已取消验证');
+    }
+
+    // 合并写入，不整份替换：浏览器只新增 cf_clearance，登录态 cookie 必须留着。
+    final cookie = result.cookie?.trim() ?? '';
+    final finalUri = result.finalUrl ?? uri;
+    if (cookie.isNotEmpty) {
+      _net.cookies.importCookieHeader(finalUri, cookie);
+    }
+    final ua = result.userAgent?.trim() ?? '';
+    if (ua.isNotEmpty) {
+      _net.guard.state.setUserAgent(finalUri.host, ua);
+    }
+    await persistCookies();
+
+    if (refetchAfterSuccess) {
+      final refreshed = await _refetchAfterVerification(
+        source,
+        rawUrl: rawUrl,
+        baseUrl: baseUrl,
+        variables: variables,
+      );
+      if (refreshed.isNotEmpty) return refreshed;
+    }
+
+    final html = result.html ?? '';
+    if (html.trim().isEmpty) {
+      throw const LegadoException(ErrorCode.invalid, '验证后没有拿到页面内容');
+    }
+    return html;
+  }
+
+  /// 验证通过后用正常 HTTP 链路重抓一次。
+  ///
+  /// 失败返回空串而不是抛异常：调用方会用浏览器 HTML 兜底，
+  /// 「凭证不生效」不该让整条规则失败得莫名其妙。
+  Future<String> _refetchAfterVerification(
+    BookSource source, {
+    required String rawUrl,
+    required String baseUrl,
+    required Map<String, String> variables,
+  }) async {
+    final effectiveBase = baseUrl.isEmpty ? source.bookSourceUrl : baseUrl;
+    try {
+      final analyzer = UrlRuleAnalyzer(
+        _contextOf(
+          source,
+          baseUrl: effectiveBase,
+          variables: variables,
+          withJava: false,
+        ),
+      );
+      final analyzed = await analyzer.analyze(rawUrl, baseUrl: effectiveBase);
+      final response = await _request(
+        analyzed,
+        source: source,
+        // 关键：重抓这一次不许再弹窗。
+        promptOnChallenge: false,
+      );
+      if (!response.isSuccess) {
+        _log.info('验证后重抓返回 HTTP ${response.statusCode}，使用浏览器结果');
+        return '';
+      }
+      return response.text();
+    } catch (e) {
+      _log.info('验证后重抓失败，使用浏览器结果：$e');
+      return '';
+    }
+  }
+
+  /// 浏览器每加载完一页就回填一次 cookie（对齐原版 `WebViewActivity.onPageFinished`）。
+  ///
+  /// 为什么不等验证结束再回填：`java.startBrowser` 是「开个窗」语义，不等结果；
+  /// 用户在窗口里登录完直接返回时，只有实时回填才留得住登录态。
+  Future<void> importBrowserCookie(
+    String url,
+    String cookie, {
+    String userAgent = '',
+  }) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null || uri.host.isEmpty) {
+      throw LegadoException(ErrorCode.invalid, '非法的验证地址: $url');
+    }
+    if (cookie.trim().isNotEmpty) {
+      _net.cookies.importCookieHeader(uri, cookie);
+    }
+    if (userAgent.trim().isNotEmpty) {
+      _net.guard.state.setUserAgent(uri.host, userAgent);
+    }
+    await persistCookies();
   }
 
   /// POST 的请求体。

@@ -121,7 +121,7 @@ final books = await LegadoCore.instance.call('Shelf.ListBooks', [0]);
 
 | 域 | 原版对应 | 现有方法 | 现有 UI | 缺口 |
 | --- | --- | --- | --- | --- |
-| 书架 | `ui/book`（书架部分） | Shelf 11 | `shelf_page` | 分组增删改、多选批量、本地/网络导入、封面规则、书籍信息编辑、换源 |
+| 书架 | `ui/book`（书架部分） | Shelf 18 | `shelf_page` + `shelf_manage_page` | 已做：分组管理（增删改名/显隐/拖拽排序/本组排序方式/参与目录更新开关、封面选图）、书架管理（多选/长按拖拽连选/搜索过滤、批量移动/加入分组/开关更新/换源/清缓存/移出书架）、更新目录、书架 JSON 导入导出（对齐原版 books.json 格式）、按分组 bookSort 排序、本地/网络导入、导出、书籍信息编辑、换源。缺：分组 `bookSort=3` 的手动拖拽书序（书序字段已在库，UI 未接）、书架 JSON 备份到 WebDAV |
 | 书源 | `ui/config`、`BookSourceEdit/Debug` | Source 38 · SourceDebug 3 · SourceLogin 7 | 列表/编辑/调试 3 页 | 分组管理、导入导出、规则校验、jsLib、登录流程细化 |
 | 规则引擎 | `model/analyzeRule`、`lib/rhino` | （藏在 Go 里） | — | **CSS/XPath/JSONPath/正则/JS 全部要在 Dart 重写** |
 | 发现 | `ExploreFragment`、`ExploreShow` | Source 内 | `explore_page` | 分类矩阵、多源并行、翻页增量 |

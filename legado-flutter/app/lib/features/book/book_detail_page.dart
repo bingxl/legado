@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../../core/bridge/api.dart';
 import '../../core/bridge/legado_client.dart';
+import '../../core/shelf_events.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../core/router/routes.dart';
 import '../../core/widgets/book_cover.dart';
 import '../../core/widgets/copy_links.dart';
+import '../reader/widgets/toc_sheet_scaffold.dart';
 import '../shelf/shelf_api.dart';
 import 'book_edit_dialogs.dart';
 import 'chapter_preview.dart';
@@ -42,6 +45,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
 
   bool _loading = true;
   bool _adding = false;
+  bool _refreshing = false;
   bool _introExpanded = false;
   String? _error;
 
@@ -105,18 +109,86 @@ class _BookDetailPageState extends State<BookDetailPage> {
     }
   }
 
+  /// 详情页刷新：对齐原版 `BookInfoActivity.refreshBook` —— 重抓详情 + 目录，
+  /// 不是只读本地库（早期实现把菜单「刷新」和下拉都接到了 [_load]，
+  /// 表现为刷新后目录/简介永远不变）。
+  Future<void> _refresh() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    try {
+      final result = await ShelfApi.refreshBook(widget.bookId);
+      if (!mounted) return;
+      final added = (result['added'] as num?)?.toInt() ?? 0;
+      // 章数/最新章节可能变了，书架列表要跟着更新。
+      ShelfEvents.changed();
+      _toast(added > 0 ? '已刷新，新增 $added 章' : '已刷新');
+      await _load();
+    } on LegadoError catch (e) {
+      if (!mounted) return;
+      // 本地书不支持网络刷新：不打断页面，重新回读本地目录即可。
+      if (e.code == 'INVALID_ARGUMENT' && e.message.contains('本地书')) {
+        await _load();
+        return;
+      }
+      _toast('刷新失败：${e.message}');
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
   /// 试读转正：书已在库（含目录），只需把书架标记打开。
   Future<void> _putOnShelf() async {
     if (_adding) return;
     setState(() => _adding = true);
     try {
       await LegadoClient.instance.call(Api.shelfPutOnShelf, [widget.bookId]);
+      // 书架页常驻在 IndexedStack 里，不广播它就不会重新拉列表。
+      ShelfEvents.changed();
       if (!mounted) return;
       _toast('已加入书架');
       await _load();
     } on LegadoError catch (e) {
       if (!mounted) return;
       _toast('加入书架失败：${e.message}');
+    } finally {
+      if (mounted) setState(() => _adding = false);
+    }
+  }
+
+  /// 移出书架：对齐原版 `BookInfoActivity.deleteBook` ——
+  /// 先确认（原版 `bookInfoDeleteAlert` 默认开），再走 `Shelf.DeleteBook`
+  /// （删书 + 清目录/进度/缓存），成功后返回上一页（原版 `finish()`）。
+  Future<void> _removeFromShelf() async {
+    if (_adding) return;
+    final name = _title;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('是否确认删除？'),
+        content: Text('将从书架移除《$name》，并清空它的目录、阅读进度与缓存。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _adding = true);
+    try {
+      await LegadoClient.instance.call(Api.shelfDeleteBook, [widget.bookId]);
+      ShelfEvents.changed();
+      if (!mounted) return;
+      _toast('已移出书架');
+      Navigator.of(context).pop(true);
+    } on LegadoError catch (e) {
+      if (!mounted) return;
+      _toast('移出书架失败：${e.message}');
     } finally {
       if (mounted) setState(() => _adding = false);
     }
@@ -143,12 +215,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
     return name.isEmpty ? '书籍详情' : name;
   }
 
-  void _toast(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _toast(String message) => showAppToast(context, message, mounted: mounted);
 
   /// 编辑书名/作者/封面/简介/分组。
   Future<void> _editBook() async {
@@ -156,6 +223,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
     if (detail == null) return;
     final saved = await showBookEditDialog(context, detail);
     if (saved == true) {
+      ShelfEvents.changed();
       _toast('已保存');
       await _load();
     }
@@ -184,6 +252,8 @@ class _BookDetailPageState extends State<BookDetailPage> {
       );
       if (!mounted) return;
       final newId = (result['bookId'] as num?)?.toInt() ?? widget.bookId;
+      // 换源会重建目录、改写书源，书架上的封面/最新章节都会变。
+      ShelfEvents.changed();
       if (newId != widget.bookId) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
@@ -231,7 +301,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
             // -1 是刷新；非负数是 links 的下标。
             onSelected: (value) {
               if (value < 0) {
-                _load();
+                _refresh();
                 return;
               }
               copyLink(context, links[value], notify: _toast);
@@ -298,7 +368,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
 
     final detail = _detail ?? const <String, dynamic>{};
     return RefreshIndicator(
-      onRefresh: _load,
+      onRefresh: _refresh,
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 820),
@@ -390,9 +460,15 @@ class _BookDetailPageState extends State<BookDetailPage> {
         Expanded(
           child: inShelf
               ? OutlinedButton.icon(
-                  onPressed: null,
-                  icon: const Icon(Icons.check, size: 18),
-                  label: const Text('已在书架'),
+                  onPressed: _adding ? null : _removeFromShelf,
+                  icon: _adding
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.delete_outline, size: 18),
+                  label: Text(_adding ? '处理中…' : '移出书架'),
                 )
               : OutlinedButton.icon(
                   onPressed: _adding ? null : _putOnShelf,
@@ -551,55 +627,23 @@ class _BookDetailPageState extends State<BookDetailPage> {
     );
   }
 
-  /// 完整目录弹层：上千章时 ListView.builder 只构建可见部分。
+  /// 完整目录弹层：与阅读器目录共用 [TocSheetScaffold]，
+  /// 自带「回到开头 / 跳到最新」，上千章时 ListView.builder 只构建可见部分。
   void _showAllChapters() {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      showDragHandle: true,
-      builder: (sheetContext) {
-        return DraggableScrollableSheet(
-          expand: false,
-          initialChildSize: 0.85,
-          minChildSize: 0.4,
-          maxChildSize: 0.95,
-          builder: (_, controller) {
-            return Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 4,
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '全部章节（${_chapters.length}）',
-                          style: Theme.of(sheetContext).textTheme.titleMedium,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: '关闭',
-                        icon: const Icon(Icons.close),
-                        onPressed: () => Navigator.pop(sheetContext),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(height: 0.6),
-                Expanded(
-                  child: ListView.builder(
-                    controller: controller,
-                    itemCount: _chapters.length,
-                    itemBuilder: (_, i) => _chapterRow(_chapters[i]),
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
+      useSafeArea: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => TocSheetScaffold(
+        title: '全部章节',
+        countLabel: '共 ${_chapters.length} 章',
+        itemCount: _chapters.length,
+        itemBuilder: (_, i) => _chapterRow(_chapters[i]),
+      ),
     );
   }
 }

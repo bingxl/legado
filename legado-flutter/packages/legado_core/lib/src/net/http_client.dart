@@ -95,6 +95,8 @@ class HttpRequest {
     this.body,
     this.timeout,
     this.charset,
+    this.label = '',
+    this.promptOnChallenge = true,
   }) : headers = headers == null
            ? <String, String>{}
            : Map<String, String>.of(headers);
@@ -117,6 +119,19 @@ class HttpRequest {
   /// 强制使用的响应编码（对齐原版 `ResponseBody.text(encode)`）。
   final String? charset;
 
+  /// 发起方标识（书源名 / 订阅名）。
+  ///
+  /// 只用于反爬验证窗口的标题：用户同时验证多个站点时，窗口上写「书源名」
+  /// 才能分清哪个是哪个。网络层不参与语义判断。
+  final String label;
+
+  /// 撞上反爬挑战时是否允许拉起内置浏览器。
+  ///
+  /// 默认 true。**验证通过后重新取正文的那一次必须置 false**：
+  /// 凭证若仍不生效，允许弹窗就会「弹窗 → 重抓 → 又是挑战 → 再弹窗」，
+  /// 用户永远关不掉（原版用 `AnalyzeUrl.NoChallenge` 挡的同一件事）。
+  final bool promptOnChallenge;
+
   /// 是否为表单/JSON 等带 body 的请求。
   bool get hasBody => body != null && body!.isNotEmpty;
 
@@ -130,6 +145,8 @@ class HttpRequest {
     List<int>? body,
     Duration? timeout,
     String? charset,
+    String? label,
+    bool? promptOnChallenge,
   }) {
     return HttpRequest(
       uri ?? this.uri,
@@ -138,6 +155,8 @@ class HttpRequest {
       body: body ?? this.body,
       timeout: timeout ?? this.timeout,
       charset: charset ?? this.charset,
+      label: label ?? this.label,
+      promptOnChallenge: promptOnChallenge ?? this.promptOnChallenge,
     );
   }
 }
@@ -318,6 +337,8 @@ class LegadoHttpClient {
        _client = client ?? _createClient(useSystemProxy) {
     guard = CloudflareGuard(
       store: store,
+      // 显式处理器优先；没有时由 guard 在每次调用时去宿主注册表取
+      // （见 CloudflareGuard.effectiveHandler —— 注册时机晚于构造）。
       handler: onChallenge,
       state: challengeState,
     );
@@ -568,7 +589,7 @@ class LegadoHttpClient {
       // ---- Cloudflare ----
       final reason = cloudflareChallengeReason(raw.statusCode, raw.headers);
       if (reason != null && !challengeTried) {
-        if (!guard.canSolve) {
+        if (!guard.canSolve || !request.promptOnChallenge) {
           throw CloudflareChallengeException(
             uri,
             statusCode: raw.statusCode,
@@ -576,7 +597,13 @@ class LegadoHttpClient {
           );
         }
         final solution = await guard.solve(
-          ChallengeRequest(uri: uri, statusCode: raw.statusCode, reason: reason),
+          ChallengeRequest(
+            uri: uri,
+            statusCode: raw.statusCode,
+            reason: reason,
+            headers: prepared,
+            label: request.label,
+          ),
         );
         challengeTried = true;
         if (solution != null) {

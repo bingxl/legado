@@ -5,6 +5,11 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import 'pagination.dart';
 
+/// 夜间阅读面板的语义色：菜单与对话框共用，避免改一处漏一处。
+const Color kReaderDarkPanel = Color(0xFF262626);
+const Color kReaderDarkForeground = Color(0xFFEDEDED);
+const Color kReaderDarkMuted = Color(0xFFBDBDBD);
+
 /// 翻页方式。枚举下标刻意对齐原版 `PageAnim` 的常量值
 /// （0 cover / 1 slide / 2 simulation / 3 scroll / 4 none），
 /// 以后把阅读配置放进 core 时可以直接按整数互转。

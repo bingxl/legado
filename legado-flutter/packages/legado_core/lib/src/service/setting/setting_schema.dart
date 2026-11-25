@@ -201,9 +201,11 @@ class SettingsSchema {
 ///
 /// 只收 UI 三个页面（`read`/`theme`/`general`）实际渲染的项，原版 Kotlin 的
 /// 两百多个偏好项没有全搬：Schema 驱动渲染，多搬一项就等于多一个没人认领的面板。
+/// `search` 页不出现在设置中心，只给搜索页持久化「精确搜索 / 搜索范围」两个条件：
+/// 设置服务只认 Schema 里的 key，未知 key 会被写路径静默丢弃。
 const SettingsSchema defaultSettingsSchema = SettingsSchema(
   version: 2,
-  pages: <String>['read', 'theme', 'general'],
+  pages: <String>['read', 'theme', 'general', 'search'],
   sections: <SettingSection>[
     SettingSection(
       key: 'typography',
@@ -369,6 +371,27 @@ const SettingsSchema defaultSettingsSchema = SettingsSchema(
           max: 90,
           step: 1,
           unit: '天',
+        ),
+      ],
+    ),
+    SettingSection(
+      key: 'search',
+      page: 'search',
+      title: '搜索',
+      items: <SettingItem>[
+        SettingItem(
+          key: 'search.precision',
+          kind: SettingKind.switchToggle,
+          title: '精确搜索',
+          desc: '按书名/作者包含关键词过滤结果，对应原版 PreferKey.precisionSearch',
+          defaultValue: false,
+        ),
+        SettingItem(
+          key: 'search.scope',
+          kind: SettingKind.text,
+          title: '搜索范围',
+          desc: '空=全部书源；名称::地址=单源；逗号分隔=多个分组',
+          defaultValue: '',
         ),
       ],
     ),

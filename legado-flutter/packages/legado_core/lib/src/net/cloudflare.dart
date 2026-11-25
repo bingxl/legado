@@ -64,6 +64,8 @@ class ChallengeRequest {
     required this.uri,
     required this.statusCode,
     this.reason,
+    this.headers = const {},
+    this.label = '',
   });
 
   /// 被拦截的原始地址。
@@ -74,6 +76,17 @@ class ChallengeRequest {
 
   /// 判定依据。
   final String? reason;
+
+  /// 被拦截请求的请求头。
+  ///
+  /// 验证窗口要用同样的头去加载页面：很多站点只在特定 `Referer` / `Accept`
+  /// 下才发挑战，换一套默认头直接拿到 403，用户会以为「验证没用」。
+  /// `Cookie` / `Content-Length` / `Host` 这类由浏览器或连接层自己管的
+  /// 已在派发前剔除（见 [HostVerification.challengeHandler]）。
+  final Map<String, String> headers;
+
+  /// 发起方标识（书源名 / 订阅名），只用于验证窗口的标题。
+  final String label;
 
   /// 归属域名（用于 UA 覆盖表的 key）。
   String get host => uri.host.toLowerCase();
@@ -113,6 +126,160 @@ class ChallengeSolution {
 typedef ChallengeHandler = Future<ChallengeSolution?> Function(
   ChallengeRequest request,
 );
+
+/// 「用内置浏览器打开页面让用户自己过验证」——对齐原版
+/// `SourceVerificationHelp.startBrowser` 的入参。
+///
+/// 内核不关心窗口长什么样，只要求宿主：**用 [headers] 加载 [uri]**，
+/// 用户过完验证后把浏览器的 cookie、UA 和最终页面交回来。
+class BrowserVerificationRequest {
+  const BrowserVerificationRequest({
+    required this.uri,
+    this.headers = const {},
+    this.title = '',
+    this.sourceKey = '',
+    this.refetchAfterSuccess = true,
+  });
+
+  /// 要打开的地址（通常就是被拦截的那个请求）。
+  final Uri uri;
+
+  /// 加载时要带上的请求头（已剔除 Cookie 等连接层自己管的头）。
+  final Map<String, String> headers;
+
+  /// 窗口标题：书源名 / 站点域名。
+  final String title;
+
+  /// 书源地址（原版 `sourceOrigin`），用于日志和「同一源只弹一次」。
+  final String sourceKey;
+
+  /// 验证通过后是否由**内核**重新请求一次。
+  ///
+  /// 原版 `WebViewModel.saveVerificationResult` 的 `refetchAfterSuccess`：
+  /// - true：拿浏览器攒下的 cookie 走正常 HTTP 重抓，结果最干净（默认）；
+  /// - false：直接返回浏览器里的 `outerHTML`。
+  final bool refetchAfterSuccess;
+
+  String get host => uri.host.toLowerCase();
+}
+
+/// 宿主完成（或放弃）验证后的回填。
+class BrowserVerificationResult {
+  const BrowserVerificationResult({
+    this.html,
+    this.cookie,
+    this.userAgent,
+    this.finalUrl,
+    this.skipped = false,
+  });
+
+  /// 验证后的页面 HTML（浏览器渲染结果，兜底用）。
+  final String? html;
+
+  /// 浏览器里的完整 cookie 串（含 HttpOnly 的 `cf_clearance`）。
+  final String? cookie;
+
+  /// 浏览器的 UA。`cf_clearance` 与它绑定，必须一起换。
+  final String? userAgent;
+
+  /// 浏览器最终停留的地址（可能被跳到别的域，cookie 要落在新域上）。
+  final Uri? finalUrl;
+
+  /// 用户放弃 / 宿主不支持。
+  final bool skipped;
+
+  bool get isEmpty =>
+      (html == null || html!.isEmpty) &&
+      (cookie == null || cookie!.trim().isEmpty);
+
+  /// 转成 HTTP 层能直接用的凭证。
+  ChallengeSolution toSolution() => ChallengeSolution(
+    cookie: cookie,
+    userAgent: userAgent,
+    body: html,
+  );
+}
+
+/// 宿主注册的「内置浏览器验证」实现。
+typedef BrowserVerificationHandler = Future<BrowserVerificationResult?>
+Function(BrowserVerificationRequest request);
+
+/// 图片验证码：宿主弹一个「看图输入」的对话框，返回用户填的串；取消返回 null。
+typedef CaptchaHandler = Future<String?> Function(Uri imageUri);
+
+/// 宿主能力注册表（进程级单例）。
+///
+/// 为什么用全局而不是构造参数：书源、RSS、导出等模块各自 `new NetClient()`，
+/// 逐个透传会把「App 注册一次」变成「改十几处构造」。注册表只在这里存一个
+/// 函数指针，测试里 `register(null)` 就能回到「没有宿主」的原始行为。
+class HostVerification {
+  HostVerification._();
+
+  static BrowserVerificationHandler? _browser;
+  static CaptchaHandler? _captcha;
+
+  /// 注册（传 null 表示注销，恢复到「无宿主」）。
+  static void register(BrowserVerificationHandler? handler) {
+    _browser = handler;
+  }
+
+  /// 注册图片验证码输入框。
+  static void registerCaptcha(CaptchaHandler? handler) {
+    _captcha = handler;
+  }
+
+  /// 宿主注册的浏览器验证实现（未注册为 null）。
+  static BrowserVerificationHandler? get browser => _browser;
+
+  static bool get canOpenBrowser => _browser != null;
+
+  static bool get canSolveCaptcha => _captcha != null;
+
+  static CaptchaHandler? get captchaHandler => _captcha;
+
+  /// 派生给 [CloudflareGuard] 的处理器；没有宿主时返回 null。
+  static ChallengeHandler? get challengeHandler {
+    if (_browser == null) return null;
+    return (request) async {
+      final result = await _browser!(
+        BrowserVerificationRequest(
+          uri: request.uri,
+          headers: browserSafeHeaders(request.headers),
+          title: request.label.isNotEmpty ? request.label : request.host,
+          // 网络层只知道展示名，不知道书源地址（那是规则层的概念）。
+          // 走 `java.startBrowserAwait` 的路径会带上真正的 bookSourceUrl。
+        ),
+      );
+      if (result == null || result.skipped) return null;
+      return result.toSolution();
+    };
+  }
+}
+
+/// 交给浏览器加载前要剔除的请求头。
+///
+/// - `cookie`：浏览器有自己的 cookie jar，手动塞会与它冲突（还可能是
+///   HttpOnly 值拼出来的串，语义不对）；
+/// - `content-length` / `host` / `connection`：由连接层生成，手填会让
+///   WebView 的请求异常；
+/// - `accept-encoding`：交给浏览器协商，手动填 `br` 之类它未必解得了。
+const Set<String> _browserUnsafeHeaders = {
+  'cookie',
+  'content-length',
+  'host',
+  'connection',
+  'accept-encoding',
+};
+
+Map<String, String> browserSafeHeaders(Map<String, String> headers) {
+  if (headers.isEmpty) return const {};
+  return {
+    for (final e in headers.entries)
+      if (!_browserUnsafeHeaders.contains(e.key.toLowerCase()) &&
+          e.value.trim().isNotEmpty)
+        e.key: e.value,
+  };
+}
 
 /// 没有可用 handler 时抛出。
 ///
@@ -178,10 +345,21 @@ class CloudflareGuard {
   }) : state = state ?? ChallengeState();
 
   final CookieStore store;
+
+  /// 显式指定的处理器（测试 / 宿主自建客户端时用）。
   final ChallengeHandler? handler;
+
   final ChallengeState state;
 
-  bool get canSolve => handler != null;
+  /// 没有显式处理器时，**每次调用时**再看一眼宿主注册表。
+  ///
+  /// 不能在构造时固化：服务层的 `NetClient` 在内核 init 里就建好了，
+  /// 而 App 的验证页是 `runApp` 之前才注册的 —— 固化下来就等于永远没有处理器，
+  /// 现场表现是「App 里撞上 Cloudflare 直接被抛异常，验证页从来不弹」。
+  ChallengeHandler? get effectiveHandler =>
+      handler ?? HostVerification.challengeHandler;
+
+  bool get canSolve => effectiveHandler != null;
 
   /// 请求宿主完成验证。
   ///
@@ -189,7 +367,7 @@ class CloudflareGuard {
   /// - 宿主返回 null / [ChallengeSolution.skip]：返回 null，调用方原样返回被拦截的响应。
   /// - 成功：把 cookie 与 UA 写回，返回可用的解决方案。
   Future<ChallengeSolution?> solve(ChallengeRequest request) async {
-    final h = handler;
+    final h = effectiveHandler;
     if (h == null) {
       throw CloudflareChallengeException(
         request.uri,

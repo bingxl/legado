@@ -12,6 +12,7 @@ import '../../format/txt_parser.dart';
 import '../../kernel/errors.dart';
 import '../../store/database.dart';
 import '../../store/store.dart';
+import '../cache/image_cache_service.dart';
 import '../replacerule/replacement_processor.dart';
 import '../setting/settings_service.dart';
 import '../shelf/shelf_service.dart';
@@ -27,11 +28,15 @@ class ReaderService {
     required ShelfService shelf,
     SourceFetchService? sourceFetch,
     SettingsService? settings,
+    ImageCacheService? images,
     String homeDir = '',
   })  : _daos = daos,
         _shelf = shelf,
         _sourceFetch = sourceFetch,
         _settings = settings,
+        // homeDir 为空（部分 CLI/单测）时不建图片缓存：否则会把图片写到
+        // 进程当前目录的 cache/ 下，测试跑完留一地垃圾。
+        _images = images ?? (homeDir.isEmpty ? null : ImageCacheService(homeDir: homeDir)),
         _homeDir = homeDir;
 
   final StoreDaos _daos;
@@ -45,6 +50,10 @@ class ReaderService {
 
   /// 网络书正文抓取链路；为 null 时只支持本地书。
   final SourceFetchService? _sourceFetch;
+
+  /// 图片磁盘缓存；由 ReaderModule 创建并与 CacheService 共享同一个实例
+  /// （共享下载闸门与 cookie），CLI/单测未给 homeDir 时为 null。
+  final ImageCacheService? _images;
 
   /// 自动缓存的偏好值（键在 `settings/setting_schema.dart`）。
   bool get _autoCache =>
@@ -95,10 +104,15 @@ class ReaderService {
   /// 抓到的新章节会按设置自动入库（`cache.autoCache`），并预取后续若干章。
   ///
   /// [refresh] 为 true 时跳过缓存强制联网（缓存管理页的「重新缓存」用）。
+  ///
+  /// [downloadImages] 只给缓存任务关掉：缓存任务会自己 await 图片下载并计入
+  /// job 进度，这里再下一遍会重复占带宽。UI/预取保持默认 true —— 原版
+  /// `ImageProvider.cacheImage` 也是「读到哪、图片存到哪」。
   Future<Map<String, Object?>> getContent(
     int bookId,
     int index, {
     bool refresh = false,
+    bool downloadImages = true,
   }) async {
     if (index < 0) {
       throw const LegadoException(ErrorCode.invalid, '章节序号不能为负');
@@ -116,11 +130,21 @@ class ReaderService {
     String html;
     List<String> images;
     String? fetchedTitle;
+    var titleFromCache = false;
     final cached = refresh ? null : _cacheHit(book, chapter);
     if (cached != null) {
       html = cached.html;
       images = _decodeImages(cached.images);
       fetchedTitle = cached.title.trim().isEmpty ? null : cached.title;
+      titleFromCache = fetchedTitle != null;
+      // 老缓存只有地址没有图片：这次先照常显示网络图，同时后台补齐磁盘文件，
+      // 下次进章就能离线看。不能因此判定缓存未命中 —— 那会让每次翻章都重抓正文。
+      if (downloadImages && images.isNotEmpty) {
+        final cache = _images;
+        if (cache != null && !cache.hasAllImages(bookId, index, images)) {
+          unawaited(cache.downloadChapter(bookId, index, images));
+        }
+      }
     } else {
       (String, List<String>, String?) rawContent;
       try {
@@ -141,20 +165,27 @@ class ReaderService {
       // Cache.Start），这类写入不受 cache.autoCache 约束，否则关掉自动缓存后
       // 手动缓存会一直显示不出进度、下次读又回落到旧内容。
       _autoCacheChapter(
+        bookId,
         book,
         chapter,
         html,
         images,
         fetchedTitle,
         force: refresh,
+        downloadImages: downloadImages,
       );
       _schedulePrefetch(book, index, total);
     }
 
     // `ruleContent.title`：标题只在正文页才完整的源（目录里是「第1章」或空串）。
     // 解出来就回写 chapters.title，下一次打开目录/翻页都直接是正确标题。
+    //
+    // **缓存命中的标题不回写**：它只是上次抓取时的快照，而目录可能已经被
+    // 「更新目录」刷成了新标题（作者改了章节名、站点补了卷名）。拿旧快照覆盖
+    // 会把目录标题改回去并落库，表现为「更新目录后标题又变回来了」。
     var chapterTitle = chapter.title;
-    if (fetchedTitle != null &&
+    if (!titleFromCache &&
+        fetchedTitle != null &&
         fetchedTitle.trim().isNotEmpty &&
         fetchedTitle.trim() != chapter.title) {
       chapterTitle = fetchedTitle.trim();
@@ -168,6 +199,10 @@ class ReaderService {
       'title': _replacer.title(_normalizeTitle(chapterTitle), _targetOf(book)),
       'html': html,
       'images': images,
+      // 已落盘的图片：原始 URL → 绝对路径。UI 本地优先、网络兜底；
+      // 只返回存在的文件，缓存还没下完时自然回落到 Image.network。
+      'imagePaths': _images?.cachedPaths(bookId, index, images) ??
+          <String, String>{},
       if (cached != null) 'fromCache': true,
       if (chapter.isVip) 'isVip': true,
       if (chapter.isPay) 'isPay': true,
@@ -445,7 +480,10 @@ class ReaderService {
   /// 预取队列（key 是 bookUrl）；同一本书串行抓，不并发打源。
   final Map<String, List<int>> _prefetchQueue = <String, List<int>>{};
   final Set<String> _prefetchRunning = <String>{};
-  bool _cachePurged = false;
+  /// 上次执行过期扫描时的天数；null 表示本次进程还没扫过。
+  /// 记住值而不是只记「扫过」：用户在设置里把 0 改成 7 后应当立即生效，
+  /// 一次性布尔会永久跳过，过期清理形同虚设。
+  int? _purgedDays;
   bool _closed = false;
 
   /// 停掉后台预取（模块 close 时调）。已经排队的任务直接丢弃。
@@ -479,14 +517,19 @@ class ReaderService {
     return const <String>[];
   }
 
+  /// 图片目录按 bookId 分；预取 worker 只拿着 Book，这里补一次 rowid 查询。
+  int _idOfBook(Book book) => _daos.book.idOf(book.bookUrl) ?? 0;
+
   /// 把刚读完的一章写进缓存。付费/VIP 章与空正文不写。
   void _autoCacheChapter(
+    int bookId,
     Book book,
     BookChapter chapter,
     String html,
     List<String> images,
     String? title, {
     bool force = false,
+    bool downloadImages = true,
   }) {
     if (!force && !_autoCache) return;
     if (book.isLocal || chapter.isVolume) return;
@@ -505,15 +548,69 @@ class ReaderService {
         createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
       ),
     );
+    // 正文先落库再下图片：下载慢/失败不能挡住翻章；原版也是
+    // `saveContent()` 先写文本，`saveImage()` 独立按张补。
+    if (downloadImages && images.isNotEmpty) {
+      unawaited(_downloadAndAccountImages(
+        bookId,
+        book.bookUrl,
+        chapter.index,
+        images,
+      ));
+    }
   }
 
-  /// 按 `cache.expireDays` 清理过期缓存；一个进程只扫一次。
+  /// 后台补图并把实际字节数回填到缓存行的 `size`。
+  ///
+  /// 之前这里只是 `unawaited(downloadChapter(...))`，下载完的字节没进 size，
+  /// 导致「自动缓存写入」与「手动 Cache.Start 写入」统计口径不一致，缓存
+  /// 管理页对漫画书的占用严重偏小。回填时重新读行：这一章可能在这期间被
+  /// 手动缓存重写过（refresh），不能覆盖人家已经算好的 size。
+  Future<void> _downloadAndAccountImages(
+    int bookId,
+    String bookUrl,
+    int index,
+    List<String> images,
+  ) async {
+    final cache = _images;
+    if (cache == null) return;
+    try {
+      final bytes = await cache.downloadChapter(bookId, index, images);
+      if (bytes <= 0 || _closed) return;
+      final current = _daos.chapterCache.get(bookUrl, index);
+      if (current == null) return;
+      _daos.chapterCache.put(
+        CachedChapter(
+          bookUrl: current.bookUrl,
+          index: current.index,
+          title: current.title,
+          url: current.url,
+          html: current.html,
+          images: current.images,
+          size: current.size + bytes,
+          createdAt: current.createdAt,
+        ),
+      );
+    } on Object {
+      // 图片字节只影响统计；下载失败不改变正文缓存。
+    }
+  }
+
+  /// 按 `cache.expireDays` 清理过期缓存；同一天数在一个进程里只扫一次。
   void _purgeExpiredCacheIfNeeded() {
-    if (_cachePurged) return;
-    _cachePurged = true;
     final days = _cacheExpireDays;
+    if (days == _purgedDays) return;
+    _purgedDays = days;
     if (days <= 0) return;
     try {
+      // 先删磁盘图片再删数据库行：反过来会留下无主目录，且下次缓存同章时
+      // 旧图会「复活」。原版没有 TTL，这是本实现的扩展，语义要和手动清理一致。
+      final expired = _daos.chapterCache.expired(days);
+      for (final item in expired) {
+        final bookId = _daos.book.idOf(item.bookUrl);
+        if (bookId == null) continue;
+        _images?.removeChapterDir(bookId, item.index);
+      }
       _daos.chapterCache.purgeExpired(days);
     } on Object {
       // 清理失败不该影响阅读；下次进程启动再试。
@@ -563,7 +660,7 @@ class ReaderService {
           if (chapter == null || chapter.isVolume) continue;
           if (_cacheHit(book, chapter) != null) continue;
           final (html, images, title) = await _contentOf(book, chapter);
-          _autoCacheChapter(book, chapter, html, images, title);
+          _autoCacheChapter(_idOfBook(book), book, chapter, html, images, title);
         } on Object {
           // 单章失败继续下一章；原版也是重试 3 次后放弃。
           // 库已关闭/模块已卸载时这里也会抛，直接退出循环。

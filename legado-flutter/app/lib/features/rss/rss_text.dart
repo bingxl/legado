@@ -5,6 +5,8 @@
 /// 这里只做容错式压平：丢弃标签、实体解码、块级标签切段。
 library;
 
+import '../../core/format.dart';
+
 class RssText {
   RssText._();
 
@@ -154,5 +156,5 @@ class RssText {
     return null;
   }
 
-  static String _two(int value) => value.toString().padLeft(2, '0');
+  static String _two(int value) => twoDigits(value);
 }

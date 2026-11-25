@@ -14,6 +14,7 @@ class RouteNames {
   static const me = '/me';
 
   // 书籍
+  static const shelfManage = '/shelf/manage';
   static const bookDetail = '/book';
   static const reader = '/read';
   static const search = '/search';

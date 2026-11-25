@@ -95,10 +95,11 @@ class SourceFetchModule extends CoreModule {
         for (final view in await fetch.searchAll(
           asText(arg(args, 0)),
           asInt(arg(args, 1)),
+          asText(arg(args, 2)),
         ))
           view.toJson(),
       ],
-      params: const ['keyword string', 'page int'],
+      params: const ['keyword string', 'page int', 'scope string'],
     );
     registry.method(
       'Source.PreviewBook',
@@ -142,6 +143,31 @@ class SourceFetchModule extends CoreModule {
       doc: '换源：重建目录并按章节序号保留进度；bookURL 空则沿用原地址',
     );
     registry.method(
+      'Source.RefreshToc',
+      (args) async => fetch.refreshToc(asInt(arg(args, 0))),
+      params: const ['bookID int'],
+      doc: '重抓目录并整章替换；按章节序号保留进度，返回 added/removed/total',
+    );
+    registry.method(
+      'Source.RefreshBook',
+      (args) async => fetch.refreshBook(asInt(arg(args, 0))),
+      params: const ['bookID int'],
+      doc: '详情页刷新：重抓详情(canReName=false)+目录，不覆盖用户自定义字段',
+    );
+    registry.method(
+      'Source.ImportCookie',
+      (args) async {
+        await fetch.importBrowserCookie(
+          asText(arg(args, 0)),
+          asText(arg(args, 1)),
+          userAgent: args.length > 2 ? asText(arg(args, 2)) : '',
+        );
+        return null;
+      },
+      params: const ['url string', 'cookie string', 'userAgent string?'],
+      doc: '内置浏览器验证后回填 cookie（合并写入并落盘），对齐原版 onPageFinished',
+    );
+    registry.method(
       'Source.AddToShelf',
       (args) async => fetch.upsertBook(
         asInt(arg(args, 0)),
@@ -160,6 +186,22 @@ class SourceFetchModule extends CoreModule {
         'variable string',
         'groupID int',
       ],
+    );
+    registry.method(
+      'Source.BatchChangeSource',
+      (args) async => fetch.batchChangeSource(
+        asIntList(arg(args, 0)),
+        asInt(arg(args, 1)),
+      ),
+      params: const ['bookIDs int[]', 'sourceID int'],
+      doc: '按书名+作者精确搜索后逐本换源，返回 succeeded/skipped/failed/errors',
+    );
+    registry.method(
+      'Source.ImportBookshelf',
+      (args) async =>
+          fetch.importBookshelf(asText(arg(args, 0)), asInt(arg(args, 1))),
+      params: const ['jsonOrURL string', 'groupID int'],
+      doc: '书架 JSON 数组（或返回它的地址）按书名+作者搜索加书，返回 added/skipped/failed',
     );
   }
 

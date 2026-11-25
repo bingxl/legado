@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/bridge/legado_client.dart';
+import '../../core/widgets/app_toast.dart';
 import 'rss_api.dart';
 import 'rss_article_page.dart';
 import 'rss_article_tile.dart';
@@ -110,12 +111,7 @@ class _RssHomePageState extends State<RssHomePage>
     if (changed == true) await _loadSources();
   }
 
-  void _toast(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _toast(String message) => showAppToast(context, message, mounted: mounted);
 
   @override
   Widget build(BuildContext context) {
@@ -412,6 +408,7 @@ class _RssArticleTabState extends State<RssArticleTab> {
           title: '${article['title'] ?? ''}',
           content: content,
           link: '${article['link'] ?? ''}',
+          origin: '${article['origin'] ?? ''}',
           favorite: article['favorite'] == true,
           pubDate: rssInt(article['pubDate']),
           sourceName: '${article['sourceName'] ?? ''}',
@@ -433,12 +430,7 @@ class _RssArticleTabState extends State<RssArticleTab> {
     await widget.onChanged();
   }
 
-  void _toast(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _toast(String message) => showAppToast(context, message, mounted: mounted);
 
   @override
   Widget build(BuildContext context) {

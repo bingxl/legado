@@ -10,7 +10,7 @@
 | `cookie_store.dart` | RFC 6265 cookie jar：`domain + path + name` 三元组独立存；域匹配（host-only / 带 Domain 含子域）、path 匹配、过期清理、`__Host-` / `__Secure-` 前缀校验、`Expires` 日期解析（三种格式）、JSON 持久化、WebView 导入、`toJson()/fromJson()` 纯内存序列化（接数据库 `cookies` 表用） |
 | `charset.dart` | 编码探测：BOM → 显式 charset → Content-Type → meta/xml 声明 → UTF-8 合法性启发式 → GBK 兜底。支持 UTF-8 / GBK(GB2312/GB18030) / UTF-16LE/BE / ISO-8859-1；`encode()` 反向编码（GBK 搜索参数用） |
 | `rate_limiter.dart` | 每 host 并发（默认 3）+ 每 host 最小间隔（默认 100ms）+ 全局并发（默认 16）+ 连续失败 3 次退避 5s；槽位「直接转交」避免限流器经典死锁 |
-| `cloudflare.dart` | 只认 `cf-mitigated: challenge`（2xx 不判、`Server: cloudflare` 不判）；`CloudflareGuard` 委托宿主 → 合并写入 cookie + UA 覆盖 → 只重试一次；无 handler 抛 `CloudflareChallengeException`；同 host 验证串行 |
+| `cloudflare.dart` | 只认 `cf-mitigated: challenge`（2xx 不判、`Server: cloudflare` 不判）；`CloudflareGuard` 委托宿主 → 合并写入 cookie + UA 覆盖 → 只重试一次；无 handler 抛 `CloudflareChallengeException`；同 host 验证串行。**宿主能力注册表 `HostVerification`**：浏览器回调 + 图片验证码回调，**调用时**才解析（服务层的 `NetClient` 在内核 init 就建好，而 App 的处理器是 `runApp` 前才注册）；`browserSafeHeaders` 剔除 `cookie`/`host`/`content-length`/`connection`/`accept-encoding` |
 | `http_client.dart` | `LegadoHttpClient`：底层 `IOClient`；手动跟重定向（逐跳存 cookie、`finalUri`、303 降级 GET）；Cookie 自动收发与合并；gzip/deflate 解压；超时；连接错误指数退避重试；可选系统代理；日志脱敏；`sendStream()` 流式响应（下载器用） |
 | `downloader.dart` | `Downloader`：断点续传（`Range` + 206 追加 / 200 覆盖 / 416 已完成）、`.part` 原子落盘、并发闸门复用 `RateLimiter`、`CancelToken`、按块进度、网络错误重试、4xx 不重试、100MB 上限 |
 | `net.dart` | `NetClient` 门面：`get/post/postForm/postJson/send/sendStream/withHeaders`、cookie 存取、`encodeForm`（GBK 参数编码） |
@@ -71,7 +71,7 @@ net.cookies.fromJson(jsonDecode(row) as Map<String, Object?>);  // 合并，不�
 
 | 事项 | 接手方 |
 | --- | --- |
-| WebView 取 `cf_clearance` 并回填 `ChallengeSolution` | App 侧（UI 阶段） |
+| ~~WebView 取 `cf_clearance` 并回填 `ChallengeSolution`~~ | 已完成（见 §七） |
 | 书源 `header` 字段 → `NetClient.withHeaders` | rules（规则引擎） |
 | 搜索关键字按源编码（`charset`）→ `postForm(charset: 'gbk')` / `encodeForm` | rules |
 | `concurrentRate` / 每源限速 → 复用 `RateLimiter.run(host, ...)` | rules 或服务层 |
@@ -143,3 +143,40 @@ net.cookies.fromJson(jsonDecode(row) as Map<String, Object?>);  // 合并，不�
 - `Downloader.close()` 会关掉内部闸门，之后再用会抛 `StateError`；它**不**关闭 `NetClient`。
 - 下载没有「整体超时」：只有建连/响应头受 `NetClient.timeout` 约束，慢速传到一半的
   连接会一直挂着。需要时由调用方用 `CancelToken` 兜底。
+
+## 七、宿主人机验证接线（已落地）
+
+对齐原版 `SourceVerificationHelp` + `WebViewActivity` + `WebViewModel.saveVerificationResult`。
+
+**内核侧**
+
+| 位置 | 内容 |
+| --- | --- |
+| `net/cloudflare.dart` | `HostVerification` 注册表（`register` / `registerCaptcha`）、`BrowserVerificationRequest/Result`、`browserSafeHeaders`；`CloudflareGuard.effectiveHandler` **调用时**解析宿主，避免「客户端先建、处理器后注册」拿不到 |
+| `net/http_client.dart` | `HttpRequest.label`（验证窗口标题）、`promptOnChallenge`（验证后重抓那一次禁止再弹窗） |
+| `service/source/source_fetch_service.dart` | `_verifyWithBrowser`（开窗→回填凭证→重抓→兜底）、`_refetchAfterVerification`、`importBrowserCookie` |
+| `js/java_host.dart` + `js/str_response.dart` | `java.startBrowser` / `startBrowserAwait` / `getVerificationCode`；`StrResponse.body` 既是属性又是方法（字符串化走 `JsCallable.stringForm`，QuickJS 与 Dart 解释器都支持） |
+| `Source.ImportCookie` | 验证页每次 `onPageFinished` 回填一次，合并写入 + 落盘 `cookies.json` |
+
+**App 侧**
+
+| 位置 | 内容 |
+| --- | --- |
+| `features/webview/verification_page.dart` | 带书源请求头加载、`!!window._cf_chl_opt` 判定挑战、挑战过完自动收尾、每页回填 cookie |
+| `features/webview/captcha_dialog.dart` | `java.getVerificationCode` 的看图输入框 |
+| `core/webview/webview_bridge.dart` | `flutter.legado/webview` 通道：读 cookie / UA；非 Android 退回 `document.cookie`（读不到 HttpOnly） |
+| `MainActivity.kt` | `CookieManager.getInstance().getCookie(url)` + `WebSettings.getDefaultUserAgent` |
+| `core/host/verification_host.dart` | 把上面几件事注册进 `HostVerification`；`appNavigatorKey` 提供导航 |
+
+**踩过的坑**
+
+1. **处理器不能构造时固化**：`SourceFetchService` 在内核 init 里就 `new NetClient()`，
+   而 App 的处理器是 `runApp` 前才注册 → 固化下来永远是 null，现象是「撞上挑战直接报错、验证页从不弹」。
+2. **验证后重抓必须 `promptOnChallenge=false`**：否则凭证不生效时「弹窗 → 重抓 → 又是挑战 → 再弹窗」，
+   用户关不掉（原版 `AnalyzeUrl.NoChallenge` 挡的是同一件事）。
+3. **`cf_clearance` 是 HttpOnly**：`document.cookie` 读不到，只有原生 `CookieManager.getCookie` 拿得到。
+4. **UA 必须一起换**：验证页的 UA 与 `cf_clearance` 绑定，回填内核时 `HostVerification` 会写进
+   `ChallengeState`，压过书源自配的 UA。
+5. **挑战判定要归一**：Android 的 `runJavaScriptReturningResult` 返回 JSON（`true` / `"true"`），
+   iOS 直接给字符串；不归一表现为「验证页永远不自动完成」。
+6. **cookie 只能合并写入**：整份替换会把用户登录态挤掉（`importCookieHeader` 而非 `Set-Cookie`）。

@@ -102,6 +102,8 @@ class NetClient {
     Map<String, String>? headers,
     String? charset,
     Duration? timeout,
+    String label = '',
+    bool promptOnChallenge = true,
   }) {
     return _client.send(
       HttpRequest(
@@ -110,6 +112,8 @@ class NetClient {
         headers: _merge(headers),
         charset: charset,
         timeout: timeout,
+        label: label,
+        promptOnChallenge: promptOnChallenge,
       ),
     );
   }
@@ -129,6 +133,8 @@ class NetClient {
     Map<String, String>? headers,
     String? charset,
     Duration? timeout,
+    String label = '',
+    bool promptOnChallenge = true,
   }) {
     final prepared = _prepareBody(body, headers);
     return _client.send(
@@ -139,6 +145,8 @@ class NetClient {
         body: prepared.body,
         charset: charset,
         timeout: timeout,
+        label: label,
+        promptOnChallenge: promptOnChallenge,
       ),
     );
   }

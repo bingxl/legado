@@ -23,6 +23,7 @@ class Api {
   // 阅读器
   static const readerGetChapters = 'Reader.GetChapters';
   static const readerGetContent = 'Reader.GetContent';
+  static const readerGetLocalPage = 'Reader.GetLocalPage';
   static const readerGetProgress = 'Reader.GetProgress';
   static const readerSaveProgress = 'Reader.SaveProgress';
 

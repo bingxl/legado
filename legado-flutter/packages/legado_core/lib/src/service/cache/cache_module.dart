@@ -29,6 +29,8 @@ class CacheModule extends CoreModule {
       reader: reader.service,
       shelf: shelf.service,
       homeDir: ctx.homeDir,
+      // Reader 域先注册，图片缓存实例与它共享，避免两套下载闸门/cookie。
+      images: reader.imageCache,
     );
     _service = service;
 

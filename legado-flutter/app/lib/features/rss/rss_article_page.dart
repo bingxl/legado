@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/bridge/legado_client.dart';
+import '../../core/widgets/app_toast.dart';
 import 'rss_api.dart';
 import 'rss_text.dart';
 
@@ -19,6 +20,7 @@ class RssArticlePage extends StatefulWidget {
     this.title,
     this.content,
     this.link,
+    this.origin,
     this.favorite = false,
     this.pubDate,
     this.sourceName,
@@ -30,6 +32,12 @@ class RssArticlePage extends StatefulWidget {
   /// 正文原文（可能是 HTML，渲染前会压平成纯文本）。
   final String? content;
   final String? link;
+
+  /// 订阅源地址（`rssStars.origin`）。
+  ///
+  /// 收藏表主键是 `(origin, link)`：从收藏页进来时文章 id 可能为 0
+  /// （文章行已被清理），此时只能靠这两个字段取消收藏。
+  final String? origin;
 
   /// 进入时的收藏状态，用于图标初值。
   final bool favorite;
@@ -69,10 +77,20 @@ class _RssArticlePageState extends State<RssArticlePage> {
   }
 
   Future<void> _toggleFavorite() async {
-    if (_favoriteBusy || widget.articleId <= 0) return;
+    if (_favoriteBusy) return;
+    final origin = (widget.origin ?? '').trim();
+    final link = (widget.link ?? '').trim();
+    // 没有文章 id 时只能按 (origin, link) 反收藏；两者都没有就别装样子。
+    final byKey = widget.articleId <= 0;
+    if (byKey && (origin.isEmpty || link.isEmpty)) {
+      _toast('这篇文章缺少关键信息，无法收藏');
+      return;
+    }
     setState(() => _favoriteBusy = true);
     try {
-      final state = await RssApi.toggleFavorite(widget.articleId);
+      final state = byKey
+          ? await RssApi.removeFavorite(origin, link)
+          : await RssApi.toggleFavorite(widget.articleId);
       if (!mounted) return;
       setState(() => _favorite = state);
       _toast(state ? '已收藏' : '已取消收藏');
@@ -105,12 +123,7 @@ class _RssArticlePageState extends State<RssArticlePage> {
     setState(() => _fontSize = next);
   }
 
-  void _toast(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _toast(String message) => showAppToast(context, message, mounted: mounted);
 
   @override
   Widget build(BuildContext context) {

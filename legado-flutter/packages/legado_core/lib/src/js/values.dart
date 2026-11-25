@@ -39,8 +39,14 @@ String jsToString(Object? v) {
   if (v is Map) return '[object Object]';
   if (v is JsRegExp) return v.toString();
   if (v is JsDate) return v.toString();
-  if (v is JsHostObject) return '[object Object]';
+  if (v is JsHostObject) {
+    final s = v.stringForm;
+    if (s != null) return s;
+    return '[object Object]';
+  }
   if (v is JsCallable) {
+    final s = v.stringForm;
+    if (s != null) return s;
     final n = v.name;
     return n.isEmpty ? 'function () { [native code] }' : 'function $n() { [native code] }';
   }
@@ -133,6 +139,14 @@ bool jsLooseEquals(Object? a, Object? b) {
 abstract class JsCallable {
   String get name;
 
+  /// 这个可调用值被当成字符串用时返回什么。
+  ///
+  /// 存在的理由只有一个：Kotlin 的 `StrResponse` 同时有 `body` 属性和
+  /// `body()` 方法，书源里两种写法都有（`res.body` 拼字符串、
+  /// `res.body()` 取正文）。JS 一个键只能放一个值，这里把 `body` 做成函数，
+  /// 再用它覆盖字符串化结果，两种写法就都能跑。
+  String? get stringForm => null;
+
   Object? call(List<Object?> args, Object? thisArg);
 
   /// `new fn()`。默认当成普通调用后返回一个空对象。
@@ -157,10 +171,13 @@ abstract class JsCallable {
 
 /// 用 Dart 闭包实现的函数。bindings 里的 Dart 函数会被包装成它。
 class NativeFunction extends JsCallable {
-  NativeFunction(this.name, this.fn, {this.constructFn});
+  NativeFunction(this.name, this.fn, {this.constructFn, this.stringForm});
 
   @override
   final String name;
+
+  @override
+  final String? stringForm;
 
   final Object? Function(List<Object?> args, Object? thisArg) fn;
   final Object? Function(List<Object?> args)? constructFn;
@@ -184,11 +201,15 @@ class JsHostObject extends JsCallable {
     Map<String, Object? Function(List<Object?>)>? methods,
     this.callFn,
     this.constructFn,
+    this.stringForm,
   })  : props = props ?? <String, Object?>{},
         methods = methods ?? <String, Object? Function(List<Object?>)>{};
 
   /// 展示名（如 `java`、`Math`），同时作为 instanceof 判定依据。
   final String? label;
+
+  @override
+  final String? stringForm;
   final Map<String, Object?> props;
   final Map<String, Object? Function(List<Object?>)> methods;
   final Object? Function(List<Object?> args, Object? thisArg)? callFn;

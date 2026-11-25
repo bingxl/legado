@@ -85,6 +85,26 @@ void main() {
       expect(page.bookId, 42);
       expect(page.bookName, '剑来');
       expect(page.initialChapter, -1);
+      // 没传章内位置 = -1，表示「续读 core 记录的进度」。
+      expect(page.initialChapterPos, -1);
+    });
+
+    test('书签的 arguments 要带上章内位置（chapterPos）', () {
+      final page = ReaderPage.fromRouteArguments({
+        'bookId': 7,
+        'chapterIndex': 12,
+        'chapterPos': 860,
+      }) as ReaderPage;
+      expect(page.initialChapter, 12);
+      // 只传章节号会落到章首，书签等于失效。
+      expect(page.initialChapterPos, 860);
+
+      // 阅读记录/书架没有章内位置：显式给 -1。
+      final noPos = ReaderPage.fromRouteArguments({
+        'bookId': 7,
+        'chapterIndex': 3,
+      }) as ReaderPage;
+      expect(noPos.initialChapterPos, -1);
     });
   });
 
@@ -120,6 +140,8 @@ void main() {
                   onStyleChanged: (_) {},
                   onSpeak: () {},
                   onRefresh: () {},
+                  onCache: () {},
+                  onBookmark: () {},
                   onSeek: (_) {},
                 ),
               ),
@@ -133,6 +155,8 @@ void main() {
     // 默认样式下底部栏的固定项应该在
     expect(find.text('朗读'), findsOneWidget);
     expect(find.text('上一章'), findsOneWidget);
+    expect(find.text('离线缓存'), findsOneWidget);
+    expect(find.text('书签'), findsOneWidget);
     expect(find.byIcon(Icons.arrow_back), findsOneWidget);
   });
 

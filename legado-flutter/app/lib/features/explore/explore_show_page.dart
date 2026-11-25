@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/bridge/legado_client.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../core/router/book_detail_route.dart';
 import '../../core/widgets/book_cover.dart';
 import 'explore_api.dart';
@@ -161,12 +162,7 @@ class _ExploreShowPageState extends State<ExploreShowPage> {
     }
   }
 
-  void _toast(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _toast(String message) => showAppToast(context, message, mounted: mounted);
 
   @override
   Widget build(BuildContext context) {

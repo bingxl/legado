@@ -7,9 +7,11 @@ import 'package:path/path.dart' as p;
 import '../../domain/domain.dart';
 import '../../kernel/errors.dart';
 import '../../store/store.dart';
+import '../../net/net.dart' show CancelToken;
 import '../reader/reader_service.dart';
 import '../shelf/shelf_service.dart';
 import 'cache_job.dart';
+import 'image_cache_service.dart';
 
 /// 章节缓存服务。
 ///
@@ -22,18 +24,24 @@ class CacheService {
     required ReaderService reader,
     required ShelfService shelf,
     required String homeDir,
+    ImageCacheService? images,
   })  : _daos = daos,
         _reader = reader,
         _shelf = shelf,
-        _homeDir = homeDir;
+        _homeDir = homeDir,
+        _images = images ?? (homeDir.isEmpty ? null : ImageCacheService(homeDir: homeDir));
 
   final StoreDaos _daos;
   final ReaderService _reader;
   final ShelfService _shelf;
   final String _homeDir;
 
+  /// 与 ReaderService 共享同一个实例（下载闸门 + cookie 池）。
+  final ImageCacheService? _images;
+
   final Map<int, CacheJob> _jobs = <int, CacheJob>{};
   final Set<int> _cancelled = <int>{};
+  final Map<int, CancelToken> _imageCancel = <int, CancelToken>{};
   bool _closed = false;
 
   /// 启动缓存任务，立即回执，后台异步执行。
@@ -94,10 +102,48 @@ class CacheService {
       try {
         // refresh：手动缓存要拿「当前」正文，不能被上一次自动缓存的旧内容骗过去
         // （站点改错字/换图后，用户点「重新缓存」就是想刷新）。
-        final content = await _reader.getContent(job.bookId, index, refresh: true);
+        // downloadImages=false：图片由本任务自己 await 并计入进度，避免两边重复下。
+        final content = await _reader.getContent(
+          job.bookId,
+          index,
+          refresh: true,
+          downloadImages: false,
+        );
         final html = '${content['html'] ?? ''}';
-        final images = content['images'];
-        final imageJson = jsonEncode(images is List ? images : const []);
+        // 与阅读器自动缓存同一套守卫：付费/VIP 章书源本就不给正文，
+        // 空正文也不写。否则付费占位文本会被当成有效缓存写进去，
+        // CacheScope.missing 随后永远跳过它，用户再也补不到真内容。
+        if (chapter.isPay || chapter.isVip || html.trim().isEmpty) {
+          succeeded++;
+          job.done++;
+          continue;
+        }
+        final rawImages = content['images'];
+        final imageUrls = rawImages is List
+            ? [for (final url in rawImages) '$url']
+            : <String>[];
+        final imageJson = jsonEncode(imageUrls);
+        var size = utf8.encode(html).length + utf8.encode(imageJson).length;
+
+        // 原版 CacheBook 缓存图片章时会把每张图下载到磁盘（正文缓存不等于
+        // 图片缓存），否则断网只能看到一堆失效的地址。单张失败不影响整章，
+        // 与原版 BookHelp.saveImage 吞掉单图异常的行为一致。
+        if (!_cancelled.contains(job.bookId)) {
+          final token =
+              _imageCancel.putIfAbsent(job.bookId, () => CancelToken());
+          try {
+            size += await _images?.downloadChapter(
+                  job.bookId,
+                  index,
+                  imageUrls,
+                  cancel: token,
+                ) ??
+                0;
+          } finally {
+            _imageCancel.remove(job.bookId);
+          }
+        }
+
         _daos.chapterCache.put(CachedChapter(
           bookUrl: book.bookUrl,
           index: index,
@@ -105,7 +151,7 @@ class CacheService {
           url: chapter.url,
           html: html,
           images: imageJson,
-          size: utf8.encode(html).length + utf8.encode(imageJson).length,
+          size: size,
           createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
         ));
         succeeded++;
@@ -182,6 +228,8 @@ class CacheService {
   /// 取消任务（幂等）：没有任务也返回成功。
   void cancel(int bookId) {
     _cancelled.add(bookId);
+    // 正在下的图片也要停：一章几十 MB 时不取消会继续跑完整章。
+    _imageCancel.remove(bookId)?.cancel();
     final job = _jobs[bookId];
     if (job != null && job.isRunning) {
       job.state = CacheState.canceled;
@@ -299,14 +347,17 @@ class CacheService {
     }
   }
 
-  /// 清空某本书全部缓存（含磁盘图片）并停掉任务。
+  /// 清空某本书全部缓存（含磁盘图片与本地漫画解压页）并停掉任务。
   void purgeBook(int bookId) {
     if (bookId <= 0) return;
     cancel(bookId);
     final book = _daos.book.getById(bookId);
     if (book != null) _daos.chapterCache.deleteByBook(book.bookUrl);
-    final root = Directory(p.join(_homeDir, 'cache', 'chapter', '$bookId'));
-    _removeDir(root);
+    _images?.removeBookDir(bookId);
+    _removeDir(Directory(p.join(_homeDir, 'cache', 'chapter', '$bookId')));
+    // 本地 zip/cbz 阅读时逐页解压到 cache/comic/<bookId>，这条路径没有
+    // 到期清理，之前所有清缓存入口都漏了它，看过一本本地漫画就永久残留。
+    _removeDir(Directory(p.join(_homeDir, 'cache', 'comic', '$bookId')));
   }
 
   /// 清空全部缓存与任务。
@@ -316,6 +367,7 @@ class CacheService {
     }
     _daos.chapterCache.clear();
     _removeDir(Directory(p.join(_homeDir, 'cache', 'chapter')));
+    _removeDir(Directory(p.join(_homeDir, 'cache', 'comic')));
   }
 
   Future<void> close() async {
@@ -323,8 +375,13 @@ class CacheService {
     for (final id in _jobs.keys.toList()) {
       cancel(id);
     }
+    for (final token in _imageCancel.values) {
+      token.cancel();
+    }
+    _imageCancel.clear();
     _jobs.clear();
     _cancelled.clear();
+    // 图片下载器归 ReaderModule 持有的共享实例管，这里不 close。
   }
 
   Book _requireBook(int bookId) {

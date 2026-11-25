@@ -17,7 +17,7 @@ void main() {
     });
 
     test('页面名与 UI 的三个页面一致', () {
-      expect(schema.pages, <String>['read', 'theme', 'general']);
+      expect(schema.pages, <String>['read', 'theme', 'general', 'search']);
       // UI 用 sectionsForPage 过滤，未知页面必须给空列表而不是抛异常。
       expect(schema.sectionsForPage('nope'), isEmpty);
     });
@@ -53,8 +53,8 @@ void main() {
   });
 
   group('结构完整性', () {
-    test('5 个分组按页面分布', () {
-      expect(schema.sections.length, 5);
+    test('6 个分组按页面分布', () {
+      expect(schema.sections.length, 6);
       expect(
         schema.sectionsForPage('read').map((section) => section.key),
         <String>['typography', 'paging'],
@@ -66,8 +66,8 @@ void main() {
       );
     });
 
-    test('共 14 个设置项，key 全局唯一', () {
-      expect(items.length, 14);
+    test('共 16 个设置项，key 全局唯一', () {
+      expect(items.length, 16);
       expect(items.map((item) => item.key).toSet().length, items.length);
       for (final item in items) {
         expect(schema.itemByKey(item.key), same(item));

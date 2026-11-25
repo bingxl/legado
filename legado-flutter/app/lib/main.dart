@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'core/bridge/legado_client.dart';
+import 'core/host/verification_host.dart';
+import 'core/router/navigator.dart';
 import 'core/router/routes.dart';
 import 'core/theme/app_theme.dart';
 import 'features/book/book_detail_page.dart';
@@ -15,6 +17,7 @@ import 'features/rss/rss_favorite_page.dart';
 import 'features/rss/rss_home_page.dart';
 import 'features/rss/rss_source_edit_page.dart';
 import 'features/search/search_page.dart';
+import 'features/shelf/shelf_manage_page.dart';
 import 'features/shelf/webdav_page.dart';
 import 'features/settings/reader_settings_page.dart';
 import 'features/settings/settings_page.dart';
@@ -35,6 +38,9 @@ Future<void> main() async {
   String? bootError;
   try {
     await LegadoClient.connect();
+    // 反爬人机验证要靠 App 的内置浏览器：注册一次，之后所有网络请求
+    // （书源 / RSS / 登录）撞上 Cloudflare 都会自动拉起验证页。
+    VerificationHost.install(appNavigatorKey);
     // 配置在启动时就拉一次：阅读器打开时要同步拿到字号/背景，
     // 等到点进阅读页再去请求，第一页必然先按默认值排版再跳一次，会闪。
     // 失败不影响启动——各页面用默认值，设置页自己会重试。
@@ -59,6 +65,7 @@ class LegadoApp extends StatelessWidget {
     RouteNames.explore,
     RouteNames.exploreDetail,
     RouteNames.search,
+    RouteNames.shelfManage,
     RouteNames.bookDetail,
     RouteNames.reader,
     RouteNames.sourceList,
@@ -85,6 +92,8 @@ class LegadoApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Legado',
+      // 内核回调开页面时没有 BuildContext，只能靠这个全局键。
+      navigatorKey: appNavigatorKey,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
@@ -104,6 +113,9 @@ class LegadoApp extends StatelessWidget {
           final map = args is Map ? args : const {};
           return SearchPage(initialSourceId: (map['sourceId'] as num?)?.toInt());
         },
+        RouteNames.shelfManage: (ctx) => ShelfManagePage.fromRouteArguments(
+          ModalRoute.of(ctx)?.settings.arguments,
+        ),
         RouteNames.bookDetail: (ctx) => BookDetailPage.fromRouteArguments(
           ModalRoute.of(ctx)?.settings.arguments,
         ),
@@ -150,6 +162,7 @@ class LegadoApp extends StatelessWidget {
             title: map['title'] as String?,
             content: map['content'] as String?,
             link: map['link'] as String?,
+            origin: map['origin'] as String?,
             favorite: map['favorite'] == true,
             sourceName: map['sourceName'] as String?,
           );

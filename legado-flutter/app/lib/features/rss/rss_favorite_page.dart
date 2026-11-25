@@ -64,6 +64,7 @@ class _RssFavoritePageState extends State<RssFavoritePage> {
           title: '${article['title'] ?? ''}',
           content: content,
           link: '${article['link'] ?? ''}',
+          origin: '${article['origin'] ?? ''}',
           favorite: article['favorite'] == true,
           pubDate: rssInt(article['pubDate']),
           sourceName: '${article['sourceName'] ?? ''}',

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/bridge/legado_client.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/book_cover.dart';
 import 'tools_api.dart';
 import 'tools_format.dart';
@@ -173,12 +174,7 @@ class _CachePageState extends State<CachePage> {
     return result == true;
   }
 
-  void _toast(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _toast(String message) => showAppToast(context, message, mounted: mounted);
 
   static String _bookName(Map<String, dynamic> book) {
     final name = toolsStr(book['name']).trim();
@@ -518,13 +514,8 @@ class _ChaptersSheetState extends State<_ChaptersSheet> {
     }
   }
 
-  void _toast(String message) {
-    if (!mounted) return;
-    // 面板是 modal，ScaffoldMessenger 会挂在页面根部，提示仍可见。
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  // 面板是 modal，ScaffoldMessenger 会挂在页面根部，提示仍可见。
+  void _toast(String message) => showAppToast(context, message, mounted: mounted);
 
   @override
   Widget build(BuildContext context) {

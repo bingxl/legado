@@ -5,9 +5,27 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/bridge/api.dart';
 import '../../core/bridge/legado_client.dart';
+import '../../core/image_url.dart';
+import '../../core/shelf_events.dart';
+import '../tools/tools_api.dart';
 import 'html_text.dart';
 import 'pagination.dart';
+import 'progress.dart';
 import 'reader_style.dart';
+
+/// core 的 `Reader.GetContent.imagePaths` 是「原始 URL → 磁盘绝对路径」。
+///
+/// UI 查找统一按归一化后的地址（补 `https:`、解 `&amp;`），这样正文 HTML
+/// 里的地址和书源返回的图片地址写法不同也能命中同一份缓存。
+Map<String, String> parseCachedImagePaths(Object? raw) {
+  final paths = <String, String>{};
+  if (raw is! Map) return paths;
+  raw.forEach((key, value) {
+    final normalized = normalizeImageUrl('$key') ?? '$key';
+    paths[normalized] = '$value';
+  });
+  return paths;
+}
 
 /// 阅读器数据/排版状态。
 ///
@@ -18,6 +36,7 @@ class ReaderController extends ChangeNotifier {
   ReaderController({
     required this.bookId,
     required this.initialChapter,
+    this.initialChapterPos = -1,
     required ReaderStyle style,
     this.initialBookName,
   }) : _style = style;
@@ -26,6 +45,12 @@ class ReaderController extends ChangeNotifier {
 
   /// 从书架进入时一般为 -1，表示「按 core 记录的进度续读」。
   final int initialChapter;
+
+  /// 章内位置：文字章是字符偏移，漫画章是第几张图。
+  ///
+  /// -1 表示「调用方没指定」。书签跳转必须传 —— 只传章节号会落到章首，
+  /// 书签等于失效（原版 `Bookmark.readChapter` 会把 `durChapterPos` 一起带过去）。
+  final int initialChapterPos;
 
   final String? initialBookName;
 
@@ -39,6 +64,9 @@ class ReaderController extends ChangeNotifier {
 
   int _chapterIndex = 0;
   int get chapterIndex => _chapterIndex;
+
+  /// 章节加载请求序号（见 [_openChapter]）：用来丢弃被后续切章取代的响应。
+  int _loadToken = 0;
 
   String _chapterTitle = '';
   String get chapterTitle => _chapterTitle;
@@ -64,9 +92,25 @@ class ReaderController extends ChangeNotifier {
   List<PageSlice> _pages = const [];
   int _pageIndex = 0;
 
-  /// 漫画章的图片地址。core 返回的已是绝对直链，UI 直接交给 `Image.network`；
-  /// 为空表示本章是文字章。
+  /// 漫画章当前看到第几张图。原版 `ReadManga.durChapterPos`，
+  /// 菜单进度条与落盘都按它算章内进度（而不是全书页数）。
+  int _imageIndex = 0;
+
+  /// 漫画章的图片地址。core 返回的已是绝对直链；为空表示本章是文字章。
   List<String> get images => _images;
+
+  /// 已落盘的图片：`归一化 URL → 绝对路径`（来自 `Reader.GetContent.imagePaths`）。
+  /// 换章时随正文一起替换，绝不跨章复用 —— 不同章的图片文件名按章号分。
+  Map<String, String> _imagePaths = const {};
+
+  /// 按图片地址查本地缓存；没有则返回 null，渲染层回落到网络。
+  String? imagePathOf(String url) =>
+      _imagePaths[normalizeImageUrl(url) ?? url];
+
+  /// 文字章正文里的插图地址（按正文出现顺序）。
+  /// 双击插图时用它作为全屏看图的图源列表。
+  List<String> get inlineImages =>
+      _imageUrls.values.toList(growable: false);
 
   /// 只有「整章只有图片、没有文字」才按漫画铺开。
   ///
@@ -105,6 +149,20 @@ class ReaderController extends ChangeNotifier {
   List<PageSlice> get pages => _pages;
   int get pageIndex => _pageIndex;
   int get pageCount => _pages.length;
+
+  /// 漫画章的图片数与当前图片索引（对齐原版 `durChapterPos` / `imageCount`）。
+  int get imageCount => _images.length;
+  int get imageIndex => _imageIndex;
+
+  /// 由漫画视图滚动时同步；只在真正换图时通知，避免每帧 rebuild 整页。
+  void noteImageIndex(int index) {
+    if (_images.isEmpty) return;
+    final clamped = index.clamp(0, _images.length - 1);
+    if (clamped == _imageIndex) return;
+    _imageIndex = clamped;
+    _scheduleSave();
+    notifyListeners();
+  }
 
   PageSlice? get currentPage {
     if (_pages.isEmpty) return null;
@@ -168,8 +226,11 @@ class ReaderController extends ChangeNotifier {
           ? initialChapter
           : (progress?['chapterIndex'] as num?)?.toInt() ?? 0;
       target = target.clamp(0, _chapters.length - 1);
-      // 指定章节进入时不沿用旧章节的字符偏移，否则会跳到同章后半段。
-      final offset = initialChapter >= 0
+      // 偏移优先级：显式章内位置 > 显式章节（从章首）> core 记录的进度。
+      // 指定章节但不指定位置时不能沿用旧偏移，否则会跳到同章后半段。
+      final offset = initialChapterPos >= 0
+          ? initialChapterPos
+          : initialChapter >= 0
           ? 0
           : (progress?['chapterPos'] as num?)?.toInt() ?? 0;
 
@@ -245,11 +306,13 @@ class ReaderController extends ChangeNotifier {
     final images = rawImages is List
         ? rawImages.map((e) => '$e').toList(growable: false)
         : const <String>[];
+    final paths = parseCachedImagePaths(map['imagePaths']);
     final result = _ChapterData(
       title: '${map['title'] ?? ''}',
       paragraphs: content.paragraphs,
       imageUrls: content.imageUrls,
       images: images,
+      imagePaths: paths,
     );
     _cache[index] = result;
     if (_cache.length > _maxCachedChapters) {
@@ -346,8 +409,13 @@ class ReaderController extends ChangeNotifier {
     if (_chapters.isEmpty) return;
     final target = _readableIndex(index.clamp(0, _chapters.length - 1));
 
+    // 请求令牌：连续点「下一章」时会有多个请求在飞，慢的那个后返回。
+    // 没有令牌就会把旧章的正文/图片写进当前章（表现为「翻了两章却停在上一章」）。
+    final token = ++_loadToken;
+
     // 切章前先把上一章的位置落盘，避免「退出后回到更早的位置」。
     if (_pages.isNotEmpty) await saveProgress(force: true);
+    if (token != _loadToken) return;
 
     final chapter = _chapters[target];
     final fallbackTitle = '${chapter['title'] ?? ''}';
@@ -361,13 +429,21 @@ class ReaderController extends ChangeNotifier {
     var loaded = false;
     try {
       final data = await _chapterData(target, refresh: refresh);
+      // 已经被更新的切章请求取代：丢掉这次结果，连错误态也不写。
+      if (token != _loadToken) return;
       _paragraphs = data.paragraphs;
       _imageUrls = data.imageUrls;
       _images = data.images;
+      _imagePaths = data.imagePaths;
       _hasContent =
           _paragraphs.any((p) => p.trim().isNotEmpty) ||
           _imageUrls.isNotEmpty ||
           _images.isNotEmpty;
+      // 漫画章把 core 的 chapterPos 当图片索引恢复；文字章归零。
+      // 原版 ReadManga 也是用 durChapterPos 记章内第几张图。
+      _imageIndex = isManga
+          ? offset.clamp(0, _images.isEmpty ? 0 : _images.length - 1)
+          : 0;
       _chapterTitle = data.title.isNotEmpty ? data.title : fallbackTitle;
       // keepPosition：刷新当前章时停在原来那句话附近。
       // 传 null 让 _repaginate 回落到 currentPage.startOffset（此时还是旧分页）。
@@ -377,24 +453,32 @@ class ReaderController extends ChangeNotifier {
       );
       loaded = true;
     } on LegadoError catch (e) {
+      if (token != _loadToken) return;
       _paragraphs = const [];
       _imageUrls = const {};
       _images = const [];
+      _imagePaths = const {};
       _pages = const [];
       _hasContent = false;
       _error = '${e.code}: ${e.message}';
     } catch (e) {
+      if (token != _loadToken) return;
       // 传输层异常（core 掉线、JSON 解析失败等）也要落到错误态，
       // 否则会停在「上一章内容 + 进度条" 的半截状态。
       _paragraphs = const [];
       _imageUrls = const {};
       _images = const [];
+      _imagePaths = const {};
       _pages = const [];
       _hasContent = false;
       _error = '$e';
     } finally {
-      _chapterLoading = false;
-      notifyListeners();
+      // 只有最新的请求有权清掉 loading：过期的请求把 loading 归零会让 UI
+      // 以为当前章已经加载完，显示空白页。
+      if (token == _loadToken) {
+        _chapterLoading = false;
+        notifyListeners();
+      }
     }
 
     // 加载失败时不能保存：此时页码是 0、标题还是上一章的，写进去会污染进度。
@@ -402,6 +486,23 @@ class ReaderController extends ChangeNotifier {
       _prefetch(target + 1);
       _prefetch(target - 1);
       _scheduleSave();
+      // 阅读记录：每次成功打开一章记一条，core 按「同书同日同章」去重并
+      // 刷新时间。之前 core 的 Record.Append 已实现却全仓零调用，阅读记录
+      // 页因此永远是空的。fire-and-forget，失败不影响阅读。
+      unawaited(_recordRead(target));
+    }
+  }
+
+  Future<void> _recordRead(int index) async {
+    try {
+      await ToolsApi.recordAppend(
+        bookId: bookId,
+        bookName: bookTitle,
+        chapterIndex: index,
+        chapterTitle: _chapterTitle,
+      );
+    } catch (_) {
+      // 统计失败不影响阅读。
     }
   }
 
@@ -520,10 +621,18 @@ class ReaderController extends ChangeNotifier {
 
     _saveTimer?.cancel();
     final chapterIndex = _chapterIndex;
-    final page = _pageIndex;
-    final position = currentPage?.startOffset ?? 0;
+    final manga = isManga;
+    // 漫画章记「第几张图」（原版 durChapterPos），文字章记「第几页」。
+    // 两者都落在 core 的 chapterPos 字段里，按章类型解释。
+    final page = manga ? _imageIndex : _pageIndex;
+    final position = manga
+        ? _imageIndex
+        : currentPage?.startOffset ?? 0;
     // core 的 scrollPercent 口径是 0~100（见 domain/book.go），内部计算保持 0~1。
-    final scrollPercent = chapterPercent * 100;
+    final scrollPercent = (manga
+            ? readPercentForIndex(_imageIndex, _images.length)
+            : chapterPercent) *
+        100;
     try {
       await LegadoClient.instance.call(Api.readerSaveProgress, [
         bookId,
@@ -556,9 +665,22 @@ class ReaderController extends ChangeNotifier {
     _saveTimer?.cancel();
     // 退出阅读器时兜底保存一次。saveProgress 会在首个 await 前读完当前状态，
     // 所以这里先把请求发出去，再把 _closed 置位（否则会被自身的守卫拦掉）。
-    unawaited(saveProgress(force: true));
+    unawaited(_saveBeforeExit());
     _closed = true;
     super.dispose();
+  }
+
+  /// 退出前落盘，落完再广播一次书架变更。
+  ///
+  /// 书架页常驻在 IndexedStack 里、只在 initState 拉一次数据，不通知的话
+  /// 读完一本书回到书架，进度还停在打开前的样子（原版靠 Room Flow 自动刷新）。
+  /// 广播必须等 RPC 返回，否则书架重拉时读到的还是旧进度。
+  Future<void> _saveBeforeExit() async {
+    try {
+      await saveProgress(force: true);
+    } finally {
+      ShelfEvents.changed();
+    }
   }
 }
 
@@ -568,10 +690,12 @@ class _ChapterData {
     required this.paragraphs,
     required this.imageUrls,
     required this.images,
+    this.imagePaths = const {},
   });
 
   final String title;
   final List<String> paragraphs;
   final Map<int, String> imageUrls;
   final List<String> images;
+  final Map<String, String> imagePaths;
 }

@@ -1,10 +1,19 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
 import '../../core/bridge/api.dart';
 import '../../core/bridge/legado_client.dart';
+import '../../core/router/book_detail_route.dart';
 import '../../core/router/routes.dart';
+import '../../core/shelf_events.dart';
 import '../../core/widgets/book_cover.dart';
+import 'book_group_dialogs.dart';
 import 'shelf_api.dart';
 
 /// 书架页（对应原版 `ui/main/bookshelf/BookShelfFragment`）。
@@ -25,34 +34,90 @@ class _ShelfPageState extends State<ShelfPage> {
   bool _loading = true;
   String? _error;
   bool _grid = true;
+  bool _refreshingToc = false;
+  bool _reloading = false;
+  bool _reloadPending = false;
 
   @override
   void initState() {
     super.initState();
+    // 原版书架靠 Room Flow 自动刷新；这里只能靠广播。详情页加入/移出书架、
+    // 阅读器退出落进度都会 notify，本页收到后静默重载（不闪 loading）。
+    ShelfEvents.revision.addListener(_onShelfChanged);
     _reload();
   }
 
-  Future<void> _reload() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  @override
+  void dispose() {
+    ShelfEvents.revision.removeListener(_onShelfChanged);
+    super.dispose();
+  }
+
+  void _onShelfChanged() {
+    if (mounted) unawaited(_reload(silent: true));
+  }
+
+  /// [silent] 为 true 时保留当前内容、不显示 loading，也不把失败画成错误页
+  /// —— 后台静默刷新失败不该把已经看得见的书架擦掉。
+  Future<void> _reload({bool silent = false}) async {
+    // 连续通知（批量删除/分组移动）压成一次：跑完再补跑一轮。
+    if (_reloading) {
+      _reloadPending = true;
+      return;
+    }
+    _reloading = true;
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final client = LegadoClient.instance;
       final groups = await client.callList(Api.shelfListGroups);
-      final books = await client.callList(Api.shelfListBooks, [_groupId]);
+      // 分组自己的排序方式（原版 BookGroup.bookSort）在这里生效；
+      // 「全部」没有分组配置，沿用内核默认顺序。
+      final current = groups.where(
+        (g) => (g['id'] as num?)?.toInt() == _groupId,
+      );
+      final sort = current.isEmpty
+          ? -1
+          : (current.first['bookSort'] as num?)?.toInt() ?? -1;
+      final books = await client.callList(Api.shelfListBooks, [_groupId, sort]);
       if (!mounted) return;
+      // 分组可能在管理弹窗里被删掉；当前选中项失效时回落到「全部」。
+      final groupId = _groupId;
+      if (groupId != 0 && !groups.any((g) => g['id'] == groupId)) {
+        final fallback = await client.callList(Api.shelfListBooks, [0]);
+        if (!mounted) return;
+        setState(() {
+          _groupId = 0;
+          _groups = groups;
+          _books = fallback;
+          _loading = false;
+          _error = null;
+        });
+        return;
+      }
       setState(() {
         _groups = groups;
         _books = books;
         _loading = false;
+        _error = null;
       });
     } on LegadoError catch (e) {
       if (!mounted) return;
+      if (silent) return;
       setState(() {
         _error = '${e.code}: ${e.message}';
         _loading = false;
       });
+    } finally {
+      _reloading = false;
+      if (_reloadPending) {
+        _reloadPending = false;
+        unawaited(_reload(silent: true));
+      }
     }
   }
 
@@ -86,9 +151,31 @@ class _ShelfPageState extends State<ShelfPage> {
             onPressed: _exportGroup,
           ),
           IconButton(
-            tooltip: '刷新',
+            tooltip: '刷新列表',
             icon: const Icon(Icons.refresh),
             onPressed: _reload,
+          ),
+          PopupMenuButton<int>(
+            tooltip: '更多',
+            onSelected: (value) => switch (value) {
+              0 => _manageGroups(),
+              1 => Navigator.pushNamed(
+                  context,
+                  RouteNames.shelfManage,
+                  arguments: {'groupId': _groupId},
+                ),
+              2 => _refreshToc(),
+              3 => _importBookshelf(),
+              4 => _exportBookshelfJson(),
+              _ => null,
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 0, child: Text('分组管理')),
+              PopupMenuItem(value: 1, child: Text('书架管理')),
+              PopupMenuItem(value: 2, child: Text('更新目录')),
+              PopupMenuItem(value: 3, child: Text('导入书架 JSON')),
+              PopupMenuItem(value: 4, child: Text('导出书架 JSON')),
+            ],
           ),
         ],
       ),
@@ -152,7 +239,171 @@ class _ShelfPageState extends State<ShelfPage> {
 
   void _snack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _manageGroups() async {
+    await showBookGroupManageDialog(context);
+    if (mounted) await _reload();
+  }
+
+  /// 导入书架：原版支持「url / json 文本 / 选文件」三种入口，这里都保留。
+  /// 真正的搜索与入库在 core 的 `Source.ImportBookshelf`。
+  Future<void> _importBookshelf() async {
+    final controller = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('导入书架'),
+        content: SizedBox(
+          width: 420,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: controller,
+                maxLines: 6,
+                decoration: InputDecoration(
+                  hintText: '粘贴 books.json 内容，或输入返回它的网址',
+                  border: const OutlineInputBorder(),
+                  isDense: true,
+                  suffixIcon: IconButton(
+                    tooltip: '选择 json / txt 文件',
+                    icon: const Icon(Icons.attach_file),
+                    onPressed: () async {
+                      final result = await FilePicker.pickFiles(
+                        type: FileType.custom,
+                        allowedExtensions: const ['json', 'txt'],
+                      );
+                      final file = result.singleOrNull;
+                      if (file == null) return;
+                      final bytes = await file.readAsBytes();
+                      controller.text = utf8.decode(bytes, allowMalformed: true);
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '按书名和作者从已启用书源中搜索，同名同作者的书会跳过。',
+                style: TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('导入'),
+          ),
+        ],
+      ),
+    );
+    final input = controller.text.trim();
+    controller.dispose();
+    if (confirmed != true || !mounted) return;
+    if (input.isEmpty) return;
+    try {
+      final result = await ShelfApi.importBookshelf(input, _groupId);
+      await _reload();
+      if (!mounted) return;
+      final failed = (result['failed'] as num?)?.toInt() ?? 0;
+      _snack(
+        '导入完成：新增 ${result['added'] ?? 0} 本，跳过 ${result['skipped'] ?? 0} 本'
+        '${failed > 0 ? '，失败 $failed 本' : ''}',
+      );
+    } on LegadoError catch (e) {
+      _snack('导入失败: ${e.message}');
+    } on Object catch (e) {
+      // 桥接层/序列化等意外异常也要有反馈，否则表现为「点了没反应」。
+      _snack('导入失败: $e');
+    }
+  }
+
+  /// 导出书架 JSON：与原版 `books.json` 同格式，给换设备后重新搜书用。
+  /// 系统文件保存对话框不可用时回落到应用私有 exports 目录。
+  Future<void> _exportBookshelfJson() async {
+    try {
+      final json = await ShelfApi.exportBookshelf(_groupId);
+      final bytes = utf8.encode(json);
+      try {
+        final uri = await FilePicker.saveFile(
+          dialogTitle: '导出书架 JSON',
+          fileName: 'books.json',
+          mimeType: 'application/json',
+          bytes: Uint8List.fromList(bytes),
+        );
+        if (uri == null) return;
+        _snack('已导出到 $uri');
+      } on Object {
+        final dir = Directory(p.join(LegadoClient.instance.homeDir, 'exports'));
+        if (!dir.existsSync()) dir.createSync(recursive: true);
+        final file = File(p.join(dir.path, 'books.json'));
+        await file.writeAsBytes(bytes, flush: true);
+        _snack('已保存到 ${file.path}');
+      }
+    } on LegadoError catch (e) {
+      _snack('导出失败: ${e.message}');
+    }
+  }
+
+  /// 更新目录：对齐原版书架菜单 `R.id.menu_update_toc -> upToc(books)`。
+  ///
+  /// 只处理 `canUpdate != false` 的书（core 也会拦本地书），逐本串行 ——
+  /// 站点通常限并发，原版用线程池但这里先保证不把源打爆。单本失败不影响其余，
+  /// 最后统一汇总成功数、新增章数与第一条错误。
+  Future<void> _refreshToc() async {
+    if (_refreshingToc) return;
+    // 分组的「参与目录更新」开关（原版 BookGroup.enableRefresh）优先级最高。
+    final current = _groups.where(
+      (g) => (g['id'] as num?)?.toInt() == _groupId,
+    );
+    if (current.isNotEmpty && current.first['enableRefresh'] == false) {
+      _snack('本分组已关闭目录更新，请先在分组管理里打开');
+      return;
+    }
+    final targets =
+        _books.where((b) => b['canUpdate'] != false).toList(growable: false);
+    if (targets.isEmpty) {
+      _snack('当前分组没有需要更新目录的书籍');
+      return;
+    }
+    setState(() => _refreshingToc = true);
+    var ok = 0;
+    var failed = 0;
+    var added = 0;
+    String? lastError;
+    for (var i = 0; i < targets.length; i++) {
+      final book = targets[i];
+      _snack('更新目录 ${i + 1}/${targets.length}：${book['name'] ?? ''}');
+      try {
+        final result = await ShelfApi.refreshToc(
+          (book['id'] as num?)?.toInt() ?? 0,
+        );
+        ok++;
+        added += (result['added'] as num?)?.toInt() ?? 0;
+      } on LegadoError catch (e) {
+        failed++;
+        lastError = e.message;
+      } on Object catch (e) {
+        failed++;
+        lastError = '$e';
+      }
+    }
+    if (!mounted) return;
+    setState(() => _refreshingToc = false);
+    _snack(
+      '目录更新完成：成功 $ok 本，新增 $added 章'
+      '${failed > 0 ? '，失败 $failed 本（$lastError）' : ''}',
+    );
+    await _reload();
   }
 
   /// 添加本地书籍：选文件 → 读字节（兼容 Android content://）→ 写私有目录 → 导入。
@@ -441,7 +692,9 @@ class _ShelfPageState extends State<ShelfPage> {
   Widget _groupBar() {
     final items = <Map<String, dynamic>>[
       {'id': 0, 'name': '全部'},
-      ..._groups,
+      // 隐藏分组仍要在「分组管理」里可编辑，但不能出现在书架顶部的 chip 里。
+      // 原版 BookshelfFragment 用的 bookGroupDao.show 就是这个口径。
+      ..._groups.where((g) => g['show'] != false),
     ];
     return SizedBox(
       height: 44,
@@ -454,7 +707,28 @@ class _ShelfPageState extends State<ShelfPage> {
           final g = items[i];
           final id = (g['id'] as num?)?.toInt() ?? 0;
           final selected = id == _groupId;
+          final cover = '${g['cover'] ?? ''}';
           return ChoiceChip(
+            avatar: cover.isEmpty
+                ? null
+                : ClipRRect(
+                    borderRadius: BorderRadius.circular(9),
+                    child: cover.startsWith('http')
+                        ? Image.network(
+                            cover,
+                            width: 18,
+                            height: 18,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => const Icon(Icons.image_outlined, size: 18),
+                          )
+                        : Image.file(
+                            File(cover),
+                            width: 18,
+                            height: 18,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => const Icon(Icons.image_outlined, size: 18),
+                          ),
+                  ),
             label: Text('${g['name'] ?? ''}'),
             selected: selected,
             onSelected: (_) => _selectGroup(id),
@@ -486,8 +760,10 @@ class _ShelfPageState extends State<ShelfPage> {
     if (_books.isEmpty) {
       return const Center(child: Text('书架还是空的，去「发现」找一本吧'));
     }
+    // 对齐原版 BookshelfFragment2/BooksFragment：下拉刷新 = upToc(books)，
+    // 与右上角「刷新目录」同一件事（早期只接了 _reload，只读本地库不会抓新章）。
     return RefreshIndicator(
-      onRefresh: _reload,
+      onRefresh: _refreshToc,
       child: _grid ? _gridView() : _listView(),
     );
   }
@@ -505,6 +781,7 @@ class _ShelfPageState extends State<ShelfPage> {
       itemBuilder: (_, i) => _BookTile(
         book: _books[i],
         onExport: () => _exportOne(_books[i]),
+        onLongPress: () => _openDetail(_books[i]),
       ),
     );
   }
@@ -539,8 +816,19 @@ class _ShelfPageState extends State<ShelfPage> {
             ],
           ),
           onTap: () => _open(b),
+          onLongPress: () => _openDetail(b),
         );
       },
+    );
+  }
+
+  /// 对齐原版 `ShelfFragment2.onItemLongClick`：单击进阅读器，长按进详情页。
+  /// 统一走 [openBookDetail]，返回时不会因焦点恢复弹出输入法。
+  void _openDetail(Map<String, dynamic> book) {
+    openBookDetail(
+      context,
+      bookId: (book['id'] as num?)?.toInt() ?? 0,
+      bookName: '${book['name'] ?? ''}',
     );
   }
 
@@ -570,10 +858,11 @@ class _ShelfPageState extends State<ShelfPage> {
 }
 
 class _BookTile extends StatelessWidget {
-  const _BookTile({required this.book, this.onExport});
+  const _BookTile({required this.book, this.onExport, this.onLongPress});
 
   final Map<String, dynamic> book;
   final VoidCallback? onExport;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -589,6 +878,7 @@ class _BookTile extends StatelessWidget {
           'kind': book['kind'],
         },
       ),
+      onLongPress: onLongPress,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import android.webkit.CookieManager
+import android.webkit.WebSettings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -18,6 +20,7 @@ import java.util.concurrent.Executors
 class MainActivity : FlutterActivity() {
   companion object {
     private const val CHANNEL = "flutter.legado/pdf"
+    private const val WEBVIEW_CHANNEL = "flutter.legado/webview"
   }
 
   /// 渲染在单线程上串行：PdfRenderer 不是线程安全的，
@@ -37,6 +40,7 @@ class MainActivity : FlutterActivity() {
 
   override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
     super.configureFlutterEngine(flutterEngine)
+    configureWebViewChannel(flutterEngine)
     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
       .setMethodCallHandler { call, result ->
         when (call.method) {
@@ -90,6 +94,34 @@ class MainActivity : FlutterActivity() {
   private fun MethodCall.path(): String =
     argument<String>("path")?.takeIf { it.isNotEmpty() }
       ?: throw IllegalArgumentException("缺少 PDF 文件路径")
+
+  /// 反爬人机验证（Cloudflare 五秒盾 / 图片验证码）用的平台能力。
+  ///
+  /// `webview_flutter` 只提供「写 cookie」，而 `cf_clearance` 是 HttpOnly ——
+  /// 页面 JS 的 `document.cookie` 读不到它，只能由原生侧从浏览器 cookie jar 里取。
+  /// 这里用的就是原版 `WebViewActivity.onPageFinished` 里那套
+  /// `CookieManager.getInstance().getCookie(url)`。
+  private fun configureWebViewChannel(flutterEngine: FlutterEngine) {
+    MethodChannel(flutterEngine.dartExecutor.binaryMessenger, WEBVIEW_CHANNEL)
+      .setMethodCallHandler { call, result ->
+        when (call.method) {
+          // 必须留在主线程：CookieManager 内部要求在同一线程访问。
+          "cookies" -> {
+            val url = call.argument<String>("url")
+            if (url.isNullOrEmpty()) {
+              result.error("INVALID_ARGUMENT", "缺少 url", null)
+            } else {
+              result.success(CookieManager.getInstance().getCookie(url))
+            }
+          }
+
+          // 验证时用的 UA 与它绑定：cf_clearance 换了 UA 就失效。
+          "userAgent" -> result.success(WebSettings.getDefaultUserAgent(this))
+
+          else -> result.notImplemented()
+        }
+      }
+  }
 
   @Synchronized
   private fun open(path: String): RendererHolder {

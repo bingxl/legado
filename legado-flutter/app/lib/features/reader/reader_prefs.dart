@@ -1,5 +1,6 @@
 import '../../core/bridge/api.dart';
 import '../../core/bridge/legado_client.dart';
+import '../../core/shelf_events.dart';
 import '../settings/settings_store.dart';
 import 'reader_style.dart';
 
@@ -79,6 +80,7 @@ class ReaderPrefs {
     if (bookId <= 0) return false;
     try {
       await LegadoClient.instance.call(Api.shelfPutOnShelf, [bookId]);
+      ShelfEvents.changed();
       return true;
     } catch (_) {
       return false;

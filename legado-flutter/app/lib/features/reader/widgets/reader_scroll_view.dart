@@ -2,9 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/widgets/cached_reader_image.dart';
 import '../reader_controller.dart';
 import '../reader_style.dart';
 import '../tap_zone.dart';
+import 'overscroll_accumulator.dart';
 import 'reader_page_content.dart';
 
 /// 滚动模式：整章按页纵向排列，滚动位置换算成页码。
@@ -20,6 +22,8 @@ class ReaderScrollView extends StatefulWidget {
     required this.menuVisible,
     required this.onTapCenter,
     this.onBoundary,
+    this.onImageDoubleTap,
+    this.localImagePath,
   });
 
   final ReaderController controller;
@@ -29,6 +33,12 @@ class ReaderScrollView extends StatefulWidget {
 
   /// 到第一章开头 / 最后一章末尾还继续拖时回调（1=向后，-1=向前）。
   final ValueChanged<int>? onBoundary;
+
+  /// 双击正文插图：打开全屏看图。
+  final ValueChanged<String>? onImageDoubleTap;
+
+  /// 插图本地缓存路径查询（ReaderController.imagePathOf）。
+  final LocalImagePathResolver? localImagePath;
 
   @override
   State<ReaderScrollView> createState() => ReaderScrollViewState();
@@ -42,10 +52,24 @@ class ReaderScrollViewState extends State<ReaderScrollView> {
   bool _jumping = false;
   bool _boundaryLock = false;
 
+  /// 点击判定（见 [ReaderTapTracker]）：移动超容差、或按下时还在滚动都不算点击。
+  final ReaderTapTracker _tap = ReaderTapTracker();
+
+  /// 正文刚刚还在滚动（拖动 / 惯性 / 点击翻页的动画）。
+  ///
+  /// 为什么不能只看 `isScrollingNotifier`：手指一按下，Scrollable 就把弹道滚动
+  /// 换成 hold，`isScrollingNotifier` 立刻变 false——等到判定时已经看不出来了。
+  /// 所以反过来记「最近有没有滚动过」，150ms 内都算「还在滚」。
+  bool _gliding = false;
+  Timer? _glideTimer;
+
+  /// 原版 `ReadView.abortAnim()` 的等价物：这一下按下中止了滚动，
+  /// 只是「按住让它停下」，绝不能当成点击（否则中间格直接弹菜单）。
+  bool get _busyAtDown => _gliding;
+
   /// 到底/到顶后继续拖拽的累计距离。超过阈值才换章：
   /// 轻微回弹、橡皮筋抖动不应该直接翻到下一章。
-  double _overscroll = 0;
-  static const double _overscrollThreshold = 56;
+  final OverscrollAccumulator _overscroll = OverscrollAccumulator();
 
   /// 每页的实际高度。以 LayoutBuilder 给的为准，和 ListView 的 itemExtent 保持一致，
   /// 否则滚动偏移换算出的页码会错位（比如外层 inset 变化时）。
@@ -65,6 +89,7 @@ class ReaderScrollViewState extends State<ReaderScrollView> {
   @override
   void dispose() {
     widget.controller.removeListener(_syncFromController);
+    _glideTimer?.cancel();
     _scroll.dispose();
     super.dispose();
   }
@@ -141,7 +166,7 @@ class ReaderScrollViewState extends State<ReaderScrollView> {
   void _swapChapter(Future<void> Function() action) {
     if (_boundaryLock) return;
     _boundaryLock = true;
-    _overscroll = 0;
+    _overscroll.reset();
     unawaited(action());
     Timer(const Duration(milliseconds: 350), () => _boundaryLock = false);
   }
@@ -152,21 +177,20 @@ class ReaderScrollViewState extends State<ReaderScrollView> {
   /// 只能靠 `OverscrollNotification` 判断「用户还在往同一方向拖」。
   /// 用 ClampingScrollPhysics，到边界后继续拖会稳定地产生这个通知。
   bool _onScrollNotification(ScrollNotification notification) {
-    if (notification.depth != 0) return false;
-    if (notification is OverscrollNotification) {
-      final delta = notification.overscroll;
-      // 换方向就重新累计，避免来回蹭两下凑够阈值。
-      if (_overscroll != 0 && delta.sign != _overscroll.sign) _overscroll = 0;
-      _overscroll += delta;
-      if (_overscroll >= _overscrollThreshold) {
-        _crossBoundary(1);
-      } else if (_overscroll <= -_overscrollThreshold) {
-        _crossBoundary(-1);
-      }
-    } else if (notification is ScrollEndNotification) {
-      _overscroll = 0;
-    }
+    if (notification.depth == 0) _markGliding();
+    final dir = _overscroll.accept(notification);
+    if (dir != 0) _crossBoundary(dir);
     return false;
+  }
+
+  /// 记一次「刚滚动过」。滚动通知在拖动/惯性/动画期间是每帧一条，
+  /// 所以持续滚动时这个标记会一直续期，停下 150ms 后才失效。
+  void _markGliding() {
+    _gliding = true;
+    _glideTimer?.cancel();
+    _glideTimer = Timer(const Duration(milliseconds: 150), () {
+      if (mounted) _gliding = false;
+    });
   }
 
   void _crossBoundary(int dir) {
@@ -177,7 +201,7 @@ class ReaderScrollViewState extends State<ReaderScrollView> {
         ? controller.hasNextChapter
         : controller.hasPrevChapter;
     if (!hasChapter) {
-      _overscroll = 0;
+      _overscroll.reset();
       // 边界提示也要节流：一次长拖会连发几十个 overscroll 通知。
       _boundaryLock = true;
       Timer(const Duration(milliseconds: 800), () => _boundaryLock = false);
@@ -203,39 +227,70 @@ class ReaderScrollViewState extends State<ReaderScrollView> {
             if (mounted) _jumpTo(controller.pageIndex);
           });
         }
+        void handleTap(Offset local) {
+          if (widget.menuVisible) {
+            widget.onTapCenter();
+            return;
+          }
+          // 与分页模式同一套 3×3 分区，滚动模式也不该「点中下部弹菜单」。
+          final zone = readerTapZoneAt(
+            local,
+            Size(constraints.maxWidth, constraints.maxHeight),
+          );
+          switch (zone) {
+            case ReaderTapZone.prev:
+              scrollByPage(-1);
+            case ReaderTapZone.next:
+              scrollByPage(1);
+            case ReaderTapZone.menu:
+              widget.onTapCenter();
+          }
+        }
+
+        /// 一次点击的入口：先过 [ReaderTapTracker]，再区分「只是按停滚动」。
+        ///
+        /// 原版 `ScrollPageDelegate` 里，点击翻页和中间格弹菜单都以
+        /// `isAbortAnim` 为前提：手指按下时正文还在惯性滚动，这一下只负责
+        /// 让滚动停下，什么也不做。少了这道判断，上滑后想把内容按住，
+        /// 手指一碰屏幕就弹菜单。
+        void maybeTap(Offset local) {
+          final abortedGlide = _tap.busyDown;
+          if (!_tap.confirm()) return;
+          if (abortedGlide) return;
+          handleTap(local);
+        }
+
         return NotificationListener<ScrollNotification>(
           onNotification: _onScrollNotification,
-          child: GestureDetector(
+          child: Listener(
+            // Listener 不进手势竞技场，只旁观：正文插图自己的 detector
+            // 抢走 tap 时也能拿到同一份按下/移动数据。
             behavior: HitTestBehavior.translucent,
-            onTapUp: (details) {
-              if (widget.menuVisible) {
-                widget.onTapCenter();
-                return;
-              }
-              // 与分页模式同一套 3×3 分区，滚动模式也不该「点中下部弹菜单」。
-              final zone = readerTapZoneAt(
-                details.localPosition,
-                Size(constraints.maxWidth, constraints.maxHeight),
-              );
-              switch (zone) {
-                case ReaderTapZone.prev:
-                  scrollByPage(-1);
-                case ReaderTapZone.next:
-                  scrollByPage(1);
-                case ReaderTapZone.menu:
-                  widget.onTapCenter();
-              }
-            },
-            child: ListView.builder(
-              controller: _scroll,
-              itemExtent: extent,
-              physics: const ClampingScrollPhysics(),
-              itemCount: controller.pageCount,
-              itemBuilder: (context, index) => ReaderPageContent(
-                page: controller.pages[index],
-                style: widget.style,
-                pageCount: controller.pageCount,
-                chapterTitle: controller.chapterTitle,
+            onPointerDown: (event) => _tap.down(event, busy: _busyAtDown),
+            onPointerMove: _tap.move,
+            onPointerCancel: _tap.cancel,
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTapUp: (details) => maybeTap(details.localPosition),
+              child: ListView.builder(
+                controller: _scroll,
+                itemExtent: extent,
+                physics: const ClampingScrollPhysics(),
+                itemCount: controller.pageCount,
+                itemBuilder: (context, index) => ReaderPageContent(
+                  page: controller.pages[index],
+                  style: widget.style,
+                  pageCount: controller.pageCount,
+                  chapterTitle: controller.chapterTitle,
+                  // 插图单击：透传全局坐标，换算后复用同一套分区翻页。
+                  onImageTapUp: (global) {
+                    final box = context.findRenderObject() as RenderBox?;
+                    if (box == null || !box.hasSize) return;
+                    maybeTap(box.globalToLocal(global));
+                  },
+                  onImageDoubleTap: widget.onImageDoubleTap,
+                  localImagePath: widget.localImagePath,
+                ),
               ),
             ),
           ),

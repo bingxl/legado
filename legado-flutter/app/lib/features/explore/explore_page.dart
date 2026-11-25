@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/bridge/legado_client.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../core/router/routes.dart';
 import 'explore_api.dart';
 
@@ -95,21 +96,30 @@ class _ExplorePageState extends State<ExplorePage> {
 
   /// 当前生效的过滤结果。
   ///
-  /// `group:xxx` 走分组过滤（与原版 `flowGroupExplore` 同义），
-  /// 其余按书源名包含匹配（原版 `flowExplore(key)`）。
+  /// `group:xxx` 对齐原版 `flowGroupExplore(key)`：书源分组是逗号分隔的多值，
+  /// 要求**某个分组名整体等于 xxx**（`group = k` / `k,...` / `...,k` / `...,k,...`），
+  /// 不是整串相等，也不是子串匹配。
+  /// 普通关键词对齐 `flowExplore(key)`：分组或书源名**包含**关键词都算命中。
   List<Map<String, dynamic>> _visibleSources() {
     final query = _query;
     if (query.isEmpty) return _sources;
     if (query.startsWith('group:')) {
       final group = query.substring('group:'.length).trim();
-      return _sources
-          .where((s) => '${s['group'] ?? ''}'.trim() == group)
-          .toList();
+      if (group.isEmpty) return _sources;
+      return _sources.where((s) {
+        final tokens = '${s['group'] ?? ''}'
+            .split(',')
+            .map((t) => t.trim())
+            .where((t) => t.isNotEmpty);
+        return tokens.any((t) => t == group);
+      }).toList();
     }
     final lower = query.toLowerCase();
-    return _sources
-        .where((s) => '${s['name'] ?? ''}'.toLowerCase().contains(lower))
-        .toList();
+    return _sources.where((s) {
+      final name = '${s['name'] ?? ''}'.toLowerCase();
+      final group = '${s['group'] ?? ''}'.toLowerCase();
+      return name.contains(lower) || group.contains(lower);
+    }).toList();
   }
 
   /// 书源所属的全部分组（原版菜单里列的就是这些）。
@@ -329,12 +339,7 @@ class _ExplorePageState extends State<ExplorePage> {
     }
   }
 
-  void _toast(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _toast(String message) => showAppToast(context, message, mounted: mounted);
 
   static int _idOf(Map<String, dynamic> source) =>
       (source['id'] as num?)?.toInt() ?? 0;

@@ -1,3 +1,4 @@
+import '../../core/bridge/dto.dart';
 import '../../core/bridge/legado_client.dart';
 
 /// 「我的」tab 与其下三个工具页（缓存 / 书签 / 阅读记录）的控制面封装。
@@ -20,13 +21,13 @@ class ToolsApi {
 
   /// {arch, go, platform, version}
   static Future<Map<String, dynamic>> systemInfo() async =>
-      _map(await _c.call('System.Info'));
+      asStringMap(await _c.call('System.Info'));
 
   // ── 缓存 ────────────────────────────────────────────────
 
   /// {books, chapters, size, running}
   static Future<Map<String, dynamic>> cacheStats() async =>
-      _map(await _c.call('Cache.Stats'));
+      asStringMap(await _c.call('Cache.Stats'));
 
   /// 每本书带 totalChapters / cachedChapters / size / job（可为 null）。
   static Future<List<Map<String, dynamic>>> cacheBooks() =>
@@ -72,11 +73,41 @@ class ToolsApi {
   static Future<void> bookmarkUpdateNote(int id, String note) =>
       _c.call('Bookmark.UpdateNote', [id, note]);
 
+  /// 在当前进度处加书签。chapterIndex<0 表示「按 core 里的当前章节」。
+  static Future<void> bookmarkAdd({
+    required int bookId,
+    required int chapterIndex,
+    required String chapterTitle,
+    int chapterPos = 0,
+    String content = '',
+    String note = '',
+  }) => _c.call('Bookmark.Add', [
+        bookId,
+        chapterIndex,
+        chapterTitle,
+        chapterPos,
+        content,
+        note,
+      ]);
+
   // ── 阅读记录 ────────────────────────────────────────────
+
+  /// 记一条阅读记录（换章时调用；core 按「同书同日同章」去重）。
+  static Future<void> recordAppend({
+    required int bookId,
+    required String bookName,
+    required int chapterIndex,
+    required String chapterTitle,
+  }) => _c.call('Record.Append', [
+        bookId,
+        bookName,
+        chapterIndex,
+        chapterTitle,
+      ]);
 
   /// {days, books, records}
   static Future<Map<String, dynamic>> recordStats() async =>
-      _map(await _c.call('Record.Stats'));
+      asStringMap(await _c.call('Record.Stats'));
 
   /// 按时间倒序分页；offset/limit 语义与 RSS 列表一致。
   static Future<List<Map<String, dynamic>>> records(int offset, int limit) =>
@@ -93,18 +124,10 @@ class ToolsApi {
   static Future<List<Map<String, dynamic>>> shelfBooks() =>
       _c.callList('Shelf.ListBooks', [0]);
 
-  static Map<String, dynamic> _map(dynamic data) {
-    if (data is Map) return data.cast<String, dynamic>();
-    return <String, dynamic>{};
-  }
 }
 
 /// 从 dto 里安全取整数：后端可能给 int / double / 字符串，缺失时为 0。
-int toolsInt(dynamic value) {
-  if (value is num) return value.toInt();
-  if (value is String) return int.tryParse(value) ?? 0;
-  return 0;
-}
+int toolsInt(dynamic value) => asInt(value);
 
 /// 安全取字符串，null 视为空串，省掉满屏的 `?? ''`。
-String toolsStr(dynamic value) => value == null ? '' : '$value';
+String toolsStr(dynamic value) => asStr(value);

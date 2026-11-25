@@ -2,8 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
-import 'package:legado_core/src/core.dart';
-import 'package:legado_core/src/domain/domain.dart';
 import 'package:legado_core/src/kernel/errors.dart';
 import 'package:legado_core/src/kernel/module.dart';
 import 'package:legado_core/src/kernel/registry.dart';

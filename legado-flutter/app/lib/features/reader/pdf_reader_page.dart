@@ -6,7 +6,11 @@ import 'package:flutter/material.dart';
 import '../../core/bridge/api.dart';
 import '../../core/bridge/legado_client.dart';
 import '../../core/widgets/copy_links.dart';
+import 'progress.dart';
 import 'pdf_channel.dart';
+import 'widgets/error_retry_view.dart';
+import 'widgets/toc_sheet_scaffold.dart';
+import 'widgets/progress_slider.dart';
 
 /// 与 core 的 `PdfParser.pagesPerChapter`（及原版 PdfFile.PAGE_SIZE）一致。
 const kPdfPagesPerChapter = 10;
@@ -81,7 +85,10 @@ class _PdfReaderPageState extends State<PdfReaderPage> {
         throw const PdfRenderException('PDF 打不开（可能加密或已损坏）');
       }
 
-      // 续读：core 记的是章节序号，换回页索引。
+      // 续读：core 记的是「分段号 + 段内页偏移」，换回全局页索引。
+      //
+      // `chapterPos` 对 PDF 就是段内第几页（与漫画章把它当图片序号同理）：
+      // 只按 `chapter * 10` 恢复会让用户永远回到这一段的第 1 页。
       var initial = 0;
       final progress = await LegadoClient.instance.call(
         Api.readerGetProgress,
@@ -89,7 +96,14 @@ class _PdfReaderPageState extends State<PdfReaderPage> {
       );
       if (progress is Map) {
         final chapter = (progress['chapterIndex'] as num?)?.toInt() ?? 0;
-        if (chapter > 0) initial = chapter * kPdfPagesPerChapter;
+        final offset = (progress['chapterPos'] as num?)?.toInt() ?? 0;
+        if (chapter > 0 || offset > 0) {
+          final start = chapter * kPdfPagesPerChapter;
+          final sectionLength =
+              (count - start).clamp(0, kPdfPagesPerChapter);
+          initial = start +
+              (sectionLength <= 0 ? 0 : offset.clamp(0, sectionLength - 1));
+        }
       }
       if (initial < 0 || initial >= count) initial = 0;
 
@@ -173,17 +187,30 @@ class _PdfReaderPageState extends State<PdfReaderPage> {
     }
   }
 
+  /// 当前 PDF 分段（每 10 页一段，与 core 的章节切分一致）。
+  ({int index, int start, int count}) get _section {
+    final index = (_pageIndex ~/ kPdfPagesPerChapter).clamp(0, _sectionCount - 1);
+    final start = index * kPdfPagesPerChapter;
+    return (index: index, start: start, count: _sectionLength(index));
+  }
+
+  int get _sectionCount =>
+      (_pageCount + kPdfPagesPerChapter - 1) ~/ kPdfPagesPerChapter;
+
+  int _sectionLength(int section) =>
+      (_pageCount - section * kPdfPagesPerChapter).clamp(0, kPdfPagesPerChapter);
+
   Future<void> _saveProgress() async {
     if (_path.isEmpty || _pageCount < 1) return;
-    final totalChapters = (_pageCount + kPdfPagesPerChapter - 1) ~/ kPdfPagesPerChapter;
-    final chapter = (_pageIndex ~/ kPdfPagesPerChapter).clamp(0, totalChapters - 1);
+    final section = _section;
     try {
       await LegadoClient.instance.call(Api.readerSaveProgress, [
         widget.bookId,
-        chapter,
-        '分段_${chapter + 1}',
-        0,
-        _pageIndex / _pageCount,
+        section.index,
+        '分段_${section.index + 1}',
+        // 段内页偏移：下次打开要落回同一页，不能恒传 0。
+        (_pageIndex - section.start).clamp(0, section.count - 1),
+        readPercentForIndex(_pageIndex - section.start, section.count),
       ]);
     } on Object {
       // 落盘失败不能打断阅读。
@@ -253,25 +280,7 @@ class _PdfReaderPageState extends State<PdfReaderPage> {
         return const Center(child: CircularProgressIndicator());
       }
       if (_error != null) {
-        return Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.error_outline, size: 40, color: Colors.white70),
-                const SizedBox(height: 12),
-                Text(
-                  _error!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70),
-                ),
-                const SizedBox(height: 16),
-                FilledButton(onPressed: _load, child: const Text('重试')),
-              ],
-            ),
-          ),
-        );
+        return ErrorRetryView(message: _error!, icon: Icons.error_outline, onRetry: _load);
       }
       return const Center(
         child: Text('暂无页面', style: TextStyle(color: Colors.white70)),
@@ -316,6 +325,13 @@ class _PdfReaderPageState extends State<PdfReaderPage> {
   }
 
   Widget _bottomBar() {
+    // 进度条只在本分段（10 页）内滑动，对齐文字/漫画的章内口径；
+    // 左右按钮仍可逐页跨分段，不把「换段」藏进进度条。
+    final section = _section;
+    final progress = ReaderProgress(
+      index: _pageIndex - section.start,
+      count: section.count,
+    );
     return Container(
       color: const Color(0xFF232323),
       padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -326,15 +342,16 @@ class _PdfReaderPageState extends State<PdfReaderPage> {
             onPressed: _pageIndex > 0 ? () => _go(_pageIndex - 1) : null,
           ),
           Expanded(
-            child: Slider(
-              value: _pageIndex.toDouble(),
-              min: 0,
-              max: (_pageCount - 1).toDouble(),
-              divisions: _pageCount - 1,
-              label: '${_pageIndex + 1}',
-              onChanged: (value) =>
-                  setState(() => _pageIndex = value.round()),
-              onChangeEnd: (_) => unawaited(_render()),
+            child: ReaderProgressSlider(
+              progress: progress,
+              enabled: progress.count > 0,
+              onSeek: (percent) =>
+                  _go(section.start + indexForReadPercent(percent, section.count)),
+              themeData: SliderTheme.of(context).copyWith(
+                trackHeight: 2,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+              ),
             ),
           ),
           IconButton(
@@ -349,8 +366,8 @@ class _PdfReaderPageState extends State<PdfReaderPage> {
   }
 }
 
-/// PDF 目录面板：与文字阅读器的目录一致，带「回到开头 / 跳到最新」快捷按钮。
-class _PdfTocSheet extends StatefulWidget {
+/// PDF 目录面板：外壳与文字目录共用 TocSheetScaffold，只有列表项不同。
+class _PdfTocSheet extends StatelessWidget {
   const _PdfTocSheet({
     required this.chapters,
     required this.currentPage,
@@ -361,100 +378,27 @@ class _PdfTocSheet extends StatefulWidget {
   final int currentPage;
   final void Function(int index) onTap;
 
-  @override
-  State<_PdfTocSheet> createState() => _PdfTocSheetState();
-}
-
-class _PdfTocSheetState extends State<_PdfTocSheet> {
-  final ScrollController _scroll = ScrollController();
-
-  @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  void _scrollToStart() {
-    if (!_scroll.hasClients) return;
-    _scroll.animateTo(
-      0,
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
-    );
-  }
-
-  void _scrollToEnd() {
-    if (!_scroll.hasClients) return;
-    _scroll.animateTo(
-      _scroll.position.maxScrollExtent,
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
+  Widget _buildItem(BuildContext context, int i) {
+    final scheme = Theme.of(context).colorScheme;
+    final pageStart = i * kPdfPagesPerChapter;
+    final pageEnd = pageStart + kPdfPagesPerChapter;
+    final current = currentPage >= pageStart && currentPage < pageEnd;
+    return ListTile(
+      title: Text('${chapters[i]['title'] ?? '分段_${i + 1}'}'),
+      subtitle: Text('第 ${pageStart + 1} 页起'),
+      onTap: () => onTap(i),
+      trailing: current
+          ? Icon(Icons.play_arrow, size: 16, color: scheme.primary)
+          : null,
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return SizedBox(
-      height: MediaQuery.sizeOf(context).height * 0.72,
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-            child: Row(
-              children: [
-                Text('目录', style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(width: 8),
-                Text(
-                  '共 ${widget.chapters.length} 段',
-                  style: TextStyle(fontSize: 12, color: scheme.outline),
-                ),
-                const Spacer(),
-                IconButton(
-                  tooltip: '回到开头',
-                  icon: const Icon(Icons.vertical_align_top),
-                  onPressed: widget.chapters.isEmpty ? null : _scrollToStart,
-                ),
-                IconButton(
-                  tooltip: '跳到最新',
-                  icon: const Icon(Icons.vertical_align_bottom),
-                  onPressed: widget.chapters.isEmpty ? null : _scrollToEnd,
-                ),
-                IconButton(
-                  tooltip: '关闭',
-                  icon: const Icon(Icons.close),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 0.6),
-          Expanded(
-            child: widget.chapters.isEmpty
-                ? const Center(child: Text('暂无章节'))
-                : ListView.builder(
-                    controller: _scroll,
-                    itemCount: widget.chapters.length,
-                    itemBuilder: (context, i) {
-                      final pageStart = i * kPdfPagesPerChapter;
-                      final pageEnd = pageStart + kPdfPagesPerChapter;
-                      final current = widget.currentPage >= pageStart &&
-                          widget.currentPage < pageEnd;
-                      return ListTile(
-                        title: Text(
-                          '${widget.chapters[i]['title'] ?? '分段_${i + 1}'}',
-                        ),
-                        subtitle: Text('第 ${pageStart + 1} 页起'),
-                        onTap: () => widget.onTap(i),
-                        trailing: current
-                            ? Icon(Icons.play_arrow, size: 16, color: scheme.primary)
-                            : null,
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
+    return TocSheetScaffold(
+      countLabel: '共 ${chapters.length} 段',
+      itemCount: chapters.length,
+      itemBuilder: _buildItem,
     );
   }
 }

@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../../core/format.dart';
+
 /// 书源页面的纯函数工具。
 ///
 /// 单独成文件的原因：这些逻辑（域名解析、分组拆分、raw 校验、调试阶段归类）
@@ -132,8 +134,8 @@ class SourceUtils {
     final dt = DateTime.tryParse(iso);
     if (dt == null) return '';
     final local = dt.toLocal();
-    String two(int v) => v.toString().padLeft(2, '0');
-    return '${two(local.hour)}:${two(local.minute)}:${two(local.second)}';
+    return '${twoDigits(local.hour)}:${twoDigits(local.minute)}'
+        ':${twoDigits(local.second)}';
   }
 
   /// ISO 时间串 → `yyyy-MM-dd`；解析失败返回 `—`。
@@ -142,8 +144,7 @@ class SourceUtils {
     final dt = DateTime.tryParse(iso);
     if (dt == null) return '—';
     final local = dt.toLocal();
-    String two(int v) => v.toString().padLeft(2, '0');
-    return '${local.year}-${two(local.month)}-${two(local.day)}';
+    return '${local.year}-${twoDigits(local.month)}-${twoDigits(local.day)}';
   }
 
   // ── 调试条目的阶段归类 ──────────────────────────────────

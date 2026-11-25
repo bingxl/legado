@@ -339,7 +339,11 @@ class _EvalSession {
     if (value is JsHostObject) return _encodeHostObject(value);
     if (value is JsCallable) {
       final id = _register((args) => value.call(args, null));
-      return <String, Object?>{'t': 'f', 'i': id};
+      return <String, Object?>{
+        't': 'f',
+        'i': id,
+        if (value.stringForm != null) 's': value.stringForm,
+      };
     }
     if (value is Function) {
       final id = _register((args) => _callDartFunction(value, args));
@@ -370,6 +374,7 @@ class _EvalSession {
     return <String, Object?>{
       't': 'o',
       'n': host.label,
+      if (host.stringForm != null) 's': host.stringForm,
       'i': callFn == null ? null : _register((args) => callFn(args, null)),
       'c': constructFn == null ? null : _register((args) => constructFn(args)),
       'p': props,
@@ -571,7 +576,7 @@ abstract final class _Prelude {
   }
 
   if (typeof g.__legadoDecode !== 'function') {
-    g.__legadoMakeFn = function (id, ctorId, name) {
+    g.__legadoMakeFn = function (id, ctorId, name, str) {
       var fn = function () {
         var args = Array.prototype.slice.call(arguments);
         if (ctorId !== null && ctorId !== undefined && new.target !== undefined) {
@@ -581,6 +586,10 @@ abstract final class _Prelude {
       };
       if (name) {
         try { Object.defineProperty(fn, 'name', { value: String(name) }); } catch (e) {}
+      }
+      // StrResponse.body 这类「既是方法又是属性」的值：字符串化时给出正文。
+      if (str !== null && str !== undefined) {
+        try { fn.toString = function () { return str; }; } catch (e) {}
       }
       return fn;
     };
@@ -597,7 +606,7 @@ abstract final class _Prelude {
         for (var k in node.v) obj[k] = g.__legadoDecode(node.v[k]);
         return obj;
       }
-      if (t === 'f') return g.__legadoMakeFn(node.i, null, node.n);
+      if (t === 'f') return g.__legadoMakeFn(node.i, null, node.n, node.s);
       if (t === 'o') {
         var target;
         if (node.i !== null && node.i !== undefined) {
@@ -609,6 +618,9 @@ abstract final class _Prelude {
         }
         for (var pk in node.p) target[pk] = g.__legadoDecode(node.p[pk]);
         for (var mk in node.m) target[mk] = g.__legadoMakeFn(node.m[mk], null, mk);
+        if (node.s !== null && node.s !== undefined) {
+          try { target.toString = function () { return node.s; }; } catch (e) {}
+        }
         return target;
       }
       return node;

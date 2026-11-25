@@ -4,7 +4,7 @@ import '../../kernel/registry.dart';
 import '../../store/store.dart';
 import 'shelf_service.dart';
 
-/// 书架域模块：把 [ShelfService] 的 11 个方法挂到注册表。
+/// 书架域模块：把 [ShelfService] 的 18 个方法挂到注册表。
 ///
 /// 参数一律位置传，并在这一层收敛类型：信封里的数字可能是 `int` 也可能是
 /// `double`，bool 偶尔是 `1`/`"true"`。service 只接收已经校好的强类型，
@@ -48,9 +48,12 @@ class ShelfModule extends CoreModule {
 
     registry.method(
       'Shelf.ListBooks',
-      (args) async => shelf.listBooks(_asInt(_arg(args, 0))),
-      params: const ['groupID int'],
-      doc: '在架书籍摘要；groupID=0 为全部，试读书不进列表',
+      (args) async => shelf.listBooks(
+        _asInt(_arg(args, 0)),
+        args.length > 1 ? _asInt(_arg(args, 1)) : -1,
+      ),
+      params: const ['groupID int', 'sort int?'],
+      doc: '在架书籍摘要；groupID=0 为全部，sort 为当前分组的 bookSort（-1 保持默认）',
     );
 
     registry.method(
@@ -134,11 +137,23 @@ class ShelfModule extends CoreModule {
           _asText(_arg(args, 1)),
           _asBool(_arg(args, 2)),
           _asInt(_arg(args, 3)),
+          // 后三个是可选追加参数：老调用方只传前四个时保持原行为。
+          cover: args.length > 4 ? _asText(_arg(args, 4)) : null,
+          bookSort: args.length > 5 ? _asInt(_arg(args, 5)) : null,
+          enableRefresh: args.length > 6 ? _asBool(_arg(args, 6)) : null,
         );
         return null;
       },
-      params: const ['id int', 'name string', 'show bool', 'order int'],
-      doc: '改名 / 显隐 / 排序；内置分组不可改',
+      params: const [
+        'id int',
+        'name string',
+        'show bool',
+        'order int',
+        'cover string?',
+        'bookSort int?',
+        'enableRefresh bool?',
+      ],
+      doc: '改名 / 显隐 / 排序 / 封面 / 本组排序方式 / 是否参与目录更新；内置分组不可改',
     );
 
     registry.method(
@@ -170,6 +185,54 @@ class ShelfModule extends CoreModule {
       },
       params: const ['id int'],
       doc: '删分组，组内书回未分组但不删书',
+    );
+
+    // ---- 书架管理（多选批量）----
+    registry.method(
+      'Shelf.SetCanUpdate',
+      (args) async {
+        shelf.setCanUpdate(_asIntList(_arg(args, 0)), _asBool(_arg(args, 1)));
+        return null;
+      },
+      params: const ['bookIDs int[]', 'enabled bool'],
+      doc: '批量开关「允许更新目录」；书架「更新目录」会跳过 canUpdate=false 的书',
+    );
+
+    registry.method(
+      'Shelf.MoveToGroups',
+      (args) async {
+        shelf.moveToGroups(_asIntList(_arg(args, 0)), _asInt(_arg(args, 1)));
+        return null;
+      },
+      params: const ['bookIDs int[]', 'groupID int'],
+      doc: '批量移动到分组（覆盖原分组），groupID=0 为未分组',
+    );
+
+    registry.method(
+      'Shelf.AddToGroups',
+      (args) async {
+        shelf.addToGroups(_asIntList(_arg(args, 0)), _asInt(_arg(args, 1)));
+        return null;
+      },
+      params: const ['bookIDs int[]', 'groupID int'],
+      doc: '批量加入分组（按位或，保留已有分组）',
+    );
+
+    registry.method(
+      'Shelf.DeleteBooks',
+      (args) async {
+        shelf.deleteBooks(_asIntList(_arg(args, 0)));
+        return null;
+      },
+      params: const ['bookIDs int[]'],
+      doc: '批量删书，逐本清章节/进度/缓存',
+    );
+
+    registry.method(
+      'Shelf.ExportBookshelf',
+      (args) async => shelf.exportBookshelf(_asInt(_arg(args, 0))),
+      params: const ['groupID int'],
+      doc: '导出书架 JSON（name/author/intro 数组），groupID=0 为全部',
     );
   }
 
@@ -203,6 +266,14 @@ String _asText(Object? raw) {
   if (raw is String) return raw;
   if (raw is num || raw is bool) return '$raw';
   throw LegadoException(ErrorCode.invalid, '需要字符串，收到 ${raw.runtimeType}');
+}
+
+List<int> _asIntList(Object? raw) {
+  if (raw == null) return const [];
+  if (raw is! List) {
+    throw LegadoException(ErrorCode.invalid, '需要整数数组，收到 ${raw.runtimeType}');
+  }
+  return [for (final item in raw) _asInt(item)];
 }
 
 bool _asBool(Object? raw) {

@@ -2,6 +2,7 @@ import '../../kernel/errors.dart';
 import '../../kernel/module.dart';
 import '../../kernel/registry.dart';
 import '../../store/store.dart';
+import '../cache/image_cache_service.dart';
 import '../setting/settings_module.dart';
 import '../shelf/shelf_module.dart';
 import '../source/source_fetch_module.dart';
@@ -16,6 +17,10 @@ class ReaderModule extends CoreModule {
   static ReaderModule? instance;
 
   ReaderService? _service;
+  ImageCacheService? _images;
+
+  /// 供 Cache 域复用同一个图片缓存实例（并发闸门 + cookie 池共享）。
+  ImageCacheService? get imageCache => _images;
 
   @override
   String get name => 'reader';
@@ -39,10 +44,13 @@ class ReaderModule extends CoreModule {
     if (store == null || shelf == null) {
       throw StateError('reader 依赖 store/shelf，但依赖模块尚未 register');
     }
+    final images = ImageCacheService(homeDir: ctx.homeDir);
+    _images = images;
     final reader = ReaderService(
       daos: store.daos,
       shelf: shelf.service,
       sourceFetch: sourceFetch?.service,
+      images: images,
       // 设置域在自己的依赖之前注册（见 modules.dart），这里直接取同一个实例；
       // 未装配（CLI 精简模式/单测）时为 null，阅读器用内置默认值。
       settings: SettingsModule.instance?.service,
@@ -132,7 +140,9 @@ class ReaderModule extends CoreModule {
     // 先停自动缓存的预取 worker：它还握着数据库句柄，
     // 走完再 close 会在已经关掉的库上查询。
     await _service?.close();
+    _images?.close();
     _service = null;
+    _images = null;
     if (identical(instance, this)) instance = null;
   }
 }

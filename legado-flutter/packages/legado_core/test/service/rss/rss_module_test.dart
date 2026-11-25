@@ -77,7 +77,7 @@ void main() {
     return view['id'] as int;
   }
 
-  test('依赖与 10 个方法注册', () {
+  test('依赖与 12 个方法注册', () {
     expect(module.name, 'rss');
     expect(module.dependsOn, contains('store'));
     expect(
@@ -92,6 +92,8 @@ void main() {
         'Rss.Article.MarkRead',
         'Rss.Article.Favorite',
         'Rss.Favorite.List',
+        'Rss.Favorite.Groups',
+        'Rss.Favorite.Remove',
         'Rss.Unread.Count',
       ]),
     );
@@ -149,6 +151,90 @@ void main() {
 
     final counts = await call('Rss.Unread.Count') as Map<String, Object?>;
     expect(counts['$id'], 1);
+  });
+
+  test('收藏列表覆盖默认分组，回填真实文章 id，可按 (origin, link) 取消', () async {
+    // 不传 group 的源 → sourceGroup 为空 → 文章 group 落到「默认分组」。
+    final view = await callMap('Rss.Source.Save', [
+      {'id': 0, 'name': '默认组源', 'url': feedUrl},
+    ]);
+    final id = view['id'] as int;
+    await call('Rss.Article.Refresh', [id]);
+    final articles = await callList('Rss.Article.List', [id, false, 0, 20]);
+    final articleId = articles.first['id'] as int;
+    await call('Rss.Article.Favorite', [articleId]);
+
+    // 全部：默认分组的收藏必须在，且 id 是真实 rowid（否则星标点了没反应）。
+    final all = await callList('Rss.Favorite.List');
+    expect(all.length, 1);
+    expect(all.single['group'], '默认分组');
+    expect(all.single['id'], articleId);
+    expect(all.single['favorite'], isTrue);
+    expect(all.single['origin'], feedUrl);
+
+    // 按分组：默认分组单独查得到同一条（旧实现 byGroup('') 恒空 → 收藏消失）。
+    final byDefault = await callList('Rss.Favorite.List', ['默认分组']);
+    expect(byDefault.length, 1);
+    final groups = await call('Rss.Favorite.Groups') as List;
+    expect(groups, contains('默认分组'));
+
+    // 另一组查不到。
+    expect(await callList('Rss.Favorite.List', ['新闻']), isEmpty);
+
+    // 按 (origin, link) 取消（文章行被清理、id 为 0 时的兜底路径）。
+    await call('Rss.Favorite.Remove', [feedUrl, all.single['link']]);
+    expect(await callList('Rss.Favorite.List'), isEmpty);
+  });
+
+  test('pubDate 解析成 Unix 秒：RFC822 带时区 / Atom ISO8601', () async {
+    final id = await addSource();
+    await call('Rss.Article.Refresh', [id]);
+    final articles = await callList('Rss.Article.List', [id, false, 0, 20]);
+    final first = articles.firstWhere((a) => a['title'] == '第一篇');
+    // 2026-11-18T10:00:00+08:00 == 2026-11-18T02:00:00Z
+    expect(
+      first['pubDate'],
+      DateTime.utc(2026, 11, 18, 2).millisecondsSinceEpoch ~/ 1000,
+    );
+    // 没写 pubDate 的文章给 0，UI 会隐藏时间。
+    final second = articles.firstWhere((a) => a['title'] == '第二篇');
+    expect(second['pubDate'], 0);
+  });
+
+  test('刷新后 order 单调：新一轮文章排在旧文章前面', () async {
+    final id = await addSource();
+    await call('Rss.Article.Refresh', [id]);
+    var articles = await callList('Rss.Article.List', [id, false, 0, 20]);
+    final firstTitles = [for (final a in articles) a['title']];
+    expect(firstTitles.first, '第一篇');
+
+    // 源换成只含一篇新文章的 feed：新文章必须排在最前。
+    final newFeed = '''<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>测试订阅</title>
+<item><title>第三篇</title><link>http://example.test/3</link>
+<description>摘要三</description></item>
+</channel></rss>''';
+    final newServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    newServer.listen((request) async {
+      request.response
+        ..headers.contentType =
+            ContentType('application', 'rss+xml', charset: 'utf-8')
+        ..write(newFeed);
+      await request.response.close();
+    });
+    addTearDown(() async => newServer.close(force: true));
+
+    await call('Rss.Source.Save', [
+      {
+        'id': id,
+        'name': '测试源',
+        'url': 'http://127.0.0.1:${newServer.port}/feed.xml',
+        'group': '新闻',
+      },
+    ]);
+    await call('Rss.Article.Refresh', [id]);
+    articles = await callList('Rss.Article.List', [id, false, 0, 20]);
+    expect(articles.first['title'], '第三篇');
   });
 
   test('sourceId=0 刷新全部启用源；分页 offset 在 limit 前', () async {

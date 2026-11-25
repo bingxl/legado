@@ -1,0 +1,50 @@
+[
+  {
+    "bookSourceType": 2,
+    "bookSourceUrl": "https://www.manhuaku.com.cn",
+    "bookSourceName": "漫画库",
+    "bookSourceGroup": "漫画",
+    "bookSourceComment": "manhuaku.com.cn 漫画源（图片型，bookSourceType=2）。搜索 GET /search?query= 中文走 java.encodeURI；结果/发现/详情均为服务端直出 HTML，列表项统一为 section.catalog > a.book，封面在 .thumb 的 style background-image 中。详情页 #chaptersList 只给最新 16 章，全量目录需 POST /comic/{id} 取 data.chapters，chapterUrl 拼成 /chapter/{contentId}-{id}.html；接口失败时回退页面 16 章。章节页真实图片不在 HTML 里，由内联脚本 var totalPages / var imgBaseUrl 给出，图片 = imgBaseUrl + 页码 + .webp（域名 us2.manhuaku.com.cn，实测无需 Referer）；脚本解析失败则回退页面 data-src。目录接口返回升序（第01話在前），保持接口顺序。bookUrlPattern 仅匹配 /comic/{数字}.html，天然排除 /search、/chapter、/categories、/news 等路径。验证 2026-11-25：搜索『孔明』命中 2 部，详情字段齐全，POST 目录 49 章，正文图片直链 200 image/webp。取图脚本按 JS 短路语义求值：`var imgBaseUrl = 前缀 + ('x' || '第01話') + '/'`，括号内取**第一个非空**字面量。此前只抓第一个字面量，遇 `('' || '第01話')` 会拼成 `…/uuid//N.webp` 而全章 404（所以有的漫画正常、有的整章白图）。图片扩展名统一 .webp，中文子目录由客户端自动百分号编码，无需额外转义。",
+    "enabled": true,
+    "enabledExplore": true,
+    "bookUrlPattern": "^https?://(www\\.)?manhuaku\\.com\\.cn/comic/\\d+\\.html$",
+    "header": "{\"User-Agent\": \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\"}",
+    "searchUrl": "/search?query={{java.encodeURI(key)}}&page={{page}}",
+    "exploreUrl": "日本漫画::/categories?category=1&page={{page}}\n韩国漫画::/categories?category=2&page={{page}}\n大陆漫画::/categories?category=3&page={{page}}\n热血::/categories?tag=15&category=1&page={{page}}\n校园::/categories?tag=11&category=1&page={{page}}\n爱情::/categories?tag=4&category=1&page={{page}}\n魔幻::/categories?tag=5&category=1&page={{page}}\n悬疑::/categories?tag=16&category=1&page={{page}}\n搞笑::/categories?tag=12&category=1&page={{page}}\n科幻::/categories?tag=22&category=1&page={{page}}",
+    "ruleSearch": {
+      "bookList": ".catalog a.book",
+      "name": "h3@text",
+      "lastChapter": ".thumb@data-title",
+      "coverUrl": ".thumb@style##.*url\\('([^']+)'\\).*##$1",
+      "bookUrl": "@href"
+    },
+    "ruleExplore": {
+      "bookList": ".catalog a.book",
+      "name": "h3@text",
+      "lastChapter": ".thumb@data-title",
+      "coverUrl": ".thumb@style##.*url\\('([^']+)'\\).*##$1",
+      "bookUrl": "@href"
+    },
+    "ruleBookInfo": {
+      "name": ".profile-title h1@text",
+      "author": ".profile-meta p:contains(作者)@text##作者：##",
+      "kind": ".profile-tags a@text",
+      "intro": ".profile-desc@text",
+      "lastChapter": ".profile-latest a@text",
+      "coverUrl": ".cover@style##.*url\\('([^']+)'\\).*##$1"
+    },
+    "ruleToc": {
+      "chapterList": "@js:\nvar s = String(result);\nvar host = \"https://www.manhuaku.com.cn\";\nvar hm = String(baseUrl).match(/^(https?:\\/\\/[^\\/]+)/);\nif (hm) host = hm[1];\nvar id = \"\";\nvar mm = String(baseUrl).match(/\\/comic\\/(\\d+)\\.html/);\nif (mm) id = mm[1];\nvar list = [];\nif (id) {\n    var res = java.ajax(host + \"/comic/\" + id + \",{\\\"method\\\":\\\"POST\\\"}\");\n    if (res) {\n        try {\n            var d = JSON.parse(String(res)).data.chapters;\n            for (var i = 0; i < d.length; i++) {\n                list.push({name: d[i].chapterName, url: \"/chapter/\" + d[i].contentId + \"-\" + d[i].id + \".html\"});\n            }\n        } catch (e) { }\n    }\n}\nif (!list.length) {\n    var re = /<a href=\"(\\/chapter\\/\\d+-\\d+\\.html)\">([^<]+)<\\/a>/g, r;\n    while ((r = re.exec(s)) !== null) {\n        list.push({name: r[2], url: r[1]});\n    }\n}\nlist;",
+      "chapterName": "name",
+      "chapterUrl": "url"
+    },
+    "ruleContent": {
+      "content": "@js:\nvar s = String(result);\nvar out = \"\";\nvar tm = s.match(/var totalPages\\s*=\\s*parseInt\\('(\\d+)'\\)/);\nvar bm = s.match(/var imgBaseUrl\\s*=\\s*([^\\n;]+);/);\n// 单个拼接项求值：'a' + ('x' || 'y') 里的括号按 JS 短路语义取第一个非空字面量。\nvar litOf = function (t) {\n    var re = /'([^']*)'|\"([^\"]*)\"/g, m, first = null;\n    while ((m = re.exec(t)) !== null) {\n        var v = m[1] !== undefined ? m[1] : m[2];\n        if (v.length > 0) return v;\n        if (first === null) first = v;\n    }\n    return first === null ? \"\" : first;\n};\n// 按顶层 + 拆项（括号内的 + 不拆），逐项求值后拼接。\nvar evalExpr = function (e) {\n    var terms = [], depth = 0, cur = \"\", q = \"\";\n    for (var i = 0; i < e.length; i++) {\n        var c = e.charAt(i);\n        if (q) {\n            cur += c;\n            if (c === q && e.charAt(i - 1) !== \"\\\\\") q = \"\";\n            continue;\n        }\n        if (c === \"'\" || c === '\"') { q = c; cur += c; continue; }\n        if (c === \"(\") { depth++; cur += c; continue; }\n        if (c === \")\") { depth--; cur += c; continue; }\n        if (c === \"+\" && depth === 0) { terms.push(cur); cur = \"\"; continue; }\n        cur += c;\n    }\n    terms.push(cur);\n    var r = \"\";\n    for (var j = 0; j < terms.length; j++) r += litOf(terms[j]);\n    return r;\n};\n// 服务器对空目录（`uuid//1.webp`）直接 404，压掉拼接产生的重复斜杠，保留 `https://`。\nvar norm = function (u) {\n    var k = u.indexOf(\"://\");\n    if (k < 0) return u.replace(/\\/{2,}/g, \"/\");\n    return u.substring(0, k + 3) + u.substring(k + 3).replace(/\\/{2,}/g, \"/\");\n};\nif (tm && bm) {\n    var base = norm(evalExpr(bm[1]));\n    var total = parseInt(tm[1], 10);\n    if (base && total > 0) {\n        for (var i = 1; i <= total; i++) {\n            out += '<img src=\"' + base + i + '.webp\">';\n        }\n    }\n}\nif (!out) {\n    var re2 = /data-src=\"([^\"]+)\"/g, m2;\n    while ((m2 = re2.exec(s)) !== null) {\n        var u = m2[1];\n        if (u.indexOf(\"loading\") > -1 || u.indexOf(\"/resource/\") > -1) continue;\n        out += '<img src=\"' + u + '\">';\n    }\n}\nout;",
+      "imageStyle": "FULL"
+    },
+    "customOrder": 0,
+    "weight": 0,
+    "respondTime": 180000,
+    "lastUpdateTime": 1795585161317
+  }
+]

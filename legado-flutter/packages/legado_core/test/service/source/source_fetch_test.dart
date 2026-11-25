@@ -5,6 +5,7 @@ import 'package:legado_core/src/domain/domain.dart';
 import 'package:legado_core/src/kernel/errors.dart';
 import 'package:legado_core/src/kernel/module.dart';
 import 'package:legado_core/src/kernel/registry.dart';
+import 'package:legado_core/src/net/net.dart';
 import 'package:legado_core/src/service/reader/reader_module.dart';
 import 'package:legado_core/src/service/shelf/shelf_module.dart';
 import 'package:legado_core/src/service/source/source_fetch_module.dart';
@@ -23,6 +24,10 @@ void main() {
   late Registry registry;
   late HttpServer server;
   late String base;
+
+  /// 「更新目录 / 刷新详情」用例会在测试中改写这两个页面，模拟站点更新。
+  late String tocRefreshHtml;
+  late String infoRefreshHtml;
 
   LegadoContext ctx() =>
       LegadoContext(homeDir: home.path, version: 'test', host: 'test');
@@ -131,6 +136,11 @@ void main() {
     fetchModule.register(registry, ctx());
     ReaderModule().register(registry, ctx());
 
+    tocRefreshHtml = tocHtml;
+    infoRefreshHtml = '''
+<html><body><h1 class="bookname">刷新书名</h1>
+<span class="author">作者甲</span><div class="intro">简介</div>
+<a class="toc" href="/toc/refresh">目录</a></body></html>''';
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     base = 'http://127.0.0.1:${server.port}';
     server.listen((request) async {
@@ -140,11 +150,40 @@ void main() {
         charset: 'utf-8',
       );
       final path = request.uri.path;
+      // 反爬端点：普通请求一律 403 + cf-mitigated: challenge，
+      // 只有带上验证得到的 cf_clearance 才给正文。
+      // `/locked-hard` 模拟「验证也拿不到 cf_clearance」的自建验证站。
+      if (path == '/locked' || path == '/locked-hard') {
+        final cookie = request.headers.value('cookie') ?? '';
+        if (path == '/locked' && cookie.contains('cf_clearance=good')) {
+          request.response.write('<div id="content">重抓正文</div>');
+        } else {
+          request.response.statusCode = 403;
+          request.response.headers.set('cf-mitigated', 'challenge');
+          request.response.write('<html>challenge</html>');
+        }
+        await request.response.close();
+        return;
+      }
       final body = switch (path) {
         '/search' => searchHtml,
+        // 真实书源大多把整个查询串当书名关键词；这个端点只在 q 恰好等于
+        // 书名时返回结果，用来锁住「精确搜索只传书名、作者仅做过滤」的行为。
+        '/strictsearch' => request.uri.queryParameters['q'] == '搜索书名'
+            ? searchHtml
+            : '<html><body></body></html>',
+        // 第二个书源用不同域名前缀做搜索；详情页会把书名改成「详情书名」，
+        // 所以这里的搜索结果也用同名同作者，才能测到精确搜索命中。
+        '/altsearch' => '''
+<html><body>
+<div class="item"><a class="title" href="/book/1">详情书名</a>
+<span class="author">详情作者</span><span class="intro">简介</span></div>
+</body></html>''',
         '/explore' => searchHtml,
         '/book/1' => infoHtml,
         '/toc/1' => tocHtml,
+        '/book/refresh' => infoRefreshHtml,
+        '/toc/refresh' => tocRefreshHtml,
         '/book/2' => infoHtmlB,
         '/toc/2' => tocHtmlB,
         '/book/dup' => infoHtmlDup,
@@ -225,6 +264,8 @@ void main() {
     String? bookSourceUrl,
     String searchPath = '/search',
     String name = '测试源',
+    String group = '小说',
+    String? loginCheckJs,
     Map<String, Object?>? ruleToc,
     Map<String, Object?>? ruleBookInfo,
   }) async {
@@ -232,7 +273,7 @@ void main() {
     final raw = jsonEncode(<String, Object?>{
       'bookSourceUrl': sourceUrl,
       'bookSourceName': name,
-      'bookSourceGroup': '小说',
+      'bookSourceGroup': group,
       'enabled': true,
       'enabledExplore': true,
       'customOrder': 0,
@@ -263,12 +304,13 @@ void main() {
           }),
       'ruleContent': jsonEncode({'content': '#content@html'}),
       if (jsLib != null) 'jsLib': jsLib,
+      if (loginCheckJs != null) 'loginCheckJs': loginCheckJs,
     });
     final view =
         await call('Source.Save', [
               0,
               name,
-              '小说',
+              group,
               sourceUrl,
               '',
               raw,
@@ -278,6 +320,85 @@ void main() {
             as Map<String, Object?>;
     return view['id'] as int;
   }
+
+  test('Source.BatchChangeSource 按书名+作者精确搜索后逐本换源', () async {
+    final srcA = await addSource(name: '源甲');
+    // 目标源用不同 URL，但搜索页仍返回同一本书；换源只换 origin，不换 bookUrl。
+    final srcB = await addSource(
+      name: '源乙',
+      bookSourceUrl: '$base/alt',
+      searchPath: 'search',
+    );
+    final added =
+        await call('Source.AddToShelf', [
+              srcA,
+              '$base/book/1',
+              '搜索书名',
+              '作者甲',
+              '{}',
+              0,
+            ])
+            as Map<String, Object?>;
+    expect(store.daos.book.getById(added['id'] as int)!.origin, base);
+
+    final result =
+        await call('Source.BatchChangeSource', [
+              [added['id']],
+              srcB,
+            ])
+            as Map<String, Object?>;
+    expect(result['succeeded'], 1);
+    expect(result['failed'], 0);
+    expect(store.daos.book.getByUrl('$base/book/1')!.origin, '$base/alt');
+    // 换源后目录按新源重抓，仍是两章但章节 URL 一致；进度不应丢。
+    expect(store.daos.chapter.getChapterCount('$base/book/1'), 2);
+  });
+
+  test('Source.ImportBookshelf 按书名+作者搜索加书并跳过已存在', () async {
+    // addSource 只为注册书源（有副作用），返回值这里用不上。
+    await addSource();
+    final doc = jsonEncode([
+      {'name': '搜索书名', 'author': '作者甲', 'intro': '简介'},
+      {'name': '另一本', 'author': '作者乙'},
+      {'name': '', 'author': '无效'},
+    ]);
+    final result =
+        await call('Source.ImportBookshelf', [doc, 2]) as Map<String, Object?>;
+    expect(result['added'], 2);
+    expect(result['skipped'], 1); // 空书名
+    expect(result['failed'], 0);
+    expect(store.daos.book.getByUrl('$base/book/1'), isNotNull);
+    expect(store.daos.book.getByUrl('$base/book/2'), isNotNull);
+    // groupID 是位域，2 对应自建分组。
+    expect(store.daos.book.getByUrl('$base/book/1')!.group, 2);
+
+    // 再导一次：同名同作者直接跳过，不会重复入库。
+    final again =
+        await call('Source.ImportBookshelf', [
+              jsonEncode([
+                {'name': '另一本', 'author': '作者乙'},
+              ]),
+              0,
+            ])
+            as Map<String, Object?>;
+    expect(again['skipped'], 1, reason: '详情改名后按命中 URL 也要能查重');
+  });
+
+  test('Source.ImportBookshelf 只用书名搜索，作者仅过滤结果', () async {
+    // 早期实现把关键词拼成「书名 作者」，多数书源会因此搜到 0 条，
+    // 表现为导入完成但书架没有书。这里用严格匹配端点复现真实站点行为。
+    await addSource(searchPath: '/strictsearch');
+    final result = await call('Source.ImportBookshelf', [
+          jsonEncode([
+            {'name': '搜索书名', 'author': '作者甲'},
+          ]),
+          0,
+        ]) as Map<String, Object?>;
+    expect(result['added'], 1, reason: '关键词必须是书名本身，不能拼作者');
+    expect(result['skipped'], 0);
+    expect(result['failed'], 0);
+    expect(store.daos.book.getByUrl('$base/book/1'), isNotNull);
+  });
 
   test('发现源列表与分类解析（纯本地）', () async {
     final id = await addSource();
@@ -412,6 +533,42 @@ list.map(a=>a[0]+u1+a[1]+u2).join("&&")
     expect(results.length, 2);
   });
 
+  test('SearchAll 按原版 SearchScope 格式筛选：单源 / 分组 / 无效回退', () async {
+    await addSource(name: '甲源', group: '小说');
+    await addSource(
+      name: '乙源',
+      group: '漫画',
+      bookSourceUrl: '$base/alt',
+      searchPath: 'search',
+    );
+
+    expect(await callList('Source.SearchAll', ['关键词', 1]), hasLength(3));
+
+    // name::url 按地址取源；名称只用于展示，写错也不影响命中。
+    final byUrl = await callList('Source.SearchAll', [
+      '关键词',
+      1,
+      '名字写错了::$base',
+    ]);
+    expect(byUrl, hasLength(2));
+
+    // 逗号分隔的多个分组取并集，单个分组只取该组。
+    expect(
+      await callList('Source.SearchAll', ['关键词', 1, '小说,漫画']),
+      hasLength(3),
+    );
+    expect(
+      await callList('Source.SearchAll', ['关键词', 1, '漫画']),
+      hasLength(1),
+    );
+
+    // 分组被删空后回退全部启用源，不能让用户以为书全没了。
+    expect(
+      await callList('Source.SearchAll', ['关键词', 1, '不存在的分组']),
+      hasLength(3),
+    );
+  });
+
   test('PreviewBook 入库但不在书架；AddToShelf 转正', () async {
     final id = await addSource();
     final preview =
@@ -446,6 +603,128 @@ list.map(a=>a[0]+u1+a[1]+u2).join("&&")
     expect(store.daos.chapter.getChapterCount('$base/book/1'), 2);
   });
 
+  test('RefreshToc：重抓目录整章替换，保留进度并汇总变化', () async {
+    final sourceId = await addSource();
+    final url = '$base/book/refresh';
+    final preview = await call('Source.PreviewBook', [
+      sourceId,
+      url,
+      '刷新书名',
+      '作者甲',
+      '{}',
+    ]) as Map<String, Object?>;
+    final id = preview['id'] as int;
+    await call('Shelf.PutOnShelf', [id]);
+    await call('Shelf.SaveProgress', [id, 0, '第一章 开始', 12, 33.0]);
+    expect(store.daos.chapter.getUrls(url).length, 2);
+
+    tocRefreshHtml = '''
+<html><body><ul>
+<li><a href="/ch/1">第一章 开始（改）</a></li>
+<li><a href="/ch/2">第二章 后来</a></li>
+<li><a href="/ch/5">第三章 新章</a></li>
+</ul></body></html>''';
+
+    final result =
+        await call('Source.RefreshToc', [id]) as Map<String, Object?>;
+    expect(result['total'], 3);
+    expect(result['added'], 1);
+    expect(result['removed'], 0);
+    expect(result['hasUpdate'], isTrue);
+
+    final chapters = store.daos.chapter.getChapterList(url);
+    expect(chapters.length, 3);
+    expect(chapters.map((c) => c.index).toList(), [0, 1, 2]);
+    expect(chapters.last.title, '第三章 新章');
+    final progress =
+        await call('Shelf.GetProgress', [id]) as Map<String, Object?>;
+    expect(progress['chapterIndex'], 0);
+    expect(progress['chapterPos'], 12);
+    expect(progress['scrollPercent'], 33.0);
+    expect(progress['chapterTitle'], '第一章 开始（改）');
+
+    // 有新章：原版 BookChapterList 会写 latestChapterTime 与 lastCheckCount，
+    // 书架「更新」角标与「N 章未读」全靠这两个字段。
+    var book = store.daos.book.getById(id)!;
+    expect(book.latestChapterTime, greaterThan(0));
+    expect(book.lastCheckCount, 1); // 3 - 之前 2 章
+    final stamp = book.latestChapterTime;
+
+    // 再刷一次没有新章：latestChapterTime 不能变（否则角标一直亮着）。
+    final again =
+        await call('Source.RefreshToc', [id]) as Map<String, Object?>;
+    expect(again['hasUpdate'], isFalse);
+    book = store.daos.book.getById(id)!;
+    expect(book.latestChapterTime, stamp);
+  });
+
+  test('RefreshBook：详情页刷新重抓详情+目录，不改名也不覆盖自定义字段', () async {
+    final sourceId = await addSource();
+    final url = '$base/book/refresh';
+    final preview = await call('Source.PreviewBook', [
+      sourceId,
+      url,
+      '刷新书名',
+      '作者甲',
+      '{}',
+    ]) as Map<String, Object?>;
+    final id = preview['id'] as int;
+    await call('Shelf.PutOnShelf', [id]);
+    await call('Shelf.SaveProgress', [id, 0, '第一章 开始', 7, 15.0]);
+
+    // 用户改过书名（canReName=false，刷新后不能被站点的「站点新书名」冲掉）。
+    await call('Shelf.SaveBook', [id, '我改的书名', '作者甲', '', '', -1]);
+
+    // 站点同时更新了简介与目录。
+    infoRefreshHtml = '''
+<html><body><h1 class="bookname">站点新书名</h1>
+<span class="author">站点新作者</span><div class="intro">站点新简介</div>
+<a class="toc" href="/toc/refresh">目录</a></body></html>''';
+    tocRefreshHtml = '''
+<html><body><ul>
+<li><a href="/ch/1">第一章 开始（改）</a></li>
+<li><a href="/ch/2">第二章 后来</a></li>
+<li><a href="/ch/5">第三章 新章</a></li>
+</ul></body></html>''';
+
+    final result =
+        await call('Source.RefreshBook', [id]) as Map<String, Object?>;
+    expect(result['detailUpdated'], isTrue);
+    expect(result['total'], 3);
+    expect(result['added'], 1);
+    expect(result['hasUpdate'], isTrue);
+
+    var book = store.daos.book.getById(id)!;
+    // canReName=false：书名/作者不跟站点改。
+    expect(book.name, '我改的书名');
+    expect(book.author, '作者甲');
+    // 没有自定义简介时，书源字段应被重抓更新 —— 证明「刷新」真去抓了详情。
+    expect(book.intro, '站点新简介');
+    // 目录确实重抓了。
+    expect(store.daos.chapter.getChapterCount(url), 3);
+
+    // 进度按序号保留并同步标题。
+    final progress =
+        await call('Shelf.GetProgress', [id]) as Map<String, Object?>;
+    expect(progress['chapterIndex'], 0);
+    expect(progress['chapterPos'], 7);
+    expect(progress['chapterTitle'], '第一章 开始（改）');
+
+    // 再设自定义简介后刷新：用户字段优先，不被站点值覆盖。
+    await call('Shelf.SaveBook', [
+      id,
+      '我改的书名',
+      '作者甲',
+      '',
+      '用户自定义简介',
+      -1,
+    ]);
+    await call('Source.RefreshBook', [id]);
+    book = store.daos.book.getById(id)!;
+    expect(book.customIntro, '用户自定义简介');
+    expect(book.intro, '站点新简介', reason: 'customIntro 存在时展示值仍由 displayIntro 决定');
+  });
+
   test('PreviewBook 详情无 coverUrl 时沿用列表页封面（超星式）', () async {
     final id = await addSource();
     const cover = 'https://img.test/cover.jpg';
@@ -476,13 +755,17 @@ list.map(a=>a[0]+u1+a[1]+u2).join("&&")
   });
 
   /// 造一个只测正文的书源：ruleContent 里带 content + nextContentUrl。
-  Future<void> addContentSource(String nextRule, {String? titleRule}) async {
+  Future<void> addContentSource(
+    String nextRule, {
+    String? titleRule,
+    String contentRule = '#content@html',
+  }) async {
     final raw = jsonEncode(<String, Object?>{
       'bookSourceUrl': base,
       'bookSourceName': '正文源',
       'enabled': true,
       'ruleContent': jsonEncode({
-        'content': '#content@html',
+        'content': contentRule,
         'nextContentUrl': nextRule,
         if (titleRule != null) 'title': titleRule,
       }),
@@ -511,6 +794,105 @@ list.map(a=>a[0]+u1+a[1]+u2).join("&&")
       '$base/ch/1',
     );
     expect(plain.title, isNull);
+  });
+
+  test('java.startBrowserAwait：验证后回填 cookie 并重抓正文', () async {
+    final seen = <BrowserVerificationRequest>[];
+    HostVerification.register((request) async {
+      seen.add(request);
+      return const BrowserVerificationResult(
+        cookie: 'cf_clearance=good',
+        userAgent: 'UA-BROWSER',
+        html: '<div id="content">浏览器正文</div>',
+      );
+    });
+    addTearDown(() => HostVerification.register(null));
+
+    await addContentSource(
+      '',
+      contentRule:
+          "@js: java.startBrowserAwait('$base/locked', '验证一下').body()",
+    );
+    final source = fetchModule.service.sourceByUrl(base)!;
+    final fetched = await fetchModule.service.fetchContent(
+      source,
+      '$base/book/1',
+      '$base/ch/1',
+    );
+
+    expect(
+      fetched.html,
+      contains('重抓正文'),
+      reason: 'refetchAfterSuccess 默认 true：要用内核重抓，而不是拿浏览器 outerHTML',
+    );
+    expect(seen.single.uri.path, '/locked');
+    expect(seen.single.title, '验证一下');
+    expect(
+      seen.single.headers.containsKey('cookie'),
+      isFalse,
+      reason: 'Cookie 由浏览器自己的 jar 管，塞进去会和它打架',
+    );
+    // 凭证落盘：同一 host 的后续请求直接可用（这里靠 mock 的 cookie 判定验证）。
+    expect(
+      fetchModule.service.net.cookies.cookieValue(
+        Uri.parse(base),
+        'cf_clearance',
+      ),
+      'good',
+    );
+    expect(
+      fetchModule.service.net.guard.state.userAgentFor('127.0.0.1'),
+      'UA-BROWSER',
+    );
+  });
+
+  test('java.startBrowserAwait：重抓仍被拦截时退回浏览器 HTML', () async {
+    HostVerification.register(
+      (request) async => const BrowserVerificationResult(
+        html: '<div id="content">浏览器正文</div>',
+      ),
+    );
+    addTearDown(() => HostVerification.register(null));
+
+    // 站点即使过了验证也不发 cf_clearance（自建验证 / 只有 __cf_bm）：
+    // 重抓必然还是挑战页，此时浏览器渲染结果才是对的。
+    await addContentSource(
+      '',
+      contentRule:
+          "@js: java.startBrowserAwait('$base/locked-hard', '验证').body()",
+    );
+    final source = fetchModule.service.sourceByUrl(base)!;
+    final fetched = await fetchModule.service.fetchContent(
+      source,
+      '$base/book/1',
+      '$base/ch/1',
+    );
+    expect(fetched.html, contains('浏览器正文'));
+  });
+
+  test('java.startBrowser：不等结果，只要求宿主开窗', () async {
+    final opened = <BrowserVerificationRequest>[];
+    HostVerification.register((request) async {
+      opened.add(request);
+      return const BrowserVerificationResult(skipped: true);
+    });
+    addTearDown(() => HostVerification.register(null));
+
+    await addContentSource(
+      '',
+      // 开窗后照常用当前页的结果（`result` 是规则层的原始 HTML）。
+      contentRule: "@js: java.startBrowser('$base/locked', '登录'); result",
+    );
+    final source = fetchModule.service.sourceByUrl(base)!;
+    final fetched = await fetchModule.service.fetchContent(
+      source,
+      '$base/book/1',
+      '$base/ch/1',
+    );
+
+    // 脚本没被阻塞：正文还是当前页的，窗口是「后台打开」的。
+    expect(fetched.html, contains('正文一'));
+    expect(opened.single.uri.path, '/locked');
   });
 
   test('书源 concurrentRate 生效：同一书源的第二次请求要等窗口', () async {
@@ -986,5 +1368,32 @@ list.map(a=>a[0]+u1+a[1]+u2).join("&&")
       store.daos.chapter.getChapterList('$base/book/1').map((c) => c.index),
       [0, 1],
     );
+  });
+
+  test('loginCheckJs 改写响应体：赋值 result.body / 直接返回字符串', () async {
+    // 1. 脚本改 `result.body`（原版最常见的写法）。
+    final srcA = await addSource(
+      name: '登录检测A',
+      loginCheckJs: "result.body = result.body.replace('搜索书名', '登录后书名');",
+    );
+    final a = await callList('Source.Search', [srcA, '关键词', 1]);
+    expect(a.map((r) => r['name']), contains('登录后书名'));
+    expect(a.map((r) => r['name']), isNot(contains('搜索书名')));
+
+    // 2. 脚本直接 return 新正文。
+    final srcB = await addSource(
+      name: '登录检测B',
+      loginCheckJs: "result.body.replace('另一本', '改名书')",
+    );
+    final b = await callList('Source.Search', [srcB, '关键词', 1]);
+    expect(b.map((r) => r['name']), contains('改名书'));
+
+    // 3. 脚本抛错不能打断链路：按原响应继续解析。
+    final srcC = await addSource(
+      name: '登录检测C',
+      loginCheckJs: 'this_is_not_defined();',
+    );
+    final c = await callList('Source.Search', [srcC, '关键词', 1]);
+    expect(c, isNotEmpty);
   });
 }

@@ -1,14 +1,18 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/bridge/legado_client.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../core/router/book_detail_route.dart';
 import '../../core/widgets/book_cover.dart';
+import '../settings/settings_models.dart';
+import '../settings/settings_store.dart';
 import 'search_results.dart';
 
 /// 搜索页用到的控制面方法（Api 是共享冻结文件，缺的常量由 feature 自带）。
 class _Api {
   static const listSources = 'Source.List';
-  static const search = 'Source.Search';
   static const searchAll = 'Source.SearchAll';
   static const previewBook = 'Source.PreviewBook';
 }
@@ -21,9 +25,16 @@ class _Api {
 /// [initialSourceId] 用于原版「发现」页长按书源 → 搜索的场景：
 /// 直接锁定到那一个书源搜，不走全部书源。
 class SearchPage extends StatefulWidget {
-  const SearchPage({super.key, this.initialSourceId});
+  SearchPage({
+    super.key,
+    this.initialSourceId,
+    SettingsStore? settings,
+  }) : _settings = settings ?? SettingsStore.instance;
 
   final int? initialSourceId;
+
+  /// 搜索条件（精确搜索 / 范围）跟随内核设置落盘；测试可注入假 store。
+  final SettingsStore _settings;
 
   @override
   State<SearchPage> createState() => _SearchPageState();
@@ -36,9 +47,14 @@ class _SearchPageState extends State<SearchPage> {
   List<Map<String, dynamic>> _sources = const [];
   List<Map<String, dynamic>> _items = const [];
 
-  bool _all = true;
   bool _grouped = true;
-  int _sourceId = 0;
+
+  /// 原版 SearchScope 字符串：空=全部书源，`名称::地址`=单源，`分组1,分组2`=多分组。
+  String _scope = '';
+  bool _precision = false;
+
+  /// 「发现」页长按书源进来的目标 id，要等书源列表加载完才能换成 scope 字符串。
+  int? _pendingSourceId;
 
   String _keyword = '';
   int _page = 0;
@@ -63,9 +79,36 @@ class _SearchPageState extends State<SearchPage> {
     final sourceId = widget.initialSourceId;
     if (sourceId != null && sourceId != 0) {
       // 从「发现」页长按书源 → 搜索进来的：锁定到该源。
-      _all = false;
-      _sourceId = sourceId;
-      _ensureSources();
+      _pendingSourceId = sourceId;
+      unawaited(_ensureSources());
+    }
+    unawaited(_loadConditions());
+  }
+
+  /// 读取上次使用的搜索条件。core 未连接时保持默认值，不打断页面渲染。
+  Future<void> _loadConditions() async {
+    try {
+      await widget._settings.load();
+      if (!mounted) return;
+      final values = widget._settings.values;
+      setState(() {
+        _precision = settingsBool(values['search.precision'], false);
+        // 从发现页锁定单源进来时，临时入口优先于上次记住的范围。
+        final pending = _pendingSourceId;
+        if (pending == null && _scope.isEmpty) {
+          _scope = values['search.scope'] ?? '';
+        }
+      });
+    } on Object {
+      // 设置服务不可用（core 尚未初始化/单测未接内核）：用默认值即可。
+    }
+  }
+
+  Future<void> _saveCondition(String key, String value) async {
+    try {
+      await widget._settings.setValue(key, value);
+    } on Object {
+      // 条件在内存里已生效；落盘失败不该让搜索页不可用。
     }
   }
 
@@ -97,11 +140,23 @@ class _SearchPageState extends State<SearchPage> {
         const [''],
       );
       if (!mounted) return;
+      final loaded = [for (final s in list) if (s['enabled'] != false) s];
+      final pending = _pendingSourceId;
+      String? lockedScope;
+      if (pending != null && pending > 0) {
+        for (final s in loaded) {
+          if (_idOf(s) == pending) {
+            lockedScope = '${s['name'] ?? ''}::${s['url'] ?? ''}';
+            break;
+          }
+        }
+      }
       setState(() {
-        _sources = [
-          for (final s in list)
-            if (s['enabled'] != false) s,
-        ];
+        _sources = loaded;
+        if (lockedScope != null) {
+          _scope = lockedScope;
+          _pendingSourceId = null;
+        }
       });
     } on LegadoError catch (e) {
       if (!mounted) return;
@@ -138,17 +193,10 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   Future<void> _runSearch(String keyword) async {
-    if (!_all && _sourceId == 0) {
-      await _ensureSources();
-      if (!mounted) return;
-      if (_sources.isEmpty) {
-        _toast('还没有可用的书源');
-        return;
-      }
-      setState(() => _sourceId = _idOf(_sources.first));
-    }
-
     final mySeq = ++_seq;
+    // 捕获条件快照：等待网络期间用户改了条件，旧响应仍按发起时的条件合并。
+    final scope = _scope;
+    final precision = _precision;
     setState(() {
       _keyword = keyword;
       _items = const [];
@@ -161,16 +209,19 @@ class _SearchPageState extends State<SearchPage> {
     });
 
     try {
-      final data = _all
-          ? await LegadoClient.instance.callList(_Api.searchAll, [keyword, 1])
-          : await LegadoClient.instance.callList(_Api.search, [
-              _sourceId,
-              keyword,
-              1,
-            ]);
+      final data = await LegadoClient.instance.callList(_Api.searchAll, [
+        keyword,
+        1,
+        scope,
+      ]);
       if (!mounted || mySeq != _seq) return;
       setState(() {
-        _items = mergeSearchResults(const [], data);
+        _items = mergeSearchResultsByRelevance(
+          const [],
+          data,
+          keyword: keyword,
+          precision: precision,
+        );
         _page = 1;
         _hasMore = data.isNotEmpty;
         _loading = false;
@@ -194,22 +245,25 @@ class _SearchPageState extends State<SearchPage> {
       return;
     }
     final mySeq = _seq;
+    final keyword = _keyword;
+    final scope = _scope;
+    final precision = _precision;
     setState(() => _loadingMore = true);
     try {
       final next = _page + 1;
-      final data = _all
-          ? await LegadoClient.instance.callList(_Api.searchAll, [
-              _keyword,
-              next,
-            ])
-          : await LegadoClient.instance.callList(_Api.search, [
-              _sourceId,
-              _keyword,
-              next,
-            ]);
+      final data = await LegadoClient.instance.callList(_Api.searchAll, [
+        keyword,
+        next,
+        scope,
+      ]);
       if (!mounted || mySeq != _seq) return;
       setState(() {
-        _items = mergeSearchResults(_items, data);
+        _items = mergeSearchResultsByRelevance(
+          _items,
+          data,
+          keyword: keyword,
+          precision: precision,
+        );
         _page = next;
         _hasMore = data.isNotEmpty;
         _loadingMore = false;
@@ -225,39 +279,74 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
-  Future<void> _setAll(bool value) async {
-    if (_all == value) return;
+  /// 原版菜单里的「精确搜索」：切换后按当前关键词立即重搜。
+  Future<void> _setPrecision(bool value) async {
+    if (_precision == value) return;
+    final keyword = _keyword;
     setState(() {
-      _all = value;
+      _precision = value;
       _resetResults();
     });
-    if (value) return;
-    await _ensureSources();
-    if (!mounted) return;
-    if (_sources.isEmpty) {
-      setState(() {
-        _all = true;
-        _resetResults();
-      });
-      _toast('还没有可用的书源');
-      return;
-    }
-    setState(() => _sourceId = _idOf(_sources.first));
+    await _saveCondition('search.precision', value.toString());
+    if (keyword.isNotEmpty && mounted) await _runSearch(keyword);
   }
 
-  void _selectSource(int? id) {
-    if (id == null) return;
+  /// 范围选择器：空/单源/多分组，字符串直接沿用原版 SearchScope 格式。
+  Future<void> _pickScope() async {
+    await _ensureSources();
+    if (!mounted) return;
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => _ScopeSheet(
+        sources: _sources,
+        groups: _groups,
+        current: _scope,
+      ),
+    );
+    if (picked == null || picked == _scope || !mounted) return;
+    final keyword = _keyword;
     setState(() {
-      _sourceId = id;
+      _scope = picked;
       _resetResults();
     });
+    await _saveCondition('search.scope', picked);
+    if (keyword.isNotEmpty && mounted) await _runSearch(keyword);
+  }
+
+  String get _scopeLabel {
+    final raw = _scope.trim();
+    if (raw.isEmpty) return '全部书源';
+    final separator = raw.indexOf('::');
+    if (separator >= 0) return raw.substring(0, separator).trim();
+    return raw.split(',').where((part) => part.trim().isNotEmpty).join('、');
+  }
+
+  List<String> get _groups {
+    final groups = <String>{};
+    for (final source in _sources) {
+      // Source.List 下发的是 SourceView，分组字段叫 group（不是书源的 bookSourceGroup）。
+      final raw = '${source['group'] ?? source['bookSourceGroup'] ?? ''}';
+      for (final part in raw.split(',')) {
+        if (part.trim().isNotEmpty) groups.add(part.trim());
+      }
+    }
+    return groups.toList()..sort();
   }
 
   /// 搜索结果只带书源地址（origin），PreviewBook 要书源 ID，这里做一次映射。
   Future<int> _resolveSourceId(Map<String, dynamic> item) async {
-    if (!_all && _sourceId != 0) return _sourceId;
-    final origin = '${item['origin'] ?? ''}'.trim();
     await _ensureSources();
+    // 锁定单源时优先用范围里的地址：结果里合并了多个来源，第一条未必是当前源。
+    final separator = _scope.indexOf('::');
+    if (separator >= 0) {
+      final url = _scope.substring(separator + 2).trim();
+      for (final source in _sources) {
+        if ('${source['url'] ?? ''}' == url) return _idOf(source);
+      }
+    }
+    final origin = '${item['origin'] ?? ''}'.trim();
     for (final source in _sources) {
       if ('${source['url'] ?? ''}' == origin) return _idOf(source);
     }
@@ -312,12 +401,7 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
-  void _toast(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _toast(String message) => showAppToast(context, message, mounted: mounted);
 
   @override
   Widget build(BuildContext context) {
@@ -354,6 +438,29 @@ class _SearchPageState extends State<SearchPage> {
                 ? null
                 : () => setState(() => _grouped = !_grouped),
           ),
+          PopupMenuButton<String>(
+            tooltip: '搜索选项',
+            onSelected: (value) {
+              if (value == 'precision') unawaited(_setPrecision(!_precision));
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem<String>(
+                value: 'precision',
+                child: Row(
+                  children: [
+                    Icon(
+                      _precision
+                          ? Icons.check_box
+                          : Icons.check_box_outline_blank,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    const Text('精确搜索'),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ],
       ),
       body: Column(
@@ -369,39 +476,39 @@ class _SearchPageState extends State<SearchPage> {
   Widget _scopeBar() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      child: Row(
-        children: [
-          const Text('全部书源', style: TextStyle(fontSize: 13)),
-          Switch(value: _all, onChanged: _setAll),
-          if (!_all) ...[
-            const SizedBox(width: 4),
-            Expanded(
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<int>(
-                  value: _sources.any((s) => _idOf(s) == _sourceId)
-                      ? _sourceId
-                      : null,
-                  isExpanded: true,
-                  hint: const Text('选择书源', style: TextStyle(fontSize: 13)),
-                  items: [
-                    for (final source in _sources)
-                      DropdownMenuItem<int>(
-                        value: _idOf(source),
-                        child: Text(
-                          '${source['name'] ?? ''}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 13),
-                        ),
-                      ),
-                  ],
-                  onChanged: _selectSource,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(6),
+        onTap: _pickScope,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(
+            children: [
+              const Icon(Icons.filter_alt_outlined, size: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '搜索范围：$_scopeLabel',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13),
                 ),
               ),
-            ),
-          ] else
-            const Spacer(),
-        ],
+              if (_precision)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.secondaryContainer,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Text('精确', style: TextStyle(fontSize: 11)),
+                ),
+              const Icon(Icons.expand_more, size: 18),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -421,7 +528,9 @@ class _SearchPageState extends State<SearchPage> {
     if (!_searched) {
       return _emptyState(
         icon: Icons.search,
-        message: _all ? '输入关键词，搜索全部书源' : '输入关键词，搜索当前书源',
+        message: _scope.isEmpty
+            ? '输入关键词，搜索全部书源'
+            : '输入关键词，搜索「$_scopeLabel」',
         actionLabel: null,
       );
     }
@@ -623,4 +732,144 @@ class _ItemRow {
   const _ItemRow(this.item);
 
   final Map<String, dynamic> item;
+}
+
+/// 搜索范围选择器，三种形态与原版 `SearchScope` 一致：
+/// 空=全部书源，`名称::地址`=单源，逗号分隔=多分组。
+class _ScopeSheet extends StatefulWidget {
+  const _ScopeSheet({
+    required this.sources,
+    required this.groups,
+    required this.current,
+  });
+
+  final List<Map<String, dynamic>> sources;
+  final List<String> groups;
+  final String current;
+
+  @override
+  State<_ScopeSheet> createState() => _ScopeSheetState();
+}
+
+class _ScopeSheetState extends State<_ScopeSheet> {
+  late String _draft;
+
+  @override
+  void initState() {
+    super.initState();
+    _draft = widget.current;
+  }
+
+  String _sourceScope(Map<String, dynamic> source) =>
+      '${source['name'] ?? ''}::${source['url'] ?? ''}';
+
+  Set<String> get _selectedGroups {
+    if (_draft.isEmpty || _draft.contains('::')) return const <String>{};
+    return _draft
+        .split(',')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toSet();
+  }
+
+  void _toggleGroup(String group, bool? selected) {
+    final groups = _selectedGroups.toSet();
+    if (selected == true) {
+      groups.add(group);
+    } else {
+      groups.remove(group);
+    }
+    setState(() => _draft = groups.join(','));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.7,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+              child: Row(
+                children: [
+                  Text('搜索范围', style: Theme.of(context).textTheme.titleMedium),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: '关闭',
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 0.6),
+            Expanded(
+              child: ListView(
+                children: [
+                  ListTile(
+                    leading: Icon(
+                      _draft.isEmpty
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_unchecked,
+                    ),
+                    title: const Text('全部书源'),
+                    onTap: () => setState(() => _draft = ''),
+                  ),
+                  for (final source in widget.sources)
+                    ListTile(
+                      leading: Icon(
+                        _draft == _sourceScope(source)
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_unchecked,
+                      ),
+                      title: Text(
+                        '${source['name'] ?? source['url'] ?? ''}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        '${source['url'] ?? ''}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11, color: scheme.outline),
+                      ),
+                      onTap: () => setState(() => _draft = _sourceScope(source)),
+                    ),
+                  if (widget.groups.isNotEmpty) ...[
+                    const Divider(),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                      child: Text(
+                        '分组（可多选）',
+                        style: TextStyle(fontSize: 12, color: scheme.outline),
+                      ),
+                    ),
+                    for (final group in widget.groups)
+                      CheckboxListTile(
+                        value: _selectedGroups.contains(group),
+                        title: Text(group),
+                        controlAffinity: ListTileControlAffinity.leading,
+                        onChanged: (value) => _toggleGroup(group, value),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => Navigator.of(context).pop(_draft),
+                  child: const Text('确定'),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

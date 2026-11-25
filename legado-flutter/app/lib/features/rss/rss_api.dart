@@ -1,3 +1,4 @@
+import '../../core/bridge/dto.dart';
 import '../../core/bridge/legado_client.dart';
 
 /// RSS 域的控制面方法封装。
@@ -35,7 +36,7 @@ class RssApi {
         'enabled': enabled,
       },
     ]);
-    return _map(data);
+    return asStringMap(data);
   }
 
   static Future<void> deleteSource(int id) =>
@@ -69,7 +70,7 @@ class RssApi {
   /// errors 是逐源失败原因，单个源失败不影响其他源。
   static Future<Map<String, dynamic>> refreshArticles(int sourceId) async {
     final data = await _c.call('Rss.Article.Refresh', [sourceId]);
-    return _map(data);
+    return asStringMap(data);
   }
 
   static Future<void> markRead(int id, bool read) =>
@@ -81,19 +82,28 @@ class RssApi {
     return data == true;
   }
 
-  static Future<List<Map<String, dynamic>>> listFavorites() {
-    return _c.callList('Rss.Favorite.List');
+  /// 收藏列表；[group] 为空表示全部（core 按收藏时间倒序）。
+  static Future<List<Map<String, dynamic>>> listFavorites({String group = ''}) {
+    return _c.callList('Rss.Favorite.List', [group]);
   }
 
-  static Map<String, dynamic> _map(dynamic data) {
-    if (data is Map) return data.cast<String, dynamic>();
-    return <String, dynamic>{};
+  /// 收藏夹用到的分组名（升序）。
+  static Future<List<String>> favoriteGroups() async {
+    final data = await _c.call('Rss.Favorite.Groups');
+    if (data is! List) return const [];
+    return [for (final item in data) '$item'];
   }
+
+  /// 按 `(origin, link)` 取消收藏，返回取消后的收藏状态（恒为 false）。
+  ///
+  /// 收藏表主键是 `(origin, link)`：从收藏页打开的文章 id 可能为 0
+  /// （文章行已被清理），这时只有它能取消收藏。
+  static Future<bool> removeFavorite(String origin, String link) async {
+    await _c.call('Rss.Favorite.Remove', [origin, link]);
+    return false;
+  }
+
 }
 
 /// 从 dto 里安全取整数字段（后端可能给 int、num 或字符串）。
-int rssInt(dynamic value) {
-  if (value is num) return value.toInt();
-  if (value is String) return int.tryParse(value) ?? 0;
-  return 0;
-}
+int rssInt(dynamic value) => asInt(value);

@@ -1,8 +1,7 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import '../reader_controller.dart';
+import 'toc_sheet_scaffold.dart';
 
 /// 目录 BottomSheet。
 ///
@@ -24,198 +23,110 @@ Future<void> showChapterSheet(
   );
 }
 
-class _ChapterSheet extends StatefulWidget {
+class _ChapterSheet extends StatelessWidget {
   const _ChapterSheet({required this.controller});
 
   final ReaderController controller;
 
-  @override
-  State<_ChapterSheet> createState() => _ChapterSheetState();
-}
-
-class _ChapterSheetState extends State<_ChapterSheet> {
-  static const double _itemExtent = 48;
-
-  late final ScrollController _scroll = ScrollController(
-    // 让当前章落在列表偏上的位置，用户还能看到前后几章。
-    initialScrollOffset: math.max(
-      0,
-      widget.controller.chapterIndex * _itemExtent - 120,
-    ),
-  );
-
-  @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  void _open(int index) {
+  void _open(BuildContext context, int index) {
     Navigator.of(context).pop();
-    widget.controller.openChapter(index);
+    controller.openChapter(index);
   }
 
-  /// 目录很长（几千章）时，让用户一键滚到列表首尾，不必手动拖很久。
-  /// 用 animateTo 而不是 jumpTo：长列表瞬移会丢失位置感，动画能看清经过的章节。
-  void _scrollToStart() {
-    if (!_scroll.hasClients) return;
-    _scroll.animateTo(
-      0,
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
-    );
-  }
-
-  void _scrollToEnd() {
-    if (!_scroll.hasClients) return;
-    _scroll.animateTo(
-      _scroll.position.maxScrollExtent,
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
+  Widget _buildItem(BuildContext context, int index) {
+    final scheme = Theme.of(context).colorScheme;
+    final chapters = controller.chapters;
+    final chapter = chapters[index];
+    final current = index == controller.chapterIndex;
+    final isVolume = chapter['isVolume'] == true;
+    // 付费章 / VIP 章：书源写在 chapterList 的 `isPay` / `isVip`
+    // 规则里，目录先标出来，免得点进去只看到空正文以为书源坏了。
+    final isPay = chapter['isPay'] == true;
+    final isVip = chapter['isVip'] == true;
+    final title = '${chapter['title'] ?? ''}';
+    return InkWell(
+      onTap: isVolume ? null : () => _open(context, index),
+      child: Container(
+        color: current ? scheme.primary.withValues(alpha: 0.08) : null,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 44,
+              child: Text(
+                '${index + 1}',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: current ? scheme.primary : scheme.outline,
+                ),
+              ),
+            ),
+            if (isVolume)
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: Icon(
+                  Icons.folder_outlined,
+                  size: 14,
+                  color: scheme.outline,
+                ),
+              ),
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: current ? FontWeight.w600 : FontWeight.w400,
+                  color: current ? scheme.primary : scheme.onSurface,
+                ),
+              ),
+            ),
+            if (isPay)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Tooltip(
+                  message: '付费章节',
+                  child: Icon(
+                    Icons.shopping_cart_outlined,
+                    size: 14,
+                    color: scheme.error,
+                  ),
+                ),
+              )
+            else if (isVip)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Tooltip(
+                  message: 'VIP 章节',
+                  child: Icon(
+                    Icons.lock_outline,
+                    size: 14,
+                    color: scheme.outline,
+                  ),
+                ),
+              ),
+            if (current)
+              Icon(Icons.play_arrow, size: 16, color: scheme.primary),
+          ],
+        ),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final controller = widget.controller;
-    final scheme = Theme.of(context).colorScheme;
     final chapters = controller.chapters;
-
-    return SizedBox(
-      height: MediaQuery.sizeOf(context).height * 0.72,
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-            child: Row(
-              children: [
-                Text('目录', style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(width: 8),
-                Text(
-                  '共 ${chapters.length} 章',
-                  style: TextStyle(fontSize: 12, color: scheme.outline),
-                ),
-                const Spacer(),
-                IconButton(
-                  tooltip: '回到开头',
-                  icon: const Icon(Icons.vertical_align_top),
-                  onPressed: chapters.isEmpty ? null : _scrollToStart,
-                ),
-                IconButton(
-                  tooltip: '跳到最新',
-                  icon: const Icon(Icons.vertical_align_bottom),
-                  onPressed: chapters.isEmpty ? null : _scrollToEnd,
-                ),
-                IconButton(
-                  tooltip: '关闭',
-                  icon: const Icon(Icons.close),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 0.6),
-          Expanded(
-            child: chapters.isEmpty
-                ? const Center(child: Text('暂无章节'))
-                : ListView.builder(
-                    controller: _scroll,
-                    itemExtent: _itemExtent,
-                    itemCount: chapters.length,
-                    itemBuilder: (context, index) {
-                      final chapter = chapters[index];
-                      final current = index == controller.chapterIndex;
-                      final isVolume = chapter['isVolume'] == true;
-                      // 付费章 / VIP 章：书源写在 chapterList 的 `isPay` / `isVip`
-                      // 规则里，目录先标出来，免得点进去只看到空正文以为书源坏了。
-                      final isPay = chapter['isPay'] == true;
-                      final isVip = chapter['isVip'] == true;
-                      final title = '${chapter['title'] ?? ''}';
-                      return InkWell(
-                        onTap: isVolume ? null : () => _open(index),
-                        child: Container(
-                          color: current
-                              ? scheme.primary.withValues(alpha: 0.08)
-                              : null,
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: Row(
-                            children: [
-                              SizedBox(
-                                width: 44,
-                                child: Text(
-                                  '${index + 1}',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: current
-                                        ? scheme.primary
-                                        : scheme.outline,
-                                  ),
-                                ),
-                              ),
-                              if (isVolume)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 6),
-                                  child: Icon(
-                                    Icons.folder_outlined,
-                                    size: 14,
-                                    color: scheme.outline,
-                                  ),
-                                ),
-                              Expanded(
-                                child: Text(
-                                  title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: current
-                                        ? FontWeight.w600
-                                        : FontWeight.w400,
-                                    color: current
-                                        ? scheme.primary
-                                        : scheme.onSurface,
-                                  ),
-                                ),
-                              ),
-                              if (isPay)
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 6),
-                                  child: Tooltip(
-                                    message: '付费章节',
-                                    child: Icon(
-                                      Icons.shopping_cart_outlined,
-                                      size: 14,
-                                      color: scheme.error,
-                                    ),
-                                  ),
-                                )
-                              else if (isVip)
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 6),
-                                  child: Tooltip(
-                                    message: 'VIP 章节',
-                                    child: Icon(
-                                      Icons.lock_outline,
-                                      size: 14,
-                                      color: scheme.outline,
-                                    ),
-                                  ),
-                                ),
-                              if (current)
-                                Icon(
-                                  Icons.play_arrow,
-                                  size: 16,
-                                  color: scheme.primary,
-                                ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
+    return TocSheetScaffold(
+      countLabel: '共 ${chapters.length} 章',
+      itemCount: chapters.length,
+      itemExtent: 48,
+      // 让当前章落在列表偏上，还能看到前后几章。
+      initialScrollOffset: (controller.chapterIndex * 48 - 120 > 0
+              ? controller.chapterIndex * 48 - 120
+              : 0)
+          .toDouble(),
+      itemBuilder: _buildItem,
     );
   }
 }

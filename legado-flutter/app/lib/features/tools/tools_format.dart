@@ -6,6 +6,8 @@
 /// 3. pubspec 只有 http + cupertino_icons，不能引 `intl`，日期只能手拼。
 library;
 
+import '../../core/format.dart';
+
 /// 体积格式化：B 取整，KB/MB/GB 保留一位小数。
 ///
 /// 只做到 GB 是刻意的：缓存体积几乎不可能到 TB，多一档反而让
@@ -122,4 +124,4 @@ String cacheProgressLabel(int done, int failed, int total) {
 
 DateTime _dateOnly(DateTime t) => DateTime(t.year, t.month, t.day);
 
-String _two(int value) => value.toString().padLeft(2, '0');
+String _two(int value) => twoDigits(value);

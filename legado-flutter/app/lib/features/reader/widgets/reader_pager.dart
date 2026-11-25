@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/widgets/cached_reader_image.dart';
 import '../pagination.dart';
 import '../reader_controller.dart';
 import '../reader_style.dart';
@@ -19,6 +20,8 @@ class ReaderPager extends StatefulWidget {
     required this.menuVisible,
     required this.onTapCenter,
     this.onBoundary,
+    this.onImageDoubleTap,
+    this.localImagePath,
   });
 
   final ReaderController controller;
@@ -31,6 +34,12 @@ class ReaderPager extends StatefulWidget {
   /// 翻到第一章/最后一章的边界还要继续翻时回调（1=向后，-1=向前）。
   /// 父级用来提示「已经是最后一章」，不然用户只看到点击没反应。
   final ValueChanged<int>? onBoundary;
+
+  /// 双击正文插图：打开全屏看图（由 ReaderPage 传入，带本章全部图片）。
+  final ValueChanged<String>? onImageDoubleTap;
+
+  /// 插图本地缓存路径查询（ReaderController.imagePathOf）。
+  final LocalImagePathResolver? localImagePath;
 
   @override
   State<ReaderPager> createState() => ReaderPagerState();
@@ -50,6 +59,9 @@ class ReaderPagerState extends State<ReaderPager>
   PageSlice? _to;
   bool _turning = false;
   double _dragDx = 0;
+
+  /// 点击判定（见 [ReaderTapTracker]）：移动超容差、或按下时有翻页动画在跑都不算点击。
+  final ReaderTapTracker _tap = ReaderTapTracker();
 
   @override
   void dispose() {
@@ -127,58 +139,82 @@ class ReaderPagerState extends State<ReaderPager>
     _anim.forward(from: 0);
   }
 
+  /// 处理一次「翻页点击」：菜单打开时任意点击关菜单，否则按 3×3 分区。
+  /// 供外层 detector 与正文插图的单击共用。
+  ///
+  /// [abortedAnim] 为真表示这一下按下时还在跑翻页动画，只是「按住打断动画」：
+  /// 原版 `ReadView.onSingleTapUp` 对中间格有 `if (!isAbortAnim)` 的门槛，
+  /// 左右翻页格不受影响。没有这道判断，连续翻页时手指一碰屏幕就弹菜单。
+  void _handleTap(Offset localPosition, {bool abortedAnim = false}) {
+    if (widget.menuVisible) {
+      widget.onTapCenter();
+      return;
+    }
+    final size = widget.controller.viewport;
+    // 原版 3×3 分区：只有正中格是菜单，中上/中下也是翻页。
+    final zone = readerTapZoneAt(localPosition, size);
+    switch (zone) {
+      case ReaderTapZone.prev:
+        _begin(-1);
+      case ReaderTapZone.next:
+        _begin(1);
+      case ReaderTapZone.menu:
+        if (abortedAnim) return;
+        widget.onTapCenter();
+    }
+  }
+
+  /// 一次点击的入口：先过 [ReaderTapTracker]（容差 + 是否在动画中）。
+  void _maybeTap(Offset localPosition) {
+    final abortedAnim = _tap.busyDown;
+    if (!_tap.confirm()) return;
+    _handleTap(localPosition, abortedAnim: abortedAnim);
+  }
+
+  bool get _animating => _turning || _anim.isAnimating;
+
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
     final width = controller.viewport.width;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapUp: (details) {
-        if (widget.menuVisible) {
-          widget.onTapCenter();
-          return;
-        }
-        // 原版 3×3 分区：只有正中格是菜单，中上/中下也是翻页。
-        final zone = readerTapZoneAt(
-          details.localPosition,
-          Size(width, controller.viewport.height),
-        );
-        switch (zone) {
-          case ReaderTapZone.prev:
-            _begin(-1);
-          case ReaderTapZone.next:
-            _begin(1);
-          case ReaderTapZone.menu:
-            widget.onTapCenter();
-        }
-      },
-      // 滑动阈值触发：手指/鼠标横拖超过 40px 就翻页。
-      // 不做实时跟手，是为了保证覆盖/滑动两种动画的边界行为一致。
-      onHorizontalDragStart: widget.menuVisible ? null : (_) => _dragDx = 0,
-      onHorizontalDragUpdate: widget.menuVisible
-          ? null
-          : (details) => _dragDx += details.delta.dx,
-      onHorizontalDragEnd: widget.menuVisible
-          ? null
-          : (_) {
-              if (_dragDx < -40) {
-                _begin(1);
-              } else if (_dragDx > 40) {
-                _begin(-1);
+    return Listener(
+      // Listener 不进手势竞技场：正文插图自己的 detector 抢走 tap 时，
+      // 这里仍能拿到同一份按下/移动数据。
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (event) => _tap.down(event, busy: _animating),
+      onPointerMove: _tap.move,
+      onPointerCancel: _tap.cancel,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapUp: (details) => _maybeTap(details.localPosition),
+        // 滑动阈值触发：手指/鼠标横拖超过 40px 就翻页。
+        // 不做实时跟手，是为了保证覆盖/滑动两种动画的边界行为一致。
+        onHorizontalDragStart: widget.menuVisible ? null : (_) => _dragDx = 0,
+        onHorizontalDragUpdate: widget.menuVisible
+            ? null
+            : (details) => _dragDx += details.delta.dx,
+        onHorizontalDragEnd: widget.menuVisible
+            ? null
+            : (_) {
+                if (_dragDx < -40) {
+                  _begin(1);
+                } else if (_dragDx > 40) {
+                  _begin(-1);
+                }
+                _dragDx = 0;
+              },
+        child: ClipRect(
+          child: AnimatedBuilder(
+            animation: _anim,
+            builder: (context, _) {
+              if (!_turning || _from == null || _to == null) {
+                final page = controller.currentPage;
+                if (page == null) return const SizedBox.shrink();
+                return _page(page, 0);
               }
-              _dragDx = 0;
+              return _animatedStack(width, _anim.value);
             },
-      child: ClipRect(
-        child: AnimatedBuilder(
-          animation: _anim,
-          builder: (context, _) {
-            if (!_turning || _from == null || _to == null) {
-              final page = controller.currentPage;
-              if (page == null) return const SizedBox.shrink();
-              return _page(page, 0);
-            }
-            return _animatedStack(width, _anim.value);
-          },
+          ),
         ),
       ),
     );
@@ -219,6 +255,15 @@ class ReaderPagerState extends State<ReaderPager>
         style: widget.style,
         pageCount: widget.controller.pageCount,
         chapterTitle: widget.controller.chapterTitle,
+        // 插图单击：把触点从全局坐标换算到翻页器坐标，复用同一套分区逻辑。
+        // 触点来自插图内部的 detector（它认领了 tap），外层 detector 收不到。
+        onImageTapUp: (global) {
+          final box = context.findRenderObject() as RenderBox?;
+          if (box == null || !box.hasSize) return;
+          _maybeTap(box.globalToLocal(global));
+        },
+        onImageDoubleTap: widget.onImageDoubleTap,
+        localImagePath: widget.localImagePath,
       ),
     );
     if (shadow) {

@@ -45,11 +45,13 @@ class LegadoClient {
   final String homeDir;
 
   /// 启动内核。重复调用是幂等的。
-  static Future<LegadoClient> connect() async {
+  ///
+  /// [homeDir] 仅供测试注入临时数据目录；生产走 [_resolveHome] 的三级优先级。
+  static Future<LegadoClient> connect({String? homeDir}) async {
     final existing = _instance;
     if (existing != null) return existing;
 
-    final home = await _resolveHome();
+    final home = homeDir ?? await _resolveHome();
     await LegadoCore.instance.init(homeDir: home, version: _version());
 
     final client = LegadoClient._(home);

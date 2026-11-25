@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/bridge/legado_client.dart';
+import '../../core/widgets/app_toast.dart';
 import 'rss_api.dart';
 import 'rss_source_edit_page.dart';
 import 'rss_text.dart';
@@ -168,12 +169,7 @@ class _RssSourceTabState extends State<RssSourceTab> {
     return name.isEmpty ? RssText.hostOf('${source['url'] ?? ''}') : name;
   }
 
-  void _toast(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _toast(String message) => showAppToast(context, message, mounted: mounted);
 
   @override
   Widget build(BuildContext context) {

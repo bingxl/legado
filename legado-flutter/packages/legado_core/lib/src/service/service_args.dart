@@ -32,6 +32,15 @@ String asText(Object? raw) {
   throw LegadoException(ErrorCode.invalid, '需要字符串，收到 ${raw.runtimeType}');
 }
 
+/// 批量操作的 ID 列表：跨宿主信封里可能是 `int` / `double` / 数字字符串。
+List<int> asIntList(Object? raw) {
+  if (raw == null) return const <int>[];
+  if (raw is! List) {
+    throw LegadoException(ErrorCode.invalid, '需要整数数组，收到 ${raw.runtimeType}');
+  }
+  return [for (final item in raw) asInt(item)];
+}
+
 bool asBool(Object? raw) {
   if (raw == null) return false;
   if (raw is bool) return raw;

@@ -16,8 +16,8 @@ void main() {
   group('SettingsSchema', () {
     test('版本、页面与分组数量与 fixture 一致', () {
       expect(schema.version, 2);
-      expect(schema.pages, <String>['read', 'theme', 'general']);
-      expect(schema.sections.length, 5);
+      expect(schema.pages, <String>['read', 'theme', 'general', 'search']);
+      expect(schema.sections.length, 6);
       expect(
         schema.sectionsForPage('read').map((section) => section.key),
         <String>['typography', 'paging'],
