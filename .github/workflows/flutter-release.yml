@@ -1,0 +1,301 @@
+name: Flutter Release
+
+# 在 flutter 分支上打 tag 并推送时，构建 Android（universal + 分架构）APK
+# 与 Windows x64 便携包，发布到该 tag 对应的 GitHub Release。
+#
+# 几个不能省的配置：
+# - Windows 桌面应用无法在 Linux 上交叉编译，必须单独跑 windows-latest。
+# - app/android/gradle.properties 里有指向开发者本机的 org.gradle.java.home，
+#   CI 上必须删掉，否则 Gradle 直接找不到 JDK。
+# - build.gradle.kts 钉了 NDK 29.0.14206865，Flutter 3.38 的 Gradle 插件还会
+#   强制要求 CMake 3.22.1，两者都要显式安装。
+on:
+  push:
+    tags:
+      - '**'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（必须已推送到远端）'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flutter-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: '3.38.3'
+  ANDROID_NDK_VERSION: '29.0.14206865'
+
+jobs:
+  # tag 本身不属于任何分支（它是独立 ref），所以显式校验 tag 指向的 commit
+  # 是否在 flutter 分支历史里，避免在别的分支误打 tag 触发发布。
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      ref: ${{ steps.meta.outputs.ref }}
+      version: ${{ steps.meta.outputs.version }}
+      version_name: ${{ steps.version.outputs.version_name }}
+      version_code: ${{ steps.version.outputs.version_code }}
+      pubspec_version: ${{ steps.version.outputs.pubspec_version }}
+      proceed: ${{ steps.branch.outputs.proceed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Resolve tag metadata
+        id: meta
+        env:
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "ref=$TAG" >> "$GITHUB_OUTPUT"
+          # 产物文件名里不能带 / 和空格
+          SAFE=$(printf '%s' "$TAG" | tr '/ ' '--' | tr -cd '[:alnum:]._-')
+          echo "version=$SAFE" >> "$GITHUB_OUTPUT"
+          echo "### Flutter Release" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tag: \`$TAG\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # Android 的 flutter.versionName/versionCode 与 Windows 的 FLUTTER_VERSION*
+      # 宏都来自 app/pubspec.yaml 的 version，所以两个构建 job 会在构建前用这里
+      # 解析出的值改写那一行。tag 约定：vX.Y.Z 或 vX.Y.Z+build（前缀 v 可省略）。
+      - name: Resolve version from tag
+        id: version
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          NUM=$(printf '%s' "$TAG" | sed -E 's#^(flutter[-/])?[vV]?##')
+          if ! printf '%s' "$NUM" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(\+[0-9]+)?$'; then
+            echo "::error::Tag '$TAG' 中没有可识别的 X.Y.Z 版本号（可选 +build），例如 v0.3.0 或 v0.3.0+42"
+            exit 1
+          fi
+          if [ "${NUM#*+}" != "$NUM" ]; then
+            RAW_NAME="${NUM%%+*}"
+            CODE="${NUM##*+}"
+          else
+            RAW_NAME="$NUM"
+            IFS=. read -r MA MI PA <<< "$RAW_NAME"
+            CODE=$((10#$MA * 10000 + 10#$MI * 100 + 10#$PA))
+          fi
+          # 10# 前缀避免 08/09 被当八进制；同时去掉前导零，
+          # 因为 Dart 的 semver 不接受 "08" 这种版本段。
+          IFS=. read -r MA MI PA <<< "$RAW_NAME"
+          NAME="$((10#$MA)).$((10#$MI)).$((10#$PA))"
+          CODE=$((10#$CODE))
+          echo "version_name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "pubspec_version=$NAME+$CODE" >> "$GITHUB_OUTPUT"
+          echo "Version: $NAME ($CODE)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify tag is on flutter branch
+        id: branch
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          git fetch --no-tags origin +refs/heads/flutter:refs/remotes/origin/flutter
+          COMMIT=$(git rev-parse "$TAG^{commit}")
+          if git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/flutter; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG -> $COMMIT is in flutter branch history."
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Tag $TAG is NOT in flutter branch history - skipping release."
+          fi
+
+  build-apk:
+    needs: verify
+    if: needs.verify.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.verify.outputs.version_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.ref }}
+
+      - name: Apply version from tag
+        env:
+          PUBSPEC_VERSION: ${{ needs.verify.outputs.pubspec_version }}
+        run: |
+          sed -i -E "s/^version: .*/version: ${PUBSPEC_VERSION}/" legado-flutter/app/pubspec.yaml
+          grep '^version:' legado-flutter/app/pubspec.yaml
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK and CMake
+        # 先接许可证，再装组件；重复安装是幂等的。
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "ndk;${ANDROID_NDK_VERSION}" "cmake;3.22.1"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Prepare Gradle properties and optional signing
+        env:
+          KEY_STORE_B64: ${{ secrets.FLUTTER_RELEASE_KEY_STORE }}
+          KEY_ALIAS: ${{ secrets.FLUTTER_RELEASE_KEY_ALIAS }}
+          STORE_PASSWORD: ${{ secrets.FLUTTER_RELEASE_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.FLUTTER_RELEASE_KEY_PASSWORD }}
+        run: |
+          # 仓库里的 org.gradle.java.home 指向开发者本机 JDK，CI 上必须移除。
+          sed -i '/^org\.gradle\.java\.home=/d' legado-flutter/app/android/gradle.properties
+          if [ -n "$KEY_STORE_B64" ] && [ -n "$KEY_ALIAS" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
+            printf '%s' "$KEY_STORE_B64" | base64 --decode > legado-flutter/app/android/app/release.jks
+            {
+              echo "RELEASE_STORE_FILE=release.jks"
+              echo "RELEASE_KEY_ALIAS=$KEY_ALIAS"
+              echo "RELEASE_STORE_PASSWORD=$STORE_PASSWORD"
+              echo "RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> legado-flutter/app/android/gradle.properties
+            echo "Using official release signing config from secrets."
+          else
+            echo "Signing secrets not set - falling back to existing debug signing config."
+          fi
+
+      - name: Build APKs
+        # pub workspace 的根不是应用包，flutter build 必须在 app/ 下执行。
+        working-directory: legado-flutter/app
+        run: |
+          flutter pub get
+          flutter build apk --release --split-per-abi
+          flutter build apk --release
+
+      - name: Collect APKs
+        run: |
+          mkdir -p dist
+          for f in legado-flutter/app/build/app/outputs/flutter-apk/*.apk; do
+            [ -e "$f" ] || continue
+            base=$(basename "$f")
+            abi=$(printf '%s' "$base" | sed -E 's/^app-(.+)-release\.apk$/\1/')
+            [ "$abi" = "$base" ] && abi="universal"
+            cp "$f" "dist/legado-flutter-${VERSION}-${abi}.apk"
+          done
+          ls -lh dist/
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apks
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  build-windows:
+    needs: verify
+    if: needs.verify.outputs.proceed == 'true'
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.verify.outputs.version_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.ref }}
+
+      - name: Apply version from tag
+        shell: pwsh
+        env:
+          PUBSPEC_VERSION: ${{ needs.verify.outputs.pubspec_version }}
+        run: |
+          $path = "legado-flutter/app/pubspec.yaml"
+          $text = Get-Content -LiteralPath $path -Raw
+          # Flutter tool 会把这里的 version 写进 windows/flutter/ephemeral/
+          # generated_config.cmake 的 FLUTTER_VERSION* 宏，进而编译进 Runner.rc。
+          $updated = $text -replace '(?m)^version: .*$', "version: $env:PUBSPEC_VERSION"
+          Set-Content -LiteralPath $path -Value $updated -NoNewline -Encoding utf8
+          Select-String -LiteralPath $path -Pattern '^version:'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Build Windows x64 release
+        # 同上：workspace 根不是应用包，必须在 app/ 下执行。
+        working-directory: legado-flutter/app
+        run: |
+          flutter pub get
+          flutter build windows --release
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          $src = "legado-flutter/app/build/windows/x64/runner/Release"
+          if (-not (Test-Path -LiteralPath $src)) { throw "Missing Windows build output: $src" }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $zip = Join-Path (Resolve-Path dist) "legado-flutter-$($env:VERSION)-windows-x64.zip"
+          Compress-Archive -Path (Join-Path $src '*') -DestinationPath $zip -CompressionLevel Optimal
+          Get-Item -LiteralPath $zip | Select-Object FullName, Length
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: [verify, build-apk, build-windows]
+    if: needs.verify.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Verify artifacts
+        run: |
+          ls -lh dist/
+          ls dist/*.apk >/dev/null 2>&1 || { echo "No APK artifact found"; exit 1; }
+          ls dist/*.zip >/dev/null 2>&1 || { echo "No Windows artifact found"; exit 1; }
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.verify.outputs.tag }}
+          name: Flutter ${{ needs.verify.outputs.version_name }}
+          body: |
+            由 `flutter` 分支的 tag 自动构建。
+            版本：`${{ needs.verify.outputs.version_name }}`（versionCode `${{ needs.verify.outputs.version_code }}`）
+
+            **Android**
+            - `universal`：包含全部 ABI 的单包
+            - `arm64-v8a` / `armeabi-v7a` / `x86_64`：分架构包
+
+            **Windows**
+            - `windows-x64.zip`：便携版，解压后运行 `legado.exe`
+
+            若未配置签名 secrets，APK 沿用工程现有的 debug 签名。
+          files: |
+            dist/*.apk
+            dist/*.zip
+          fail_on_unmatched_files: true

@@ -14,6 +14,17 @@ kotlin {
     }
 }
 
+// CI 可选注入正式签名：4 个属性齐全时才创建 release signingConfig，
+// 本地开发 / 未配置 secrets 时沿用原来的 debug 签名，行为不变。
+val releaseStoreFile = providers.gradleProperty("RELEASE_STORE_FILE").orNull
+val releaseKeyAlias = providers.gradleProperty("RELEASE_KEY_ALIAS").orNull
+val releaseStorePassword = providers.gradleProperty("RELEASE_STORE_PASSWORD").orNull
+val releaseKeyPassword = providers.gradleProperty("RELEASE_KEY_PASSWORD").orNull
+val hasReleaseSigning = !releaseStoreFile.isNullOrBlank() &&
+    !releaseKeyAlias.isNullOrBlank() &&
+    !releaseStorePassword.isNullOrBlank() &&
+    !releaseKeyPassword.isNullOrBlank()
+
 android {
     namespace = "flutter.legado.bingxl.cn"
     compileSdk = flutter.compileSdkVersion
@@ -38,10 +49,24 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseStoreFile!!)
+                keyAlias = releaseKeyAlias!!
+                storePassword = releaseStorePassword!!
+                keyPassword = releaseKeyPassword!!
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: 换成正式签名后再发版。
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }
