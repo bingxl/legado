@@ -216,10 +216,71 @@ void main() {
     expect(store.daos.chapterCache.get('$base/b/1', 2), isNull);
   });
 
-  test('cache.expireDays 会清掉过期缓存', () async {
+  test('自动缓存写入有效期，手动缓存（expires_at=0）永不过期', () async {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     await getContent(0);
-    // 直接把缓存时间改到 30 天前。
+    final auto = store.daos.chapterCache.get('$base/b/1', 0)!;
+    // 默认 2 天（无设置域时用内置默认值）。
+    expect(auto.expiresAt, greaterThan(now + 2 * 86400 - 60));
+    expect(auto.expiresAt, lessThanOrEqualTo(now + 2 * 86400 + 60));
+
+    // 手动缓存重写同一章：用户明确点的离线保存必须永久保留。
+    store.daos.chapterCache.put(
+      CachedChapter(
+        bookUrl: auto.bookUrl,
+        index: auto.index,
+        title: auto.title,
+        url: auto.url,
+        html: auto.html,
+        images: auto.images,
+        size: auto.size,
+        createdAt: now - 30 * 86400,
+        expiresAt: 0,
+      ),
+    );
+    expect(store.daos.chapterCache.expired(), isEmpty);
+    // 过期的自动缓存行 + 永久的手动缓存行同时存在时，只清前者。
+    store.daos.chapterCache.put(
+      CachedChapter(
+        bookUrl: auto.bookUrl,
+        index: 1,
+        title: '第2章',
+        url: '$base/c/2',
+        html: '<p>过期自动缓存</p>',
+        expiresAt: now - 10,
+      ),
+    );
+    expect(store.daos.chapterCache.expired().map((e) => e.index), [1]);
+    store.daos.chapterCache.purgeExpired();
+    expect(store.daos.chapterCache.get('$base/b/1', 0), isNotNull);
+    expect(store.daos.chapterCache.get('$base/b/1', 1), isNull);
+  });
+
+  test('ReaderModule.onReady 在启动钩子中清掉过期缓存', () async {
+    await getContent(0);
     final cached = store.daos.chapterCache.get('$base/b/1', 0)!;
+    store.daos.chapterCache.put(
+      CachedChapter(
+        bookUrl: cached.bookUrl,
+        index: cached.index,
+        title: cached.title,
+        url: cached.url,
+        html: cached.html,
+        expiresAt: DateTime.now().millisecondsSinceEpoch ~/ 1000 - 10,
+      ),
+    );
+    expect(store.daos.chapterCache.expired(), hasLength(1));
+    reader.onReady(ctx());
+    expect(store.daos.chapterCache.expired(), isEmpty);
+    expect(store.daos.chapterCache.get('$base/b/1', 0), isNull);
+  });
+
+  test('启动扫描清掉过期缓存；运行途中到期不会命中旧正文', () async {
+    await getContent(0);
+    final cached = store.daos.chapterCache.get('$base/b/1', 0)!;
+    chapterOneHtml = '<div id="content">正文一改</div>';
+
+    // 模拟进程已运行多日：这一行到期但还没被启动钩子扫过。
     store.daos.chapterCache.put(
       CachedChapter(
         bookUrl: cached.bookUrl,
@@ -229,32 +290,20 @@ void main() {
         html: cached.html,
         images: cached.images,
         size: cached.size,
-        createdAt: DateTime.now()
-                .subtract(const Duration(days: 30))
-                .millisecondsSinceEpoch ~/
-            1000,
+        createdAt: cached.createdAt,
+        expiresAt: DateTime.now().millisecondsSinceEpoch ~/ 1000 - 10,
       ),
     );
+    // force 对应 Core.init 完成后的启动首扫。
+    reader.service.purgeExpiredCache(force: true);
+    expect(store.daos.chapterCache.get('$base/b/1', 0), isNull);
 
-    final settings = SettingsService(
-      storage: _MemoryStorage({'cache.expireDays': '7'}),
-      schema: defaultSettingsSchema,
-    );
-    final service = ReaderService(
-      daos: store.daos,
-      shelf: shelf.service,
-      sourceFetch: fetch.service,
-      settings: settings,
-      homeDir: home.path,
-    );
-    await service.getContent(bookId, 0);
-    // 清理只跑一次且在读取前：过期那条已被删，重新抓的这条是新的。
-    final cachedAfter = store.daos.chapterCache.get('$base/b/1', 0);
-    expect(cachedAfter, isNotNull);
-    final age = DateTime.now().millisecondsSinceEpoch ~/ 1000 -
-        cachedAfter!.createdAt;
-    expect(age, lessThan(60));
+    // 清理后再读：必须重新联网拿新正文，并写入一条新的限期缓存。
+    final again = await getContent(0);
+    expect(again['html'], contains('正文一改'));
+    expect(store.daos.chapterCache.get('$base/b/1', 0)!.expiresAt, greaterThan(0));
   });
+
 }
 
 class _MemoryStorage implements SettingsStorage {

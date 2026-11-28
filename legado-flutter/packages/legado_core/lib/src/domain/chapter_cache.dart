@@ -18,9 +18,17 @@ class CachedChapter {
     this.images = '[]',
     this.size = 0,
     this.createdAt = 0,
+    this.expiresAt = 0,
   });
 
   static const String table = 'chapter_cache';
+
+  /// 自动缓存的到期时间。[days] <= 0 返回 0（永久保留）。
+  static int autoExpiresAt(int nowSeconds, int days) =>
+      days > 0 ? nowSeconds + days * 86400 : 0;
+
+  /// 这一行在 [nowSeconds] 时是否已经到期；0 表示永久。
+  bool isExpiredAt(int nowSeconds) => expiresAt > 0 && expiresAt <= nowSeconds;
 
   static const String createSql = '''
 CREATE TABLE IF NOT EXISTS `chapter_cache` (
@@ -32,6 +40,7 @@ CREATE TABLE IF NOT EXISTS `chapter_cache` (
   `images` TEXT NOT NULL DEFAULT '[]',
   `size` INTEGER NOT NULL DEFAULT 0,
   `created_at` INTEGER NOT NULL DEFAULT 0,
+  `expires_at` INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(`bookUrl`, `idx`),
   FOREIGN KEY(`bookUrl`) REFERENCES `books`(`bookUrl`) ON DELETE CASCADE
 )''';
@@ -51,6 +60,13 @@ CREATE TABLE IF NOT EXISTS `chapter_cache` (
   /// Unix 秒，缓存管理页按它倒序。
   final int createdAt;
 
+  /// 到期时间的 Unix 秒；0 = 永不过期（原版 `caches.deadline` 的语义）。
+  ///
+  /// 阅读时自动缓存（含预取）写「当前时间 + cache.expireDays 天」，
+  /// 用户手动缓存写 0。启动与命中时按这一列判过期，不按 created_at
+  /// 反推——否则手动缓存也会被自动清掉。
+  final int expiresAt;
+
   factory CachedChapter.fromRow(Map<String, Object?> row) => CachedChapter(
         bookUrl: asString(row['bookUrl']),
         index: asInt(row['idx']),
@@ -60,6 +76,7 @@ CREATE TABLE IF NOT EXISTS `chapter_cache` (
         images: asString(row['images'], '[]'),
         size: asInt(row['size']),
         createdAt: asInt(row['created_at']),
+        expiresAt: asInt(row['expires_at']),
       );
 
   Map<String, Object?> toRow() => <String, Object?>{
@@ -71,6 +88,7 @@ CREATE TABLE IF NOT EXISTS `chapter_cache` (
         'images': images,
         'size': size,
         'created_at': createdAt,
+        'expires_at': expiresAt,
       };
 }
 

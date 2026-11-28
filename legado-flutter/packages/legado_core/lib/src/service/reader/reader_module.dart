@@ -136,6 +136,13 @@ class ReaderModule extends CoreModule {
   }
 
   @override
+  void onReady(LegadoContext ctx) {
+    // 软件启动即清理过期缓存，不等用户打开阅读页。force 绕过节流，
+    // purgeExpiredCache 内部已兜住异常，清理失败不会拖垮启动。
+    _service?.purgeExpiredCache(force: true);
+  }
+
+  @override
   Future<void> close() async {
     // 先停自动缓存的预取 worker：它还握着数据库句柄，
     // 走完再 close 会在已经关掉的库上查询。

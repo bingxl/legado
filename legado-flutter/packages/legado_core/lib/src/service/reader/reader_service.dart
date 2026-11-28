@@ -63,9 +63,12 @@ class ReaderService {
   int get _preDownloadNum =>
       int.tryParse(_settings?.value('cache.preDownloadNum') ?? '10') ?? 10;
 
-  /// 缓存有效期（天）。0 = 永不过期（原版行为）。
-  int get _cacheExpireDays =>
-      int.tryParse(_settings?.value('cache.expireDays') ?? '0') ?? 0;
+  /// 自动缓存的有效期（天）。0 = 永不过期。
+  ///
+  /// 只作用于阅读时写入的缓存（含预取）；手动缓存走 CacheService，
+  /// 一律写 `expires_at = 0` 永久保留。
+  int get _autoCacheExpireDays =>
+      int.tryParse(_settings?.value('cache.expireDays') ?? '2') ?? 2;
 
   /// 替换净化（正文与标题都过一遍，口径与网络书一致）。
   late final ReplacementProcessor _replacer =
@@ -125,7 +128,7 @@ class ReaderService {
     final total = book.totalChapterNum > 0
         ? book.totalChapterNum
         : _daos.chapter.getChapterCount(book.bookUrl);
-    _purgeExpiredCacheIfNeeded();
+    purgeExpiredCache();
 
     String html;
     List<String> images;
@@ -475,15 +478,16 @@ class ReaderService {
   // 这里落 `chapter_cache` 表（UI 的缓存管理页直接读它）。
   //
   // 原版**没有时间过期**：缓存只在「目录 URL 变了」或用户手动清理时失效。
-  // `cache.expireDays` 是本实现的扩展，默认 0（永不过期）。
+  // 本实现给自动缓存加有效期（默认 2 天，见 cache.expireDays），
+  // 手动缓存则写 expires_at=0 永久保留。
 
   /// 预取队列（key 是 bookUrl）；同一本书串行抓，不并发打源。
   final Map<String, List<int>> _prefetchQueue = <String, List<int>>{};
   final Set<String> _prefetchRunning = <String>{};
-  /// 上次执行过期扫描时的天数；null 表示本次进程还没扫过。
-  /// 记住值而不是只记「扫过」：用户在设置里把 0 改成 7 后应当立即生效，
-  /// 一次性布尔会永久跳过，过期清理形同虚设。
-  int? _purgedDays;
+  /// 上次执行过期扫描的时间。过期判据已落在每一行的 expires_at 上，
+  /// 不再依赖「设置里的天数变了才重扫」；这里只做节流，避免每翻一章
+  /// 都全表扫一遍。启动时用 force 绕过节流。
+  DateTime? _lastPurgeAt;
   bool _closed = false;
 
   /// 停掉后台预取（模块 close 时调）。已经排队的任务直接丢弃。
@@ -498,6 +502,11 @@ class ReaderService {
     if (book.isLocal || chapter.isVolume) return null;
     final cached = _daos.chapterCache.get(book.bookUrl, chapter.index);
     if (cached == null || cached.html.trim().isEmpty) return null;
+    // 进程可能连着跑几天不重启；启动清理已经删过一轮，运行中到期的行
+    // 不能再当有效缓存命中，否则用户一直读的是过期内容。
+    if (cached.isExpiredAt(DateTime.now().millisecondsSinceEpoch ~/ 1000)) {
+      return null;
+    }
     if (cached.url.isNotEmpty &&
         chapter.url.isNotEmpty &&
         cached.url != chapter.url) {
@@ -546,6 +555,11 @@ class ReaderService {
         images: imageJson,
         size: utf8.encode(html).length + utf8.encode(imageJson).length,
         createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        // 自动缓存有有效期；手动缓存由 CacheService 覆盖成 0（永久）。
+        expiresAt: CachedChapter.autoExpiresAt(
+          DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          _autoCacheExpireDays,
+        ),
       ),
     );
     // 正文先落库再下图片：下载慢/失败不能挡住翻章；原版也是
@@ -589,6 +603,8 @@ class ReaderService {
           images: current.images,
           size: current.size + bytes,
           createdAt: current.createdAt,
+          // 回填字节不能改到期时间：手动缓存是 0，别把永久缓存刷成限期。
+          expiresAt: current.expiresAt,
         ),
       );
     } on Object {
@@ -596,24 +612,31 @@ class ReaderService {
     }
   }
 
-  /// 按 `cache.expireDays` 清理过期缓存；同一天数在一个进程里只扫一次。
-  void _purgeExpiredCacheIfNeeded() {
-    final days = _cacheExpireDays;
-    if (days == _purgedDays) return;
-    _purgedDays = days;
-    if (days <= 0) return;
+  /// 清理已到期的自动缓存；[force] 用于启动时的无条件首扫。
+  ///
+  /// 判据是每行自己的 `expires_at`，手动缓存（0）永远不会命中这里。
+  /// 阅读时也会调，但一小时只扫一次：进程连开几天时仍会清，又不会
+  /// 每翻一章都全表扫。
+  void purgeExpiredCache({bool force = false}) {
+    final now = DateTime.now();
+    if (!force &&
+        _lastPurgeAt != null &&
+        now.difference(_lastPurgeAt!).inMinutes < 60) {
+      return;
+    }
+    _lastPurgeAt = now;
     try {
       // 先删磁盘图片再删数据库行：反过来会留下无主目录，且下次缓存同章时
-      // 旧图会「复活」。原版没有 TTL，这是本实现的扩展，语义要和手动清理一致。
-      final expired = _daos.chapterCache.expired(days);
+      // 旧图会「复活」。
+      final expired = _daos.chapterCache.expired();
       for (final item in expired) {
         final bookId = _daos.book.idOf(item.bookUrl);
         if (bookId == null) continue;
         _images?.removeChapterDir(bookId, item.index);
       }
-      _daos.chapterCache.purgeExpired(days);
+      _daos.chapterCache.purgeExpired();
     } on Object {
-      // 清理失败不该影响阅读；下次进程启动再试。
+      // 清理失败不该影响阅读；下次（或下次启动）再试。
     }
   }
 

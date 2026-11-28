@@ -50,6 +50,21 @@ void main() {
       expect(db.version, schemaVersion);
     });
 
+    test('v3 迁移为老库补上 expires_at 列，旧缓存默认永不过期', () async {
+      final path = '${tempDir.path}/v23.db';
+      // 只跑到 v2：模拟已发布过的旧库（chapter_cache 没有 expires_at）。
+      final old = await LegadoDatabase.open(path, migrations: [...defaultMigrations.take(2)]);
+      old.close();
+
+      final upgraded = await LegadoDatabase.open(path);
+      addTearDown(upgraded.close);
+      expect(upgraded.version, schemaVersion);
+      final columns = upgraded.db.select('PRAGMA table_info(`chapter_cache`)');
+      expect(columns.map((r) => r['name']), contains('expires_at'));
+      // 再跑一次迁移不应因列已存在而失败。
+      expect(() => upgraded.migrate(defaultMigrations), returnsNormally);
+    });
+
     test('磁盘库关闭后重新打开不重复建表', () async {
       final path = '${tempDir.path}/legado.db';
       final first = await LegadoDatabase.open(path);
@@ -70,13 +85,13 @@ void main() {
         path,
         migrations: [
           ...defaultMigrations,
-          Migration(4, (raw) => raw.execute('CREATE TABLE step_three (id INTEGER)')),
-          Migration(3, (raw) => raw.execute('CREATE TABLE step_two (id INTEGER)')),
+          Migration(5, (raw) => raw.execute('CREATE TABLE step_three (id INTEGER)')),
+          Migration(4, (raw) => raw.execute('CREATE TABLE step_two (id INTEGER)')),
         ],
       );
       addTearDown(db.close);
 
-      expect(db.version, 4);
+      expect(db.version, 5);
       expect(db.tableNames(), containsAll(['step_two', 'step_three']));
     });
 
@@ -84,7 +99,7 @@ void main() {
       final path = '${tempDir.path}/broken.db';
       final broken = [
         ...defaultMigrations,
-        Migration(3, (raw) {
+        Migration(4, (raw) {
           raw.execute('CREATE TABLE probe_rollback (id INTEGER)');
           throw StateError('故意失败');
         }),

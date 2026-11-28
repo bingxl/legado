@@ -180,6 +180,24 @@ void main() {
     );
   });
 
+  test('手动缓存写 expires_at=0，启动时不会被当成过期缓存清掉', () async {
+    final (bookId, _) = await importBook();
+    await call('Cache.Start', [bookId, 'chapters', [0]]);
+    await waitJob(bookId);
+    final books = await callList('Cache.Books');
+    final bookUrl = store.daos.book.getById(bookId)!.bookUrl;
+    final cached = store.daos.chapterCache.get(bookUrl, 0)!;
+    expect(cached.expiresAt, 0, reason: '手动缓存永久保留');
+    // 即便 created_at 很久以前，也不该命中过期清理。
+    store.daos.db.execute(
+      'update `chapter_cache` set `created_at` = ?',
+      [DateTime.now().millisecondsSinceEpoch ~/ 1000 - 90 * 86400],
+    );
+    reader.onReady(ctx());
+    expect(store.daos.chapterCache.get(bookUrl, 0), isNotNull);
+    expect((await callList('Cache.Books')).length, books.length);
+  });
+
   test('Delete 空 indexes 什么也不做；删除单章后统计同步', () async {
     final (bookId, _) = await importBook();
     await call('Cache.Start', [bookId, 'chapters', [0, 1]]);

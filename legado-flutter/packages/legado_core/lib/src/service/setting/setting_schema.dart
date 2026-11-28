@@ -204,7 +204,7 @@ class SettingsSchema {
 /// `search` 页不出现在设置中心，只给搜索页持久化「精确搜索 / 搜索范围」两个条件：
 /// 设置服务只认 Schema 里的 key，未知 key 会被写路径静默丢弃。
 const SettingsSchema defaultSettingsSchema = SettingsSchema(
-  version: 2,
+  version: 3,
   pages: <String>['read', 'theme', 'general', 'search'],
   sections: <SettingSection>[
     SettingSection(
@@ -305,6 +305,42 @@ const SettingsSchema defaultSettingsSchema = SettingsSchema(
       ],
     ),
     SettingSection(
+      key: 'readAloud',
+      page: 'read',
+      title: '朗读',
+      desc: '使用系统自带的文字转语音引擎；1.0 倍为正常语速与原声',
+      items: <SettingItem>[
+        SettingItem(
+          key: 'reader.ttsSpeed',
+          kind: SettingKind.slider,
+          title: '朗读语速',
+          desc: '低于 1.0 变慢，高于 1.0 变快；下一句生效',
+          defaultValue: 1.0,
+          min: 0.4,
+          max: 2.0,
+          step: 0.1,
+          unit: '倍',
+        ),
+        SettingItem(
+          key: 'reader.ttsPitch',
+          kind: SettingKind.slider,
+          title: '朗读音调',
+          desc: '1.0 为引擎原声，调低调高可换听感；部分引擎不支持',
+          defaultValue: 1.0,
+          min: 0.5,
+          max: 2.0,
+          step: 0.1,
+        ),
+        SettingItem(
+          key: 'reader.ttsAutoPage',
+          kind: SettingKind.switchToggle,
+          title: '读完整页自动翻页',
+          desc: '关闭后读完当前页停下，不再自动续读',
+          defaultValue: true,
+        ),
+      ],
+    ),
+    SettingSection(
       key: 'background',
       page: 'theme',
       title: '背景',
@@ -365,9 +401,9 @@ const SettingsSchema defaultSettingsSchema = SettingsSchema(
         SettingItem(
           key: 'cache.expireDays',
           kind: SettingKind.slider,
-          title: '缓存有效期',
-          desc: '超过天数自动清理；0 表示永久保留。原版没有过期机制，这里是本实现的扩展',
-          defaultValue: 0,
+          title: '自动缓存有效期',
+          desc: '阅读时自动缓存（含预取）多少天后过期；0 表示永久保留。手动缓存始终永久保留',
+          defaultValue: 2,
           max: 90,
           step: 1,
           unit: '天',

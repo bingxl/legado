@@ -45,5 +45,11 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- 朗读：Android 11+ 的包可见性限制会挡住引擎服务的解析。
+             缺这一条时 TextToSpeech 能构造出来但 mService 为 null，
+             日志里只剩 "not bound to TTS engine"，表现为「点了朗读没声音」。 -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE"/>
+        </intent>
     </queries>
 </manifest>

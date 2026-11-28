@@ -51,6 +51,12 @@ abstract class CoreModule {
   /// 注册方法。
   void register(Registry registry, LegadoContext ctx);
 
+  /// 全部模块注册完成后的启动钩子。
+  ///
+  /// 用于「依赖已齐、但不必等宿主调用任何方法」的初始化，
+  /// 例如启动时清理过期缓存。抛异常会中断启动，内部要自己兜错。
+  void onReady(LegadoContext ctx) {}
+
   /// 收尾：停后台任务、关连接池。
   Future<void> close() async {}
 }

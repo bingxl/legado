@@ -53,11 +53,11 @@ void main() {
   });
 
   group('结构完整性', () {
-    test('6 个分组按页面分布', () {
-      expect(schema.sections.length, 6);
+    test('7 个分组按页面分布', () {
+      expect(schema.sections.length, 7);
       expect(
         schema.sectionsForPage('read').map((section) => section.key),
-        <String>['typography', 'paging'],
+        <String>['typography', 'paging', 'readAloud'],
       );
       expect(schema.sectionsForPage('theme').single.key, 'background');
       expect(
@@ -66,8 +66,8 @@ void main() {
       );
     });
 
-    test('共 16 个设置项，key 全局唯一', () {
-      expect(items.length, 16);
+    test('共 19 个设置项，key 全局唯一', () {
+      expect(items.length, 19);
       expect(items.map((item) => item.key).toSet().length, items.length);
       for (final item in items) {
         expect(schema.itemByKey(item.key), same(item));

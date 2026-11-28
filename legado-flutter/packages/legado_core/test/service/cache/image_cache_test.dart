@@ -255,14 +255,15 @@ void main() {
       final dir = Directory(p.join(home.path, 'cache', 'chapter', '$bookId', '0'));
       expect(dir.existsSync(), isTrue);
 
-      // 把 created_at 改成 30 天前，查出的过期行必须带着 bookUrl/index，
-      // 服务层才能据此定位到图片目录删除 —— 之前 purgeExpired 只删 DB 行，
-      // 目录留成孤儿且下次缓存同章时旧图复活。
+      // 把 expires_at 改到一分钟前（模拟自动缓存到期），查出的过期行必须
+      // 带着 bookUrl/index，服务层才能据此定位到图片目录删除 ——
+      // 之前 purgeExpired 只删 DB 行，目录留成孤儿且下次缓存同章时旧图复活。
+      // 注意手动缓存写的是 expires_at=0（永久），不会被这里清掉。
       store.daos.db.execute(
-        'update `chapter_cache` set `created_at` = ?',
-        [DateTime.now().millisecondsSinceEpoch ~/ 1000 - 30 * 86400],
+        'update `chapter_cache` set `expires_at` = ?',
+        [DateTime.now().millisecondsSinceEpoch ~/ 1000 - 60],
       );
-      final expired = store.daos.chapterCache.expired(7);
+      final expired = store.daos.chapterCache.expired();
       expect(expired, hasLength(1));
       expect(expired.first.bookUrl, '$base/b/1');
       expect(expired.first.index, 0);
@@ -271,7 +272,7 @@ void main() {
         final id = store.daos.book.idOf(item.bookUrl)!;
         ImageCacheService(homeDir: home.path).removeChapterDir(id, item.index);
       }
-      store.daos.chapterCache.purgeExpired(7);
+      store.daos.chapterCache.purgeExpired();
 
       expect(dir.existsSync(), isFalse);
       expect((await callMap('Cache.Stats'))['chapters'], 0);

@@ -8,7 +8,7 @@ import 'migration.dart';
 /// Android 版 Room 已演进到 65+，但那是**增量迁移链**。
 /// 这里是 Flutter 版的全新初版：初始 schema 直接按实体生成，
 /// 从 v1 开始重新计数，未来只在自己的迁移列表里递增。
-const int schemaVersion = 2;
+const int schemaVersion = 3;
 
 /// 所有建表语句，顺序 = 依赖顺序（books 必须早于 chapters / searchBooks）。
 List<String> get createTableSqls => [
@@ -91,8 +91,26 @@ void _v2(Database db) {
   db.execute(SourceLoginRecord.createSql);
 }
 
+/// v3：章节缓存加到期时间列。
+///
+/// 自动缓存（阅读/预取）写「创建时间 + 有效期」，手动缓存写 0 表示永久。
+/// 新库在 v1 建表时已经带上这一列，老库才需要 ALTER —— 先查
+/// `table_info` 再决定，避免 duplicate column 让升级直接失败。
+void _v3(Database db) {
+  final columns = db.select('PRAGMA table_info(`chapter_cache`)');
+  if (columns.any((row) => '${row['name']}' == 'expires_at')) return;
+  db.execute(
+    'ALTER TABLE `chapter_cache` '
+    'ADD COLUMN `expires_at` INTEGER NOT NULL DEFAULT 0',
+  );
+}
+
 /// 默认迁移链。
-List<Migration> get defaultMigrations => [Migration(1, _v1), Migration(2, _v2)];
+List<Migration> get defaultMigrations => [
+      Migration(1, _v1),
+      Migration(2, _v2),
+      Migration(3, _v3),
+    ];
 
 /// 所有表名（不含视图），供 `System.Database` 自检与测试使用。
 const List<String> dataTableNames = [

@@ -153,6 +153,8 @@ class CacheService {
           images: imageJson,
           size: size,
           createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          // 用户主动缓存 = 离线保存，永久有效（0），不受自动缓存有效期约束。
+          expiresAt: 0,
         ));
         succeeded++;
         job.done++;

@@ -53,6 +53,11 @@ class LegadoCore {
     for (final m in _modules) {
       m.register(registry, ctx);
     }
+    // 注册齐全后再跑启动钩子（例如清过期缓存）：此时 service 都已构造好，
+    // 也不会因为宿主还没调用任何方法就把清理漏掉。
+    for (final m in _modules) {
+      m.onReady(ctx);
+    }
     _ready = true;
   }
 

@@ -13,7 +13,8 @@ class ChapterCacheDao {
 
   static const String _upsertSql =
       'INSERT OR REPLACE INTO `$_table` (`bookUrl`, `idx`, `title`, `url`, '
-      '`html`, `images`, `size`, `created_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
+      '`html`, `images`, `size`, `created_at`, `expires_at`) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
 
   CachedChapter? get(String bookUrl, int index) {
     final rows = _db.select(
@@ -32,6 +33,7 @@ class ChapterCacheDao {
         chapter.images,
         chapter.size,
         chapter.createdAt,
+        chapter.expiresAt,
       ]);
 
   List<int> indexes(String bookUrl) {
@@ -102,43 +104,40 @@ class ChapterCacheDao {
   void deleteByBook(String bookUrl) =>
       _db.execute('delete from `$_table` where `bookUrl` = ?', [bookUrl]);
 
-  /// 超过 [days] 天的缓存行（供服务层同步清理磁盘图片）。
+  /// 已到期的缓存行（供服务层同步清理磁盘图片）。
+  ///
+  /// 判据是每行自己的 `expires_at`：> 0 且 <= now 才算到期；
+  /// `expires_at = 0` 的手动缓存**永不**到期（原版 `caches.deadline` 语义）。
+  /// 不再按 `created_at` + 全局天数反推，否则手动缓存也会被自动清掉。
   ///
   /// 只删 SQLite 会让 `<home>/cache/chapter/<id>/<idx>/` 的图片变成孤儿：
   /// 目录仍在、下次缓存同章时旧图「复活」。所以过期清理必须先把行查出来，
-  /// 由调用方删完磁盘再调 [delete] 删行。
-  List<CachedChapter> expired(int days, {int? nowSeconds}) {
-    if (days <= 0) return const [];
+  /// 由调用方删完磁盘再调 [purgeExpired] 删行。
+  List<CachedChapter> expired({int? nowSeconds}) {
     final now = nowSeconds ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final before = now - days * 86400;
     final rows = _db.select(
       'select * from `$_table` '
-      'where `created_at` > 0 and `created_at` < ?',
-      [before],
+      'where `expires_at` > 0 and `expires_at` <= ?',
+      [now],
     );
     return [for (final row in rows) CachedChapter.fromRow(row)];
   }
 
-  /// 删除超过 [days] 天的缓存，返回删除条数。
-  ///
-  /// 原版 Kotlin 的章节缓存**没有时间过期**，只有「目录 URL 变了视为失效」
-  /// 与手动清理；这里的 TTL 是本实现的扩展，默认 0（永不过期）。
+  /// 删除已到期的行，返回删除条数。
   ///
   /// 只负责数据库；磁盘图片由调用方配合 [expired] 清理（见 ReaderService）。
-  int purgeExpired(int days, {int? nowSeconds}) {
-    if (days <= 0) return 0;
+  int purgeExpired({int? nowSeconds}) {
     final now = nowSeconds ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final before = now - days * 86400;
     final rows = _db.select(
       'select count(*) as c from `$_table` '
-      'where `created_at` > 0 and `created_at` < ?',
-      [before],
+      'where `expires_at` > 0 and `expires_at` <= ?',
+      [now],
     );
     final count = rows.isEmpty ? 0 : asInt(rows.first['c']);
     if (count > 0) {
       _db.execute(
-        'delete from `$_table` where `created_at` > 0 and `created_at` < ?',
-        [before],
+        'delete from `$_table` where `expires_at` > 0 and `expires_at` <= ?',
+        [now],
       );
     }
     return count;

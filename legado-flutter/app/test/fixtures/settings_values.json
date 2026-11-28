@@ -1,6 +1,6 @@
 {
   "cache.autoCache": "true",
-  "cache.expireDays": "0",
+  "cache.expireDays": "2",
   "cache.preDownloadNum": "10",
   "general.promptAddToShelf": "false",
   "reader.fontSize": "20",
